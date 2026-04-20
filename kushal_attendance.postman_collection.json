@@ -1,0 +1,798 @@
+{
+  "info": {
+    "name": "Kushal Attendance System — Full Collection v2",
+    "description": "Complete API collection using real VT data. VT: AJMERY KHATOON ALAM | Mobile: 9713467787 | School UDISE: 22261101917 | District: BALRAMPUR",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url",      "value": "http://localhost:5000/api" },
+    { "key": "access_token",  "value": "" },
+    { "key": "refresh_token", "value": "" }
+  ],
+  "item": [
+
+    {
+      "name": "🏥 Health Check",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/health",
+            "description": "Verify the API server is running."
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "🗄️ STEP 0 — Seed VT Master Data (Run Once via DB)",
+      "description": "Before testing, insert the VT record into vt_staff_details. Run this SQL in your PostgreSQL client (pgAdmin / psql):\n\nINSERT INTO vt_staff_details (id, district_name, block_name, school_name, udise_code, vtp_name, vt_name, trade, vt_mob, vtp_pan, vt_aadhar, vt_email, school_type, old_or_new, remarks)\nVALUES (2, 'BALRAMPUR', 'WADRAFNAGAR', 'GOVT. GIRLS HIGHER SECONDARY SCHOOL WADRAFNAGAR', 22261101917, 'Learnet Skills Limited', 'AJMERY KHATOON ALAM', 'Apparel,Made ups and Home Furnishing', 9713467787, 'DSUPA6023E', 703853154270, 'ajmeryalam16@gmail.com', 'SS', 'New', null);",
+      "item": []
+    },
+
+    {
+      "name": "🔐 Auth",
+      "item": [
+
+        {
+          "name": "1. Register — Super Admin",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/register",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Super Admin\",\n  \"email\": \"superadmin@kushal.com\",\n  \"phone\": 9000000001,\n  \"password\": \"Admin@1234\",\n  \"role_id\": 1\n}"
+            },
+            "description": "Register Super Admin (role_id=1). Note: phone is now BIGINT — send as number, not string."
+          }
+        },
+
+        {
+          "name": "2. Register — Admin",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/register",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Admin User\",\n  \"email\": \"admin@kushal.com\",\n  \"phone\": 9000000002,\n  \"password\": \"Admin@1234\",\n  \"role_id\": 2\n}"
+            }
+          }
+        },
+
+        {
+          "name": "3. Register — DEO",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/register",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Data Entry Operator\",\n  \"email\": \"deo@kushal.com\",\n  \"phone\": 9000000003,\n  \"password\": \"Deo@1234\",\n  \"role_id\": 3\n}"
+            }
+          }
+        },
+
+        {
+          "name": "4. Register — Headmaster (udise_code required)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/register",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Headmaster Wadrafnagar\",\n  \"email\": \"headmaster@wadrafnagar.com\",\n  \"phone\": 9000000004,\n  \"password\": \"Head@1234\",\n  \"role_id\": 4,\n  \"udise_code\": 22261101917,\n  \"school_open_time\": \"09:00:00\",\n  \"school_close_time\": \"16:00:00\"\n}"
+            },
+            "description": "⚠️ Headmaster MUST provide udise_code matching their school, plus school_open_time and school_close_time. AJMERY's school UDISE = 22261101917."
+          }
+        },
+
+        {
+          "name": "5. Register — VT Provider (Learnet Skills Limited)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/register",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Learnet Skills Limited\",\n  \"email\": \"learnet@vtp.com\",\n  \"phone\": 9000000005,\n  \"password\": \"Vtp@1234\",\n  \"role_id\": 5\n}"
+            },
+            "description": "⚠️ name MUST match exactly the vtp_name in vt_staff_details ('Learnet Skills Limited').\nThis is stored as organization_name and used to link the VTP to their teachers' attendance.\nvt_staff_details: vtp_name = 'Learnet Skills Limited' → teacher: AJMERY KHATOON ALAM"
+          }
+        },
+
+        {
+          "name": "6. Register — Vocational Teacher AJMERY ✅ (with photo & location)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/register",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "phone",     "value": "9713467787", "type": "text" },
+                { "key": "password",  "value": "Ajmery@123", "type": "text" },
+                { "key": "role_id",   "value": "6", "type": "text" },
+                { "key": "latitude",  "value": "23.6345", "type": "text" },
+                { "key": "longitude", "value": "83.0024", "type": "text" },
+                { "key": "profile_photo", "type": "file", "src": [], "description": "Select an image file from your computer" }
+              ]
+            },
+            "description": "✅ VT AJMERY KHATOON ALAM registers using form-data. This supports sending a profile photograph and home coordinates (latitude/longitude)."
+          }
+        },
+
+        {
+          "name": "7. Register — VT with WRONG mobile ❌ (should return 403)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/register",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "phone",     "value": "9999999999", "type": "text" },
+                { "key": "password",  "value": "Test@1234", "type": "text" },
+                { "key": "role_id",   "value": "6", "type": "text" }
+              ]
+            },
+            "description": "❌ Expected: 403 — Mobile not found in approved VT list."
+          }
+        },
+
+        {
+          "name": "8. Login — VT before approval ❌ (should return 403)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/login",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": 9713467787,\n  \"password\": \"Ajmery@123\"\n}"
+            },
+            "description": "❌ Expected: 403 with code VT_PENDING_APPROVAL — VT cannot login until headmaster approves."
+          }
+        },
+
+        {
+          "name": "9. Login — Super Admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.tokens) {",
+                  "  pm.collectionVariables.set('access_token',  json.data.tokens.access_token);",
+                  "  pm.collectionVariables.set('refresh_token', json.data.tokens.refresh_token);",
+                  "  console.log('✅ Super Admin tokens saved');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/login",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"superadmin@kushal.com\",\n  \"password\": \"Admin@1234\"\n}"
+            },
+            "description": "Login as Super Admin. Tokens auto-saved. Use this token for role/permission management."
+          }
+        },
+
+        {
+          "name": "10. Login — Headmaster (by email)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.tokens) {",
+                  "  pm.collectionVariables.set('access_token',  json.data.tokens.access_token);",
+                  "  pm.collectionVariables.set('refresh_token', json.data.tokens.refresh_token);",
+                  "  console.log('✅ Headmaster tokens saved');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/login",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"headmaster@wadrafnagar.com\",\n  \"password\": \"Head@1234\"\n}"
+            },
+            "description": "Login as Headmaster. Use this token to approve/reject VTs."
+          }
+        },
+
+        {
+          "name": "11. Login — DEO (by email)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.tokens) {",
+                  "  pm.collectionVariables.set('access_token',  json.data.tokens.access_token);",
+                  "  pm.collectionVariables.set('refresh_token', json.data.tokens.refresh_token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/login",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"deo@kushal.com\",\n  \"password\": \"Deo@1234\"\n}"
+            }
+          }
+        },
+
+        {
+          "name": "12. Login — VT AJMERY after approval (by phone) ✅",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.tokens) {",
+                  "  pm.collectionVariables.set('access_token',  json.data.tokens.access_token);",
+                  "  pm.collectionVariables.set('refresh_token', json.data.tokens.refresh_token);",
+                  "  console.log('✅ VT AJMERY tokens saved');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/login",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": 9713467787,\n  \"password\": \"Ajmery@123\"\n}"
+            },
+            "description": "✅ Run this AFTER headmaster approves AJMERY. VT logs in using her phone number."
+          }
+        },
+
+        {
+          "name": "13. Get My Profile",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/auth/me",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "description": "Returns logged-in user profile + effective permissions."
+          }
+        },
+
+        {
+          "name": "14. Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data) {",
+                  "  pm.collectionVariables.set('access_token',  json.data.access_token);",
+                  "  pm.collectionVariables.set('refresh_token', json.data.refresh_token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/refresh-token",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}"
+            }
+          }
+        },
+
+        {
+          "name": "15. Logout",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/logout",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}"
+            }
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "🏫 VT Approval (Headmaster)",
+      "item": [
+
+        {
+          "name": "Get Pending VTs — My School (Headmaster)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/vt/pending",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "description": "⚠️ Login as Headmaster first.\nReturns all VTs with vt_approval_status='pending' that belong to the headmaster's school (matched via udise_code=22261101917).\nExpected: Shows AJMERY KHATOON ALAM."
+          }
+        },
+
+        {
+          "name": "Get ALL VTs — Admin View (?status=pending)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/vt/all?status=pending",
+              "query": [{ "key": "status", "value": "pending", "description": "pending | accepted | rejected | (leave empty for all)" }]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "description": "⚠️ Login as Admin or Super Admin first.\nView all VTs across all schools filtered by status."
+          }
+        },
+
+        {
+          "name": "Get ALL VTs — All Status (Admin)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/vt/all",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }]
+          }
+        },
+
+        {
+          "name": "✅ Approve VT — AJMERY (userId=2)",
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/vt/2/approve",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "description": "⚠️ Login as Headmaster (udise_code=22261101917) first.\nApproves AJMERY KHATOON ALAM (user id=2).\nResult: vt_approval_status='accepted', is_active=true.\nAfter this, VT can login using phone 9713467787."
+          }
+        },
+
+        {
+          "name": "❌ Reject VT — AJMERY (userId=2)",
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/vt/2/reject",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Trade qualification documents not verified\"\n}"
+            },
+            "description": "Reject AJMERY's registration. VT_REJECTED response on login attempt."
+          }
+        },
+
+        {
+          "name": "❌ Approve VT from different school (should return 403)",
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/vt/99/approve",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "description": "Expected: 403 — Headmaster cannot approve VTs from other schools."
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "👤 Roles",
+      "item": [
+
+        {
+          "name": "Get All Roles",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/roles",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }]
+          }
+        },
+
+        {
+          "name": "Create Role",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/roles",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"district_coordinator\",\n  \"description\": \"Coordinates attendance across multiple blocks in a district\"\n}"
+            }
+          }
+        },
+
+        {
+          "name": "Update Role",
+          "request": {
+            "method": "PUT",
+            "url": "{{base_url}}/roles/6",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Vocational teacher who marks daily attendance after approval\",\n  \"is_active\": true\n}"
+            }
+          }
+        },
+
+        {
+          "name": "Delete Role",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/roles/7",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }]
+          }
+        },
+
+        {
+          "name": "Get Role Permissions — VT (role_id=6)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/roles/6/permissions",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }]
+          }
+        },
+
+        {
+          "name": "Get Role Permissions — Headmaster (role_id=4)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/roles/4/permissions",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "description": "Should include vt:approve permission."
+          }
+        },
+
+        {
+          "name": "Assign Permissions to Role",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/roles/3/permissions",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"permission_ids\": [1, 2, 3]\n}"
+            }
+          }
+        },
+
+        {
+          "name": "Remove Permissions from Role",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/roles/3/permissions",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"permission_ids\": [3]\n}"
+            }
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "🔑 Permissions",
+      "item": [
+
+        {
+          "name": "Get All Permissions",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/permissions",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }]
+          }
+        },
+
+        {
+          "name": "Create Permission",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/permissions",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"reports:export\",\n  \"module\": \"reports\",\n  \"action\": \"export\",\n  \"description\": \"Export attendance report to PDF or Excel\"\n}"
+            }
+          }
+        },
+
+        {
+          "name": "Delete Permission",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/permissions/21",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }]
+          }
+        },
+
+        {
+          "name": "Get User Permission Overrides (userId=2 — AJMERY)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/permissions/user/2",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }]
+          }
+        },
+
+        {
+          "name": "Grant Extra Permission to AJMERY",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/permissions/user/2",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"permission_id\": 10,\n  \"is_granted\": true\n}"
+            }
+          }
+        },
+
+        {
+          "name": "Revoke Permission from AJMERY",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/permissions/user/2",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"permission_id\": 10,\n  \"is_granted\": false\n}"
+            }
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "📋 Attendance",
+      "item": [
+
+        {
+          "name": "VT AJMERY — Check In ✅",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/attendance/check-in",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"latitude\": 23.6345,\n  \"longitude\": 83.0024,\n  \"remarks\": \"Check-in from GOVT. GIRLS HIGHER SECONDARY SCHOOL WADRAFNAGAR\"\n}"
+            },
+            "description": "⚠️ Login as VT AJMERY first (phone: 9713467787). Marks today's check-in."
+          }
+        },
+
+        {
+          "name": "VT AJMERY — Check Out",
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/attendance/check-out",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "description": "VT marks check-out for today."
+          }
+        },
+
+        {
+          "name": "VT AJMERY — View My Attendance",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/attendance/my?from_date=2026-04-01&to_date=2026-04-30",
+              "query": [
+                { "key": "from_date", "value": "2026-04-01" },
+                { "key": "to_date",   "value": "2026-04-30" }
+              ]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }]
+          }
+        },
+
+        {
+          "name": "DEO — Mark AJMERY Present (on behalf)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/attendance/mark",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": 2,\n  \"date\": \"2026-04-19\",\n  \"status\": \"present\",\n  \"check_in_time\": \"2026-04-19T09:00:00Z\",\n  \"check_out_time\": \"2026-04-19T17:00:00Z\",\n  \"latitude\": 23.6345,\n  \"longitude\": 83.0024,\n  \"remarks\": \"Marked by DEO on behalf of AJMERY KHATOON ALAM\"\n}"
+            },
+            "description": "⚠️ Login as DEO first."
+          }
+        },
+
+        {
+          "name": "DEO — Mark AJMERY Absent",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/attendance/mark",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": 2,\n  \"date\": \"2026-04-18\",\n  \"status\": \"absent\",\n  \"remarks\": \"Teacher was absent — informed verbally\"\n}"
+            }
+          }
+        },
+
+        {
+          "name": "Admin — View All Attendance",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/attendance?from_date=2026-04-01&to_date=2026-04-30",
+              "query": [
+                { "key": "from_date", "value": "2026-04-01" },
+                { "key": "to_date",   "value": "2026-04-30" }
+              ]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }]
+          }
+        },
+
+        {
+          "name": "Admin — Filter by District BALRAMPUR",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/attendance?district=BALRAMPUR&from_date=2026-04-01&to_date=2026-04-30",
+              "query": [
+                { "key": "district",  "value": "BALRAMPUR" },
+                { "key": "from_date", "value": "2026-04-01" },
+                { "key": "to_date",   "value": "2026-04-30" }
+              ]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }]
+          }
+        },
+
+        {
+          "name": "Admin — Filter by VTP: Learnet Skills Limited",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/attendance?vtp_name=Learnet&from_date=2026-04-01&to_date=2026-04-30",
+              "query": [
+                { "key": "vtp_name",  "value": "Learnet" },
+                { "key": "from_date", "value": "2026-04-01" },
+                { "key": "to_date",   "value": "2026-04-30" }
+              ]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }]
+          }
+        },
+
+        {
+          "name": "Admin — Filter by Trade: Apparel",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/attendance?trade=Apparel&from_date=2026-04-01&to_date=2026-04-30",
+              "query": [
+                { "key": "trade",     "value": "Apparel" },
+                { "key": "from_date", "value": "2026-04-01" },
+                { "key": "to_date",   "value": "2026-04-30" }
+              ]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }]
+          }
+        },
+
+        {
+          "name": "VTP — View Learnet Teachers Attendance",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/attendance/provider?from_date=2026-04-01&to_date=2026-04-30",
+              "query": [
+                { "key": "from_date", "value": "2026-04-01" },
+                { "key": "to_date",   "value": "2026-04-30" }
+              ]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "description": "⚠️ Login as VTP (Learnet Skills Limited) first. Shows AJMERY's attendance."
+          }
+        },
+
+        {
+          "name": "Monthly Summary — AJMERY April 2026",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/attendance/summary/2?year=2026&month=4",
+              "query": [
+                { "key": "year",  "value": "2026" },
+                { "key": "month", "value": "4" }
+              ]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "description": "Get April 2026 attendance summary for AJMERY (user_id=2). Shows count of present/absent/late etc."
+          }
+        },
+
+        {
+          "name": "Admin — Update Attendance Record",
+          "request": {
+            "method": "PUT",
+            "url": "{{base_url}}/attendance/1",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{access_token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"half_day\",\n  \"check_out_time\": \"2026-04-20T13:00:00Z\",\n  \"remarks\": \"Corrected: AJMERY left early for training programme\"\n}"
+            }
+          }
+        },
+
+        {
+          "name": "Admin — Delete Attendance Record",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/attendance/1",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }]
+          }
+        }
+
+      ]
+    }
+
+  ]
+}
