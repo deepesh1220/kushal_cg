@@ -15,12 +15,19 @@ const VTP_ROLE_NAME = 'vocational_teacher_provider';
 
 // ─── POST /api/auth/register ──────────────────────────────────────────────────
 const register = async (req, res) => {
-  const { name, email, phone, password, role_id, latitude, longitude, school_open_time, school_close_time } = req.body;
+  const { name, email, phone, password, role_id, latitude, longitude, school_open_time, school_close_time,image } = req.body;
 
   if (!phone || !password) {
     return res.status(400).json({
-      status: 'error',
+      status: false,
       message: 'Phone number and password are required.',
+    });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({
+      status: false,
+      message: 'Profile image is required for registration.',
     });
   }
 
@@ -51,7 +58,7 @@ const register = async (req, res) => {
     if (roleName === VT_ROLE_NAME) {
       if (!phone) {
         return res.status(400).json({
-          status: 'error',
+          status: false,
           message: 'Mobile number (vt_mob) is required for Vocational Teacher registration.',
         });
       }
@@ -60,7 +67,7 @@ const register = async (req, res) => {
       vtStaff = await VtStaffDetail.findByMobile(phone);
       if (!vtStaff) {
         return res.status(403).json({
-          status: 'error',
+          status: false,
           message: 'Registration not allowed. Your mobile number is not found in the approved Vocational Teacher list.',
         });
       }
@@ -69,7 +76,7 @@ const register = async (req, res) => {
       const alreadyRegistered = await VtStaffDetail.isAlreadyRegistered(phone);
       if (alreadyRegistered) {
         return res.status(409).json({
-          status: 'error',
+          status: false,
           message: 'An account already exists for this mobile number.',
         });
       }
@@ -84,48 +91,48 @@ const register = async (req, res) => {
       // VTP: organization_name is required so we can link them to vt_staff_details.vtp_name
       if (!name || !email) {
         return res.status(400).json({
-          status: 'error',
+          status: false,
           message: 'Name (organization name) and email are required for VT Provider registration.',
         });
       }
       const emailExists = await User.emailExists(email);
       if (emailExists) {
-        return res.status(409).json({ status: 'error', message: 'An account with this email already exists.' });
+        return res.status(409).json({ status: false, message: 'An account with this email already exists.' });
       }
 
     } else if (roleName === 'headmaster') {
       if (!name || !email) {
-        return res.status(400).json({ status: 'error', message: 'Name and email are required.' });
+        return res.status(400).json({ status: false, message: 'Name and email are required.' });
       }
       if (!req.body.udise_code) {
-        return res.status(400).json({ status: 'error', message: 'School UDISE code is required for Headmaster registration.' });
+        return res.status(400).json({ status: false, message: 'School UDISE code is required for Headmaster registration.' });
       }
       if (!school_open_time || !school_close_time) {
-        return res.status(400).json({ status: 'error', message: 'school_open_time and school_close_time are required for Headmaster registration.' });
+        return res.status(400).json({ status: false, message: 'school_open_time and school_close_time are required for Headmaster registration.' });
       }
       const emailExists = await User.emailExists(email);
       if (emailExists) {
-        return res.status(409).json({ status: 'error', message: 'An account with this email already exists.' });
+        return res.status(409).json({ status: false, message: 'An account with this email already exists.' });
       }
     } else if (roleName === 'headmaster') {
       if (!name || !email) {
-        return res.status(400).json({ status: 'error', message: 'Name and email are required.' });
+        return res.status(400).json({ status: false, message: 'Name and email are required.' });
       }
       if (!req.body.udise_code) {
-        return res.status(400).json({ status: 'error', message: 'School UDISE code is required for Headmaster registration.' });
+        return res.status(400).json({ status: false, message: 'School UDISE code is required for Headmaster registration.' });
       }
       if (!school_open_time || !school_close_time) {
-        return res.status(400).json({ status: 'error', message: 'school_open_time and school_close_time are required for Headmaster registration.' });
+        return res.status(400).json({ status: false, message: 'school_open_time and school_close_time are required for Headmaster registration.' });
       }
       const emailExists = await User.emailExists(email);
       if (emailExists) {
-        return res.status(409).json({ status: 'error', message: 'An account with this email already exists.' });
+        return res.status(409).json({ status: false, message: 'An account with this email already exists.' });
       }
     } else {
       // All other roles: name + email required
       if (!name || !email) {
         return res.status(400).json({
-          status: 'error',
+          status: false,
           message: 'Name and email are required.',
         });
       }
@@ -134,7 +141,7 @@ const register = async (req, res) => {
       const emailExists = await User.emailExists(email);
       if (emailExists) {
         return res.status(409).json({
-          status: 'error',
+          status: false,
           message: 'An account with this email already exists.',
         });
       }
@@ -150,7 +157,7 @@ const register = async (req, res) => {
     const isActiveOnRegister = isVt ? false : true;
 
     // ── Extract photo if uploaded ─────────────────────────────────────────────
-    const profile_photo = req.file ? `/uploads/${req.file.filename}` : null;
+    const profile_photo = req.file ? `/uploads/register/${req.file.filename}` : null;
 
     // ── Create user ──────────────────────────────────────────────────────────
     const user = await User.create({
@@ -173,7 +180,7 @@ const register = async (req, res) => {
     });
 
     return res.status(201).json({
-      status: 'success',
+      status: true,
       message: isVt
         ? 'Registration submitted. Awaiting approval from your school Headmaster.'
         : 'Account created successfully.',
@@ -216,7 +223,7 @@ const login = async (req, res) => {
 
   if ((!email && !phone) || !password) {
     return res.status(400).json({
-      status: 'error',
+      status: false,
       message: 'Email or phone, and password are required.',
     });
   }
@@ -231,13 +238,13 @@ const login = async (req, res) => {
     }
 
     if (!user) {
-      return res.status(401).json({ status: 'error', message: 'Invalid credentials.' });
+      return res.status(401).json({ status: false, message: 'Invalid credentials.' });
     }
 
     // ── VT approval gate ────────────────────────────────────────────────────
     if (user.vt_approval_status === 'pending') {
       return res.status(403).json({
-        status: 'error',
+        status: false,
         code: 'VT_PENDING_APPROVAL',
         message: 'Your registration is pending approval from your school Headmaster. Please wait.',
       });
@@ -245,7 +252,7 @@ const login = async (req, res) => {
 
     if (user.vt_approval_status === 'rejected') {
       return res.status(403).json({
-        status: 'error',
+        status: false,
         code: 'VT_REJECTED',
         message: 'Your registration was rejected by the Headmaster. Contact your school or administrator.',
       });
@@ -253,7 +260,7 @@ const login = async (req, res) => {
 
     if (!user.is_active) {
       return res.status(403).json({
-        status: 'error',
+        status: false,
         message: 'Your account has been deactivated. Contact administrator.',
       });
     }
@@ -261,7 +268,7 @@ const login = async (req, res) => {
     // Validate password
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
-      return res.status(401).json({ status: 'error', message: 'Invalid credentials.' });
+      return res.status(401).json({ status: false, message: 'Invalid credentials.' });
     }
 
     // Fetch effective permissions via model
@@ -283,7 +290,7 @@ const login = async (req, res) => {
     await RefreshToken.create(user.id, refreshToken, expiresAt);
 
     return res.status(200).json({
-      status: 'success',
+      status: true,
       message: 'Login successful.',
       data: {
         user: {
@@ -312,7 +319,7 @@ const refreshToken = async (req, res) => {
   const { refresh_token } = req.body;
 
   if (!refresh_token) {
-    return res.status(400).json({ status: 'error', message: 'Refresh token is required.' });
+    return res.status(400).json({ status: false, message: 'Refresh token is required.' });
   }
 
   try {
@@ -322,7 +329,7 @@ const refreshToken = async (req, res) => {
     const storedToken = await RefreshToken.findValid(refresh_token, decoded.id);
     if (!storedToken) {
       return res.status(401).json({
-        status: 'error',
+        status: false,
         message: 'Invalid or expired refresh token. Please login again.',
       });
     }
