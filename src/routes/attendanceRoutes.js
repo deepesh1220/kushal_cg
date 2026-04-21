@@ -10,6 +10,7 @@ const {
   updateAttendance,
   deleteAttendance,
   getMonthlySummary,
+  getDailyReport,
 } = require('../controllers/attendanceController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
 
@@ -32,6 +33,9 @@ router.get('/provider',               authorize('attendance:view_teachers'),   g
 
 // ── Monthly summary ───────────────────────────────────────────────────────────
 router.get('/summary/:userId',        authorize('attendance:report'),          getMonthlySummary);
+
+// ── Daily per-day report with filters & totals ────────────────────────────────
+router.post('/report/daily',           authorize('attendance:view_own'),        getDailyReport);
 
 // ── Admin / DEO — edit & delete ───────────────────────────────────────────────
 router.put('/:id',                    authorize('attendance:update'),          updateAttendance);

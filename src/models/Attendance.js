@@ -12,12 +12,12 @@ const Attendance = {
       user_id,
       date,
       check_in_time || new Date(),
-      status        || 'present',
-      latitude      || null,
-      longitude     || null,
-      photo_path    || null,
-      remarks       || null,
-      marked_by     || user_id,
+      status || 'present',
+      latitude || null,
+      longitude || null,
+      photo_path || null,
+      remarks || null,
+      marked_by || user_id,
     ]);
     return result.rows[0];
   },
@@ -55,7 +55,7 @@ const Attendance = {
     const params = [userId];
 
     if (from_date) { params.push(from_date); query += ` AND ar.date >= $${params.length}`; }
-    if (to_date)   { params.push(to_date);   query += ` AND ar.date <= $${params.length}`; }
+    if (to_date) { params.push(to_date); query += ` AND ar.date <= $${params.length}`; }
 
     params.push(limit);
     query += ` ORDER BY ar.date DESC LIMIT $${params.length}`;
@@ -89,15 +89,15 @@ const Attendance = {
     `;
     const params = [];
 
-    if (user_id)   { params.push(user_id);         query += ` AND ar.user_id = $${params.length}`; }
-    if (date)      { params.push(date);             query += ` AND ar.date = $${params.length}`; }
-    if (from_date) { params.push(from_date);        query += ` AND ar.date >= $${params.length}`; }
-    if (to_date)   { params.push(to_date);          query += ` AND ar.date <= $${params.length}`; }
-    if (status)    { params.push(status);           query += ` AND ar.status = $${params.length}`; }
-    if (district)  { params.push(district);         query += ` AND v.district_name ILIKE $${params.length}`; }
-    if (block)     { params.push(block);            query += ` AND v.block_name ILIKE $${params.length}`; }
-    if (vtp_name)  { params.push(`%${vtp_name}%`); query += ` AND v.vtp_name ILIKE $${params.length}`; }
-    if (trade)     { params.push(`%${trade}%`);    query += ` AND v.trade ILIKE $${params.length}`; }
+    if (user_id) { params.push(user_id); query += ` AND ar.user_id = $${params.length}`; }
+    if (date) { params.push(date); query += ` AND ar.date = $${params.length}`; }
+    if (from_date) { params.push(from_date); query += ` AND ar.date >= $${params.length}`; }
+    if (to_date) { params.push(to_date); query += ` AND ar.date <= $${params.length}`; }
+    if (status) { params.push(status); query += ` AND ar.status = $${params.length}`; }
+    if (district) { params.push(district); query += ` AND v.district_name ILIKE $${params.length}`; }
+    if (block) { params.push(block); query += ` AND v.block_name ILIKE $${params.length}`; }
+    if (vtp_name) { params.push(`%${vtp_name}%`); query += ` AND v.vtp_name ILIKE $${params.length}`; }
+    if (trade) { params.push(`%${trade}%`); query += ` AND v.trade ILIKE $${params.length}`; }
 
     params.push(limit);
     query += ` ORDER BY ar.date DESC, u.name ASC LIMIT $${params.length}`;
@@ -124,7 +124,7 @@ const Attendance = {
     const params = [vtpName];
 
     if (from_date) { params.push(from_date); query += ` AND ar.date >= $${params.length}`; }
-    if (to_date)   { params.push(to_date);   query += ` AND ar.date <= $${params.length}`; }
+    if (to_date) { params.push(to_date); query += ` AND ar.date <= $${params.length}`; }
 
     params.push(limit);
     query += ` ORDER BY ar.date DESC LIMIT $${params.length}`;
@@ -150,6 +150,97 @@ const Attendance = {
       RETURNING *
     `, [check_in_time || null, check_out_time || null, status || null, remarks || null, photo_path || null, id]);
     return result.rows[0] || null;
+  },
+
+  // ─── Daily report: per-day rows for a user with working hours & totals ───────
+  // filter_type: 'date' | 'week' | 'month' | 'date_range'
+  // filter_value examples: '2026-04-21' | '2026-W16' (ISO week) | '2026-04' | '2026-04-01,2026-04-21'
+  async getDailyReport(userId, { filter_type = 'month', filter_value, limit = 31, offset = 0 } = {}) {
+    const params = [userId];
+    let dateFilter = '';
+
+    if (filter_type === 'date' && filter_value) {
+      params.push(filter_value);
+      dateFilter = `AND ar.date = $${params.length}`;
+    } else if (filter_type === 'week' && filter_value) {
+      // filter_value: 'YYYY-WNN'  e.g. '2026-W16'
+      const [yearStr, weekStr] = filter_value.split('-W');
+      params.push(parseInt(yearStr), parseInt(weekStr));
+      dateFilter = `AND EXTRACT(ISOYEAR FROM ar.date) = $${params.length - 1}
+                    AND EXTRACT(WEEK     FROM ar.date) = $${params.length}`;
+    } else if (filter_type === 'month' && filter_value) {
+      // filter_value: 'YYYY-MM'  e.g. '2026-04'
+      const [yearStr, monthStr] = filter_value.split('-');
+      params.push(parseInt(yearStr), parseInt(monthStr));
+      dateFilter = `AND EXTRACT(YEAR  FROM ar.date) = $${params.length - 1}
+                    AND EXTRACT(MONTH FROM ar.date) = $${params.length}`;
+    } else if (filter_type === 'date_range' && filter_value) {
+      // filter_value: 'YYYY-MM-DD,YYYY-MM-DD' e.g. '2026-04-01,2026-04-21'
+      const [fromDate, toDate] = filter_value.split(',');
+      if (fromDate && toDate) {
+        params.push(fromDate, toDate);
+        dateFilter = `AND ar.date >= $${params.length - 1} AND ar.date <= $${params.length}`;
+      } else if (fromDate) {
+        params.push(fromDate);
+        dateFilter = `AND ar.date >= $${params.length}`;
+      }
+    }
+
+    // per-day records
+    const recordsQuery = `
+      SELECT
+        ar.date,
+        ar.check_in_time,
+        ar.check_out_time,
+        ar.status,
+        ar.remarks                              AS leave_reason,
+        CASE
+          WHEN ar.check_in_time IS NOT NULL AND ar.check_out_time IS NOT NULL
+          THEN ROUND(
+            EXTRACT(EPOCH FROM (ar.check_out_time - ar.check_in_time)) / 3600.0,
+            2
+          )
+          ELSE NULL
+        END                                     AS working_hours
+      FROM attendance_records ar
+      WHERE ar.user_id = $1
+        ${dateFilter}
+      ORDER BY ar.date DESC
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+    `;
+    params.push(limit, offset);
+    const recordsResult = await pool.query(recordsQuery, params);
+
+    // overall totals for the same filter (no limit/offset)
+    const totalParams = params.slice(0, params.length - 2); // remove limit & offset
+    const totalsQuery = `
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'present')  AS total_present,
+        COUNT(*) FILTER (WHERE status = 'absent')   AS total_absent,
+        COUNT(*) FILTER (WHERE status = 'on_leave') AS total_leave,
+        COUNT(*) FILTER (WHERE status = 'late')     AS total_late,
+        COUNT(*) FILTER (WHERE status = 'half_day') AS total_half_day,
+        COALESCE(
+          ROUND(
+            SUM(
+              CASE
+                WHEN check_in_time IS NOT NULL AND check_out_time IS NOT NULL
+                THEN EXTRACT(EPOCH FROM (check_out_time - check_in_time)) / 3600.0
+                ELSE 0
+              END
+            ), 2
+          ), 0
+        )                                           AS total_working_hours
+      FROM attendance_records ar
+      WHERE ar.user_id = $1
+        ${dateFilter}
+    `;
+    const totalsResult = await pool.query(totalsQuery, totalParams);
+
+    return {
+      records: recordsResult.rows,
+      totals: totalsResult.rows[0],
+    };
   },
 
   // ─── Delete a record ─────────────────────────────────────────────────────────

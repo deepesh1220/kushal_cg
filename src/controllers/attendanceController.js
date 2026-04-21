@@ -13,7 +13,7 @@ const checkIn = async (req, res) => {
     const existing = await Attendance.findByUserAndDate(userId, today);
     if (existing) {
       return res.status(409).json({
-        status: 'error',
+        status: false,
         message: `Attendance already marked for today (${today}). Status: ${existing.status}`,
         data: existing,
       });
@@ -49,14 +49,14 @@ const checkIn = async (req, res) => {
 
         // Allow check-in up to 60 mins early, but block if too early or if after close time
         if (currentMins < openTotalMins - 60) {
-          return res.status(403).json({ 
-            status: 'error', 
+          return res.status(403).json({
+            status: false,
             message: `Too early to check in. School opens at ${hm.school_open_time}.`
           });
         }
         if (currentMins > closeTotalMins) {
-          return res.status(403).json({ 
-            status: 'error', 
+          return res.status(403).json({
+            status: false,
             message: `School is already closed (${hm.school_close_time}). Check-in not allowed.`
           });
         }
@@ -65,18 +65,18 @@ const checkIn = async (req, res) => {
     // ─────────────────────────────────────────────────────────────────────────
 
     const record = await Attendance.create({
-      user_id:       userId,
-      date:          today,
+      user_id: userId,
+      date: today,
       check_in_time: new Date(),
-      status:        'present',
+      status: 'present',
       latitude,
       longitude,
       remarks,
-      marked_by:     userId,
+      marked_by: userId,
     });
 
     return res.status(201).json({
-      status: 'success',
+      status: true,
       message: 'Check-in successful.',
       data: record,
     });
@@ -90,21 +90,21 @@ const checkIn = async (req, res) => {
 // VT marks their check-out
 const checkOut = async (req, res) => {
   const userId = req.user.id;
-  const today  = new Date().toISOString().split('T')[0];
+  const today = new Date().toISOString().split('T')[0];
 
   try {
     const existing = await Attendance.findByUserAndDate(userId, today);
 
     if (!existing) {
       return res.status(404).json({
-        status: 'error',
+        status: false,
         message: 'No check-in record found for today. Please check-in first.',
       });
     }
 
     if (existing.check_out_time) {
       return res.status(409).json({
-        status: 'error',
+        status: false,
         message: 'You have already checked out today.',
         data: existing,
       });
@@ -138,8 +138,8 @@ const checkOut = async (req, res) => {
 
         // Block check-out if it's before the school has even opened
         if (currentMins < openTotalMins) {
-          return res.status(403).json({ 
-            status: 'error', 
+          return res.status(403).json({
+            status: false,
             message: `Cannot check-out before school open time (${hm.school_open_time}).`
           });
         }
@@ -150,7 +150,7 @@ const checkOut = async (req, res) => {
     const updated = await Attendance.checkOut(userId, today);
 
     return res.status(200).json({
-      status: 'success',
+      status: true,
       message: 'Check-out successful.',
       data: updated,
     });
@@ -168,7 +168,7 @@ const markAttendance = async (req, res) => {
 
   if (!user_id || !date || !status) {
     return res.status(400).json({
-      status: 'error',
+      status: false,
       message: 'user_id, date, and status are required.',
     });
   }
@@ -178,7 +178,7 @@ const markAttendance = async (req, res) => {
     const existing = await Attendance.findByUserAndDate(user_id, date);
     if (existing) {
       return res.status(409).json({
-        status: 'error',
+        status: false,
         message: `Attendance already exists for this user on ${date}.`,
         data: existing,
       });
@@ -197,7 +197,7 @@ const markAttendance = async (req, res) => {
     });
 
     return res.status(201).json({
-      status: 'success',
+      status: true,
       message: 'Attendance marked successfully.',
       data: record,
     });
@@ -215,9 +215,9 @@ const getMyAttendance = async (req, res) => {
 
   try {
     const records = await Attendance.findByUser(userId, { from_date, to_date, limit, offset });
-    return res.status(200).json({ status: 'success', data: records });
+    return res.status(200).json({ status: true, data: records });
   } catch (error) {
-    return res.status(500).json({ status: 'error', message: error.message });
+    return res.status(500).json({ status: false, message: error.message });
   }
 };
 
@@ -230,12 +230,12 @@ const getAllAttendance = async (req, res) => {
     const records = await Attendance.findAll({
       user_id, date, from_date, to_date, status,
       district, block, vtp_name, trade,
-      limit:  limit  ? parseInt(limit)  : 50,
+      limit: limit ? parseInt(limit) : 50,
       offset: offset ? parseInt(offset) : 0,
     });
-    return res.status(200).json({ status: 'success', count: records.length, data: records });
+    return res.status(200).json({ status: true, count: records.length, data: records });
   } catch (error) {
-    return res.status(500).json({ status: 'error', message: error.message });
+    return res.status(500).json({ status: false, message: error.message });
   }
 };
 
@@ -251,7 +251,7 @@ const getProviderAttendance = async (req, res) => {
 
     if (!vtpOrgName) {
       return res.status(400).json({
-        status:  'error',
+        status: false,
         message: 'Your account does not have an organization name linked. Contact admin.',
       });
     }
@@ -259,15 +259,15 @@ const getProviderAttendance = async (req, res) => {
     const records = await Attendance.findByProvider(vtpOrgName, {
       from_date,
       to_date,
-      limit:  limit  ? parseInt(limit)  : 50,
+      limit: limit ? parseInt(limit) : 50,
       offset: offset ? parseInt(offset) : 0,
     });
 
     return res.status(200).json({
-      status:       'success',
+      status: true,
       organization: vtpOrgName,
-      count:        records.length,
-      data:         records,
+      count: records.length,
+      data: records,
     });
   } catch (error) {
     return res.status(500).json({ status: 'error', message: error.message });
@@ -285,12 +285,12 @@ const updateAttendance = async (req, res) => {
     const updated = await Attendance.update(id, { check_in_time, check_out_time, status, remarks, photo_path });
 
     if (!updated) {
-      return res.status(404).json({ status: 'error', message: 'Attendance record not found.' });
+      return res.status(404).json({ status: false, message: 'Attendance record not found.' });
     }
 
-    return res.status(200).json({ status: 'success', message: 'Attendance updated.', data: updated });
+    return res.status(200).json({ status: true, message: 'Attendance updated.', data: updated });
   } catch (error) {
-    return res.status(500).json({ status: 'error', message: error.message });
+    return res.status(500).json({ status: false, message: error.message });
   }
 };
 
@@ -301,11 +301,11 @@ const deleteAttendance = async (req, res) => {
   try {
     const deleted = await Attendance.delete(id);
     if (!deleted) {
-      return res.status(404).json({ status: 'error', message: 'Attendance record not found.' });
+      return res.status(404).json({ status: false, message: 'Attendance record not found.' });
     }
-    return res.status(200).json({ status: 'success', message: 'Attendance record deleted.' });
+    return res.status(200).json({ status: true, message: 'Attendance record deleted.' });
   } catch (error) {
-    return res.status(500).json({ status: 'error', message: error.message });
+    return res.status(500).json({ status: false, message: error.message });
   }
 };
 
@@ -316,14 +316,75 @@ const getMonthlySummary = async (req, res) => {
   const { year, month } = req.query;
 
   if (!year || !month) {
-    return res.status(400).json({ status: 'error', message: 'year and month query params are required.' });
+    return res.status(400).json({ status: false, message: 'year and month query params are required.' });
   }
 
   try {
     const summary = await Attendance.getMonthlySummary(userId, parseInt(year), parseInt(month));
-    return res.status(200).json({ status: 'success', data: summary });
+    return res.status(200).json({ status: true, data: summary });
   } catch (error) {
-    return res.status(500).json({ status: 'error', message: error.message });
+    return res.status(500).json({ status: false, message: error.message });
+  }
+};
+
+// ─── POST /api/attendance/report/daily ───────────────────────────────────────
+// Per-day attendance report for a VT user: check-in, check-out, working hours,
+// status, leave reason + overall totals.
+// Body params:
+//   userId       - required (the VT user id)
+//   filter_type  - 'date' | 'week' | 'month' | 'date_range' (default: 'month')
+//   filter_value - e.g. '2026-04-21' | '2026-W16' | '2026-04' | '2026-04-01,2026-04-21'
+//   limit        - page size  (default 31)
+//   offset       - page start (default 0)
+const getDailyReport = async (req, res) => {
+  const { userId, filter_type, filter_value, limit, offset } = req.body;
+
+  if (!userId) {
+    return res.status(400).json({ status: false, message: 'userId query param is required.' });
+  }
+
+  const validTypes = ['date', 'week', 'month', 'date_range'];
+  const resolvedType = validTypes.includes(filter_type) ? filter_type : 'month';
+
+  try {
+    const { records, totals } = await Attendance.getDailyReport(parseInt(userId), {
+      filter_type: resolvedType,
+      filter_value: filter_value || null,
+      limit: limit ? parseInt(limit) : 31,
+      offset: offset ? parseInt(offset) : 0,
+    });
+
+    // Enrich each record — label absent if no DB row exists (only matters for direct date lookup)
+    const enriched = records.map((r) => ({
+      date: r.date,
+      check_in: r.check_in_time || null,
+      check_out: r.check_out_time || null,
+      status: r.status,
+      leave_reason: r.status === 'on_leave' ? (r.leave_reason || null) : null,
+      working_hours: r.working_hours !== null ? parseFloat(r.working_hours) : null,
+    }));
+
+    return res.status(200).json({
+      status: true,
+      filter: { type: resolvedType, value: filter_value || null },
+      pagination: {
+        limit: limit ? parseInt(limit) : 31,
+        offset: offset ? parseInt(offset) : 0,
+        count: enriched.length,
+      },
+      summary: {
+        total_present: parseInt(totals.total_present),
+        total_absent: parseInt(totals.total_absent),
+        total_leave: parseInt(totals.total_leave),
+        total_late: parseInt(totals.total_late),
+        total_half_day: parseInt(totals.total_half_day),
+        total_working_hours: parseFloat(totals.total_working_hours),
+      },
+      data: enriched,
+    });
+  } catch (error) {
+    console.error('getDailyReport error:', error.message);
+    return res.status(500).json({ status: false, message: error.message });
   }
 };
 
@@ -337,4 +398,5 @@ module.exports = {
   updateAttendance,
   deleteAttendance,
   getMonthlySummary,
+  getDailyReport,
 };
