@@ -8,7 +8,7 @@ const getPendingVts = async (req, res) => {
 
     if (!headmasterUdise) {
       return res.status(400).json({
-        status: 'error',
+        status: false,
         message: 'Your account is not linked to a school UDISE code. Contact administrator.',
       });
     }
@@ -16,10 +16,10 @@ const getPendingVts = async (req, res) => {
     const pendingVts = await User.findPendingVtsByUdise(headmasterUdise);
 
     return res.status(200).json({
-      status:  'success',
-      count:   pendingVts.length,
+      status: true,
+      count: pendingVts.length,
       message: `${pendingVts.length} pending VT registration(s) for your school.`,
-      data:    pendingVts,
+      data: pendingVts,
     });
   } catch (error) {
     console.error('getPendingVts error:', error.message);
@@ -35,9 +35,9 @@ const getAllVts = async (req, res) => {
   try {
     const vts = await User.findAllVtsByStatus(status || null);
     return res.status(200).json({
-      status: 'success',
-      count:  vts.length,
-      data:   vts,
+      status: true,
+      count: vts.length,
+      data: vts,
     });
   } catch (error) {
     return res.status(500).json({ status: 'error', message: error.message });
@@ -58,15 +58,15 @@ const approveVt = async (req, res) => {
 
     if (!updated) {
       return res.status(404).json({
-        status: 'error',
+        status: false,
         message: 'VT not found or not in pending state.',
       });
     }
 
     return res.status(200).json({
-      status:  'success',
+      status: true,
       message: `Vocational Teacher "${updated.name}" has been approved and can now login.`,
-      data:    updated,
+      data: updated,
     });
   } catch (error) {
     console.error('approveVt error:', error.message);
@@ -89,16 +89,16 @@ const rejectVt = async (req, res) => {
 
     if (!updated) {
       return res.status(404).json({
-        status: 'error',
+        status: false,
         message: 'VT not found or not in pending state.',
       });
     }
 
     return res.status(200).json({
-      status:  'success',
+      status: true,
       message: `Vocational Teacher "${updated.name}" registration has been rejected.`,
-      reason:  reason || null,
-      data:    updated,
+      reason: reason || null,
+      data: updated,
     });
   } catch (error) {
     console.error('rejectVt error:', error.message);
@@ -116,7 +116,7 @@ const _validateVtBelongsToHeadmaster = async (vtUserId, headmaster) => {
   if (!headmaster.udise_code) {
     return {
       status: 400,
-      body:   { status: 'error', message: 'Your account is not linked to a school UDISE code.' },
+      body: { status: false, message: 'Your account is not linked to a school UDISE code.' },
     };
   }
 
@@ -132,7 +132,7 @@ const _validateVtBelongsToHeadmaster = async (vtUserId, headmaster) => {
   if (!result.rows.length) {
     return {
       status: 404,
-      body:   { status: 'error', message: 'Vocational Teacher not found.' },
+      body: { status: false, message: 'Vocational Teacher not found.' },
     };
   }
 
@@ -140,8 +140,8 @@ const _validateVtBelongsToHeadmaster = async (vtUserId, headmaster) => {
   if (String(vtUdise) !== String(headmaster.udise_code)) {
     return {
       status: 403,
-      body:   {
-        status:  'error',
+      body: {
+        status: false,
         message: 'You are not authorized to approve VTs from a different school.',
       },
     };

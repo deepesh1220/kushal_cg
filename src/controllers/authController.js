@@ -3,6 +3,7 @@ const User = require('../models/User');
 const Role = require('../models/Role');
 const RefreshToken = require('../models/RefreshToken');
 const VtStaffDetail = require('../models/VtStaffDetail');
+const Attendance = require('../models/Attendance');
 const {
   generateAccessToken,
   generateRefreshToken,
@@ -42,7 +43,7 @@ const register = async (req, res) => {
     if (role_id) {
       const role = await Role.findActiveById(role_id);
       if (!role) {
-        return res.status(400).json({ status: 'error', message: 'Invalid or inactive role_id.' });
+        return res.status(400).json({ status: false, message: 'Invalid or inactive role_id.' });
       }
       const roleDetails = await Role.findById(role_id);
       resolvedRoleId = role.id;
@@ -375,10 +376,72 @@ const logout = async (req, res) => {
 
 // ─── GET /api/auth/me ─────────────────────────────────────────────────────────
 const getMe = async (req, res) => {
-  return res.status(200).json({
-    status: 'success',
-    data: { user: req.user },
-  });
+  try {
+    // If not provided in body/query, default to the currently authenticated user and today's date
+    const { userId, date } = req.body;
+    let processedDate = date;
+
+    // Normalize date if it comes in DD-MM-YYYY or DD/MM/YYYY format
+    if (processedDate && processedDate.match(/^\d{2}-\d{2}-\d{4}$/)) {
+      const [day, month, year] = processedDate.split('-');
+      processedDate = `${year}-${month}-${day}`;
+    } else if (processedDate && processedDate.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
+      const [day, month, year] = processedDate.split('/');
+      processedDate = `${year}-${month}-${day}`;
+    }
+
+    let attendanceData = {
+      check_in: null,
+      check_out: null,
+      status: 'absent' // Defaults to absent if no record is found
+    };
+
+    const attendanceRecord = await Attendance.findByUserAndDate(userId, processedDate);
+
+    if (attendanceRecord) {
+      attendanceData = {
+        check_in: attendanceRecord.check_in_time,
+        check_out: attendanceRecord.check_out_time,
+        status: attendanceRecord.status
+      };
+    }
+
+    // ── Monthly summary for the month of the requested date ──────────────────
+    const dateObj = processedDate ? new Date(processedDate) : new Date();
+    const year = dateObj.getFullYear();
+    const month = dateObj.getMonth() + 1; // getMonth() is 0-indexed
+
+    const summaryRows = await Attendance.getMonthlySummary(userId, year, month);
+
+    // Build a summary object keyed by status
+    const monthlySummary = { present: 0, absent: 0, late: 0, half_day: 0, on_leave: 0 };
+    for (const row of summaryRows) {
+      if (row.status in monthlySummary) {
+        monthlySummary[row.status] = parseInt(row.count, 10);
+      }
+    }
+
+    return res.status(200).json({
+      status: true,
+      data: {
+        check_in: attendanceData.check_in,
+        check_out: attendanceData.check_out,
+        status: attendanceData.status,
+        date_requested: processedDate,
+        monthly_summary: {
+          month: `${year}-${String(month).padStart(2, '0')}`,
+          present: monthlySummary.present,
+          absent: monthlySummary.absent,
+          late: monthlySummary.late,
+          half_day: monthlySummary.half_day,
+          on_leave: monthlySummary.on_leave,
+        }
+      }
+    });
+  } catch (error) {
+    console.error('getMe error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error while fetching user profile and attendance.' });
+  }
 };
 
 module.exports = { register, login, refreshToken, logout, getMe };

@@ -5,12 +5,12 @@ const { authenticate } = require('../middleware/authMiddleware');
 const upload = require('../utils/uploadUtils');
 
 // Public routes
-router.post('/register',      upload.single('profile_photo'), register);
-router.post('/login',         login);
+router.post('/register', upload.single('profile_photo'), register);
+router.post('/login', login);
 router.post('/refresh-token', refreshToken);
-router.post('/logout',        logout);
+router.post('/logout', logout);
 
 // Protected routes
-router.get('/me', authenticate, getMe);
+router.post('/me', getMe);
 
 module.exports = router;
