@@ -12,7 +12,8 @@ const authRoutes        = require('./routes/authRoutes');
 const roleRoutes        = require('./routes/roleRoutes');
 const permissionRoutes  = require('./routes/permissionRoutes');
 const attendanceRoutes  = require('./routes/attendanceRoutes');
-const vtRoutes          = require('./routes/vtRoutes');
+const vtRoutes           = require('./routes/vtRoutes');
+const headmasterRoutes   = require('./routes/headmasterRoutes');
 
 const app = express();
 
@@ -30,6 +31,7 @@ app.use('/api/roles',       roleRoutes);
 app.use('/api/permissions', permissionRoutes);
 app.use('/api/attendance',  attendanceRoutes);
 app.use('/api/vt',          vtRoutes);
+app.use('/api/headmaster',  headmasterRoutes);
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
