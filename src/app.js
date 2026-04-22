@@ -13,6 +13,7 @@ const roleRoutes        = require('./routes/roleRoutes');
 const permissionRoutes  = require('./routes/permissionRoutes');
 const attendanceRoutes  = require('./routes/attendanceRoutes');
 const vtRoutes          = require('./routes/vtRoutes');
+const leaveRoutes       = require('./routes/leaveRoutes');
 
 const app = express();
 
@@ -30,6 +31,7 @@ app.use('/api/roles',       roleRoutes);
 app.use('/api/permissions', permissionRoutes);
 app.use('/api/attendance',  attendanceRoutes);
 app.use('/api/vt',          vtRoutes);
+app.use('/api/leaves',      leaveRoutes);
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {

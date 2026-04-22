@@ -161,6 +161,8 @@ const initDB = async () => {
         user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         from_date    DATE    NOT NULL,
         to_date      DATE    NOT NULL,
+        leave_type   VARCHAR(20) DEFAULT 'full-day'
+                       CHECK (leave_type IN ('full-day','first-half','second-half')),
         reason       TEXT,
         status       VARCHAR(20) DEFAULT 'pending'
                        CHECK (status IN ('pending','approved','rejected')),
@@ -169,6 +171,11 @@ const initDB = async () => {
         created_at   TIMESTAMPTZ DEFAULT NOW(),
         updated_at   TIMESTAMPTZ DEFAULT NOW()
       );
+    `);
+
+    // Ensure leave_type column exists for previously created databases
+    await client.query(`
+      ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS leave_type VARCHAR(20) DEFAULT 'full-day';
     `);
 
     await client.query('COMMIT');

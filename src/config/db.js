@@ -1,5 +1,9 @@
-const { Pool, Client } = require('pg');
+const { Pool, Client, types } = require('pg');
 require('dotenv').config();
+
+// Override pg's default parsing for DATE (OID 1082) columns to return raw string instead of a JavaScript Date object
+// This prevents timezone shift issues where '2026-04-23' turns into '2026-04-22T18:30:00.000Z'
+types.setTypeParser(1082, (val) => val);
 
 // ─── Step 1: Connect to default 'postgres' DB to create app DB if needed ───────
 const createDatabaseIfNotExists = async () => {
