@@ -1,6 +1,6 @@
 const express = require('express');
-const cors    = require('cors');
-const dotenv  = require('dotenv');
+const cors = require('cors');
+const dotenv = require('dotenv');
 
 dotenv.config();
 
@@ -8,12 +8,13 @@ const { createDatabaseIfNotExists } = require('./config/db');
 const initDB = require('./config/initDB');
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
-const authRoutes        = require('./routes/authRoutes');
-const roleRoutes        = require('./routes/roleRoutes');
-const permissionRoutes  = require('./routes/permissionRoutes');
-const attendanceRoutes  = require('./routes/attendanceRoutes');
-const vtRoutes          = require('./routes/vtRoutes');
-const leaveRoutes       = require('./routes/leaveRoutes');
+const authRoutes = require('./routes/authRoutes');
+const roleRoutes = require('./routes/roleRoutes');
+const permissionRoutes = require('./routes/permissionRoutes');
+const attendanceRoutes = require('./routes/attendanceRoutes');
+const vtRoutes = require('./routes/vtRoutes');
+const leaveRoutes = require('./routes/leaveRoutes');
+const headmasterRoutes = require('./routes/headmasterRoutes');
 
 const app = express();
 
@@ -26,12 +27,12 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static('src/uploads'));
 
 // ─── API Routes ───────────────────────────────────────────────────────────────
-app.use('/api/auth',        authRoutes);
-app.use('/api/roles',       roleRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/roles', roleRoutes);
 app.use('/api/permissions', permissionRoutes);
-app.use('/api/attendance',  attendanceRoutes);
-app.use('/api/vt',          vtRoutes);
-app.use('/api/leaves',      leaveRoutes);
+app.use('/api/attendance', attendanceRoutes);
+app.use('/api/vt', vtRoutes);
+app.use('/api/headmaster', headmasterRoutes);
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {

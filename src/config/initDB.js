@@ -178,8 +178,83 @@ const initDB = async () => {
       ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS leave_type VARCHAR(20) DEFAULT 'full-day';
     `);
 
+    // ─────────────────────────────────────────────────────────
+    // TABLE: headmasters  (kushal_cg domain)
+    // Stores headmaster / principal records synced from MIS.
+    // teacher_code is the natural PK assigned by the MIS system.
+    // All column names use snake_case per project convention.
+    // ─────────────────────────────────────────────────────────
+    // ⚠️  MIGRATION HELPER: drops the old table so it is recreated with the
+    //     correct snake_case column names. Remove this line once the schema
+    //     is stable and the table holds real data.
+    await client.query(`DROP TABLE IF EXISTS headmasters CASCADE;`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS headmasters (
+        -- ── Identity / Auth ────────────────────────────────────
+        teacher_code          VARCHAR(120)     NOT NULL,   -- PK, assigned by MIS
+        email                 VARCHAR(255),
+        password              VARCHAR(255)     NOT NULL,   -- bcrypt hash
+        t_name                VARCHAR(255)     NOT NULL,   -- full name
+
+        -- ── School / Admin hierarchy ───────────────────────────
+        udise_code            BIGINT,
+        school_name           VARCHAR(255),
+        cluster_id            BIGINT,
+        cluster_name          VARCHAR(255),
+        block_id              BIGINT,
+        block_name            VARCHAR(255),
+        district_id           BIGINT,
+        district_name         VARCHAR(255),
+
+        -- ── Personal details ───────────────────────────────────
+        gender                INT,             -- 1=Male 2=Female 3=Other
+        caste_name            TEXT,
+        mobile                BIGINT,
+        dob                   DATE,
+
+        -- ── Role / Status flags ────────────────────────────────
+        role                                  TEXT     DEFAULT 'headmaster',
+        is_migrated                           BOOLEAN  DEFAULT FALSE,
+        is_attached_teacher                   BOOLEAN  DEFAULT FALSE,
+        is_role_update                        BOOLEAN  DEFAULT FALSE,
+        is_location_reset                     BOOLEAN  DEFAULT FALSE,
+        location_verify                       BOOLEAN  DEFAULT FALSE,
+        appoint_as_cac                        BOOLEAN  DEFAULT FALSE,
+        is_retired_teacher                    BOOLEAN  DEFAULT FALSE,
+        is_temporary_headmaster_or_principal  BOOLEAN  DEFAULT FALSE,
+
+        -- ── Verification / Approval ────────────────────────────
+        verified_by_headmaster  BOOLEAN        DEFAULT FALSE,
+        approved_by_headmaster  BOOLEAN        DEFAULT FALSE,
+
+        -- ── School management / Category ──────────────────────
+        sch_mgmt_id             INT,
+        sch_category_id         INT,
+
+        -- ── Media / Location ───────────────────────────────────
+        school_image_url        TEXT,
+        latitude                DOUBLE PRECISION,
+        longitude               DOUBLE PRECISION,
+
+        -- ── Timestamps ─────────────────────────────────────────
+        updated_at              TIMESTAMPTZ    DEFAULT NOW(),
+        created_at              TIMESTAMPTZ    DEFAULT NOW(),
+
+        -- ── Constraints ────────────────────────────────────────
+        CONSTRAINT headmasters_pkey         PRIMARY KEY (teacher_code),
+        CONSTRAINT headmasters_email_unique UNIQUE (email)
+      );
+    `);
+
     await client.query('COMMIT');
     console.log('✅ All tables created/verified successfully');
+
+    // Indexes outside transaction (idempotent — IF NOT EXISTS)
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_headmasters_udise_code    ON headmasters (udise_code);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_headmasters_mobile      ON headmasters (mobile);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_headmasters_district_id ON headmasters (district_id);`);
+    console.log('✅ Headmaster indexes created/verified');
 
     // ─────────────────────────────────────────────────────────
     // SEED: Default roles and permissions
