@@ -33,6 +33,7 @@ app.use('/api/permissions', permissionRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/vt', vtRoutes);
 app.use('/api/headmaster', headmasterRoutes);
+app.use('/api/leaves', leaveRoutes);
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {

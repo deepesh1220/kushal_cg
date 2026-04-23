@@ -23,13 +23,16 @@ const Attendance = {
   },
 
   // ─── Check-out (update check_out_time) ─────────────────────────────────────
-  async checkOut(userId, date) {
+  async checkOut(userId, date, latitude, longitude) {
     const result = await pool.query(`
       UPDATE attendance_records
-      SET check_out_time = NOW(), updated_at = NOW()
+      SET check_out_time = NOW(),
+          checkout_latitude = $3,
+          checkout_longitude = $4,
+          updated_at = NOW()
       WHERE user_id = $1 AND date = $2
       RETURNING *
-    `, [userId, date]);
+    `, [userId, date, latitude || null, longitude || null]);
     return result.rows[0] || null;
   },
 
@@ -71,7 +74,7 @@ const Attendance = {
     let query = `
       SELECT
         ar.id, ar.date, ar.check_in_time, ar.check_out_time,
-        ar.status, ar.latitude, ar.longitude, ar.photo_path,
+        ar.status, ar.latitude, ar.longitude, ar.checkout_latitude, ar.checkout_longitude, ar.photo_path,
         ar.remarks, ar.created_at,
         u.id   AS user_id,
         u.name AS user_name,
@@ -113,7 +116,7 @@ const Attendance = {
     let query = `
       SELECT
         ar.id, ar.date, ar.check_in_time, ar.check_out_time,
-        ar.status, ar.photo_path, ar.remarks,
+        ar.status, ar.latitude, ar.longitude, ar.checkout_latitude, ar.checkout_longitude, ar.photo_path, ar.remarks,
         u.name AS vt_name, u.phone AS vt_phone,
         v.district_name, v.block_name, v.school_name, v.trade
       FROM attendance_records ar

@@ -90,6 +90,7 @@ const checkIn = async (req, res) => {
 // VT marks their check-out
 const checkOut = async (req, res) => {
   const userId = req.user.id;
+  const { latitude, longitude } = req.body;
   const today = new Date().toISOString().split('T')[0];
 
   try {
@@ -147,7 +148,7 @@ const checkOut = async (req, res) => {
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    const updated = await Attendance.checkOut(userId, today);
+    const updated = await Attendance.checkOut(userId, today, latitude, longitude);
 
     return res.status(200).json({
       status: true,

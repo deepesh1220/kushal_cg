@@ -143,6 +143,8 @@ const initDB = async () => {
                           CHECK (status IN ('present','absent','late','half_day','on_leave')),
         latitude        NUMERIC(10, 8),
         longitude       NUMERIC(11, 8),
+        checkout_latitude NUMERIC(10, 8),
+        checkout_longitude NUMERIC(11, 8),
         photo_path      TEXT,
         remarks         TEXT,
         marked_by       INTEGER     REFERENCES users(id) ON DELETE SET NULL,
@@ -150,6 +152,12 @@ const initDB = async () => {
         updated_at      TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE (user_id, date)
       );
+    `);
+
+    // Ensure checkout location columns exist for previously created databases
+    await client.query(`
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_latitude NUMERIC(10, 8);
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_longitude NUMERIC(11, 8);
     `);
 
     // ─────────────────────────────────────────────────────────
@@ -187,7 +195,6 @@ const initDB = async () => {
     // ⚠️  MIGRATION HELPER: drops the old table so it is recreated with the
     //     correct snake_case column names. Remove this line once the schema
     //     is stable and the table holds real data.
-    await client.query(`DROP TABLE IF EXISTS headmasters CASCADE;`);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS headmasters (
@@ -297,6 +304,10 @@ const seedDefaults = async (client) => {
     {
       name: 'vocational_teacher',
       description: 'Vocational teacher — mark own attendance and submit leave requests',
+    },
+    {
+      name: 'programmer',
+      description: 'Programmer — enter and update attendance data on behalf of headmaster and teachers',
     },
   ];
 
