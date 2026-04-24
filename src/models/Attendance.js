@@ -45,6 +45,15 @@ const Attendance = {
     return result.rows[0] || null;
   },
 
+  async findByUserId(userId) {
+    const result = await pool.query(`
+      SELECT id,name,email,phone,vt_staff_id,udise_code,school_open_time,
+      school_close_time,profile_photo,latitude,longitude FROM users
+      WHERE id = $1
+    `, [userId]);
+    return result.rows[0] || null;
+  },
+
   // ─── Get own attendance (vocational_teacher view) ───────────────────────────
   async findByUser(userId, { from_date, to_date, limit = 30, offset = 0 } = {}) {
     let query = `

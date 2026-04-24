@@ -472,6 +472,7 @@ const getMe = async (req, res) => {
 
     const attendanceRecord = await Attendance.findByUserAndDate(userId, processedDate);
 
+
     if (attendanceRecord) {
       attendanceData = {
         check_in: attendanceRecord.check_in_time,
@@ -495,6 +496,8 @@ const getMe = async (req, res) => {
       }
     }
 
+    const vtProfile = await Attendance.findByUserId(userId);
+
     return res.status(200).json({
       status: true,
       data: {
@@ -509,7 +512,8 @@ const getMe = async (req, res) => {
           late: monthlySummary.late,
           half_day: monthlySummary.half_day,
           on_leave: monthlySummary.on_leave,
-        }
+        },
+        vt_profile: vtProfile
       }
     });
   } catch (error) {
