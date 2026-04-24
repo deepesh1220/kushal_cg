@@ -4,6 +4,7 @@ const Role = require('../models/Role');
 const RefreshToken = require('../models/RefreshToken');
 const VtStaffDetail = require('../models/VtStaffDetail');
 const Attendance = require('../models/Attendance');
+const Headmaster = require('../models/Headmaster');
 const {
   generateAccessToken,
   generateRefreshToken,
@@ -16,7 +17,7 @@ const VTP_ROLE_NAME = 'vocational_teacher_provider';
 
 // ─── POST /api/auth/register ──────────────────────────────────────────────────
 const register = async (req, res) => {
-  const { name, email, phone, password, role_id, latitude, longitude, school_open_time, school_close_time,image } = req.body;
+  const { name, email, phone, password, role_id, latitude, longitude, school_open_time, school_close_time, image } = req.body;
 
   if (!phone || !password) {
     return res.status(400).json({
@@ -220,8 +221,81 @@ const register = async (req, res) => {
 
 // ─── POST /api/auth/login ──────────────────────────────────────────────────────
 const login = async (req, res) => {
-  const { email, phone, password } = req.body;
+  const { email, phone, password, teacher_code, mobile } = req.body;
 
+  // ── Headmaster login via teacher_code & mobile ────────────────────────────
+  if (teacher_code && (mobile || phone)) {
+    try {
+      const inputMobile = mobile || phone;
+      const headmaster = await Headmaster.findByTeacherCode(teacher_code);
+
+      if (!headmaster || String(headmaster.mobile) !== String(inputMobile)) {
+        return res.status(401).json({ status: false, message: 'Invalid teacher code or mobile number.' });
+      }
+
+      // Ensure they exist in the users table for foreign key relations (tokens, attendance, etc.)
+      let user = await User.findByPhone(inputMobile);
+
+      if (!user) {
+        const defaultRole = await Role.findByName('headmaster');
+        const password_hash = await bcrypt.hash(String(inputMobile), 12); // dummy password
+
+        const newUser = await User.create({
+          name: headmaster.t_name || 'Headmaster',
+          email: headmaster.email || `${teacher_code}@headmaster.local`,
+          phone: inputMobile,
+          password_hash,
+          role_id: defaultRole ? defaultRole.id : null,
+          udise_code: headmaster.udise_code,
+          is_active: true
+        });
+        user = await User.findById(newUser.id);
+      }
+
+      if (user && !user.is_active) {
+        return res.status(403).json({ status: false, message: 'Your account has been deactivated. Contact administrator.' });
+      }
+
+      const permissions = await User.getEffectivePermissions(user.role_id, user.id);
+      const tokenPayload = {
+        id: user.id,
+        email: user.email,
+        role: user.role_name,
+        role_id: user.role_id,
+      };
+
+      const accessToken = generateAccessToken(tokenPayload);
+      const refreshToken = generateRefreshToken(tokenPayload);
+      const expiresAt = getRefreshTokenExpiry();
+
+      await RefreshToken.create(user.id, refreshToken, expiresAt);
+
+      return res.status(200).json({
+        status: true,
+        message: 'Headmaster login successful.',
+        data: {
+          user: {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
+            role: user.role_name,
+            profile_photo: user.profile_photo,
+            permissions,
+          },
+          tokens: {
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          },
+        },
+      });
+    } catch (error) {
+      console.error('Headmaster login error:', error.message);
+      return res.status(500).json({ status: 'error', message: 'Server error during headmaster login.' });
+    }
+  }
+
+  // ── Normal Login ────────────────────────────────────────────────────────
   if ((!email && !phone) || !password) {
     return res.status(400).json({
       status: false,
