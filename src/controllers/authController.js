@@ -88,6 +88,7 @@ const register = async (req, res) => {
       //   vt_email → teacher's email
       finalName = name || vtStaff.vt_name;
       finalEmail = email || vtStaff.vt_email || `${phone}@vt.local`;
+      finalUdise = req.body.udise_code || vtStaff.udise_code;
 
     } else if (roleName === VTP_ROLE_NAME) {
       // VTP: organization_name is required so we can link them to vt_staff_details.vtp_name
@@ -171,7 +172,7 @@ const register = async (req, res) => {
       vt_staff_id: vtStaff?.id || null,
       // For VTP: store their organization name (= vtp_name in vt_staff_details)
       organization_name: roleName === VTP_ROLE_NAME ? (name || null) : null,
-      udise_code: req.body.udise_code || null,
+      udise_code: finalUdise || null,
       profile_photo: profile_photo,
       latitude: latitude ? parseFloat(latitude) : null,
       longitude: longitude ? parseFloat(longitude) : null,
