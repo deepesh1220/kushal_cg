@@ -466,7 +466,7 @@ const getDailyReport = async (req, res) => {
 // Headmaster views attendance of VTs in their school (using POST body for filters)
 const getHeadmasterAttendance = async (req, res) => {
   const udiseCode = req.user.udise_code;
-  const { user_id, filter_type, filter_value, limit, page } = req.body;
+  const { user_id, status, filter_type, filter_value, limit, page } = req.body;
 
   if (!udiseCode) {
     return res.status(400).json({
@@ -482,6 +482,7 @@ const getHeadmasterAttendance = async (req, res) => {
   try {
     const { records, totalCount } = await Attendance.findBySchool(udiseCode, {
       user_id,
+      status,
       filter_type, // 'date', 'week', 'month', 'date_range', or omit for all
       filter_value,
       limit: parsedLimit,

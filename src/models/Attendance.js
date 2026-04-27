@@ -148,7 +148,7 @@ const Attendance = {
   },
 
   // ─── Get attendance for a headmaster's school ───────────────────────────────
-  async findBySchool(udiseCode, { user_id, filter_type = 'month', filter_value, limit = 50, offset = 0 } = {}) {
+  async findBySchool(udiseCode, { user_id, status, filter_type = 'month', filter_value, limit = 50, offset = 0 } = {}) {
     // filter_type: 'date' | 'week' | 'month' | 'date_range' | 'all'
     const params = [udiseCode];
     let query = `
@@ -166,6 +166,11 @@ const Attendance = {
     if (user_id) {
       params.push(user_id);
       query += ` AND ar.user_id = $${params.length}`;
+    }
+    
+    if (status) {
+      params.push(status);
+      query += ` AND ar.status = $${params.length}`;
     }
 
     if (filter_type === 'date' && filter_value) {
