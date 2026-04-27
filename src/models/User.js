@@ -122,9 +122,9 @@ const User = {
     return result.rows[0] || null;
   },
 
-  // ─── Get pending VTs for a specific school (by UDISE code) ──────────────────
-  // Used by headmaster to see pending VTs in their school only
-  async findPendingVtsByUdise(udiseCode) {
+  // ─── Get VTs for a specific school (by UDISE code) ──────────────────────────
+  // Used by headmaster to see VTs in their school
+  async findVtsByUdise(udiseCode) {
     const result = await pool.query(`
       SELECT
         u.id, u.name, u.email, u.phone,
@@ -133,9 +133,8 @@ const User = {
         v.vtp_name, v.trade, v.vt_aadhar, v.udise_code
       FROM users u
       JOIN vt_staff_details v ON v.id = u.vt_staff_id
-      WHERE u.vt_approval_status = 'pending'
-        AND v.udise_code = $1
-      ORDER BY u.created_at ASC
+      WHERE v.udise_code = $1
+      ORDER BY u.created_at DESC
     `, [udiseCode]);
     return result.rows;
   },

@@ -1,10 +1,11 @@
 const User = require('../models/User');
 
 // ─── GET /api/vt/pending ──────────────────────────────────────────────────────
-// Headmaster views pending VTs for their school (matched by udise_code)
+// Headmaster views VTs for their school (matched by udise_code) with status filter
 const getPendingVts = async (req, res) => {
   try {
     const headmasterUdise = req.user.udise_code;
+    const { status } = req.query; // all, pending, accepted, rejected
 
     if (!headmasterUdise) {
       return res.status(400).json({
@@ -13,13 +14,33 @@ const getPendingVts = async (req, res) => {
       });
     }
 
-    const pendingVts = await User.findPendingVtsByUdise(headmasterUdise);
+    const allVts = await User.findVtsByUdise(headmasterUdise);
+
+    let pendingCount = 0;
+    let acceptedCount = 0;
+    let rejectedCount = 0;
+
+    allVts.forEach(vt => {
+      if (vt.vt_approval_status === 'pending') pendingCount++;
+      else if (vt.vt_approval_status === 'accepted') acceptedCount++;
+      else if (vt.vt_approval_status === 'rejected') rejectedCount++;
+    });
+
+    let filteredVts = allVts;
+    if (status && status !== 'all') {
+      filteredVts = allVts.filter(vt => vt.vt_approval_status === status);
+    }
 
     return res.status(200).json({
       status: true,
-      count: pendingVts.length,
-      message: `${pendingVts.length} pending VT registration(s) for your school.`,
-      data: pendingVts,
+      counts: {
+        total: allVts.length,
+        pending: pendingCount,
+        accepted: acceptedCount,
+        rejected: rejectedCount
+      },
+      message: `Found ${filteredVts.length} VT(s) matching criteria.`,
+      data: filteredVts,
     });
   } catch (error) {
     console.error('getPendingVts error:', error.message);
