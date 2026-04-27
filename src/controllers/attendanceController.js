@@ -462,6 +462,48 @@ const getDailyReport = async (req, res) => {
   }
 };
 
+// ─── POST /api/attendance/headmaster ──────────────────────────────────────────
+// Headmaster views attendance of VTs in their school (using POST body for filters)
+const getHeadmasterAttendance = async (req, res) => {
+  const udiseCode = req.user.udise_code;
+  const { user_id, filter_type, filter_value, limit, page } = req.body;
+
+  if (!udiseCode) {
+    return res.status(400).json({
+      status: false,
+      message: 'Your account is not linked to a school UDISE code.',
+    });
+  }
+
+  const parsedLimit = limit ? parseInt(limit) : 50;
+  const parsedPage = page ? parseInt(page) : 1;
+  const offset = (parsedPage - 1) * parsedLimit;
+
+  try {
+    const { records, totalCount } = await Attendance.findBySchool(udiseCode, {
+      user_id,
+      filter_type, // 'date', 'week', 'month', 'date_range', or omit for all
+      filter_value,
+      limit: parsedLimit,
+      offset,
+    });
+
+    return res.status(200).json({
+      status: true,
+      pagination: {
+        total: totalCount,
+        page: parsedPage,
+        limit: parsedLimit,
+        total_pages: Math.ceil(totalCount / parsedLimit),
+      },
+      data: records,
+    });
+  } catch (error) {
+    console.error('getHeadmasterAttendance error:', error.message);
+    return res.status(500).json({ status: 'error', message: error.message });
+  }
+};
+
 module.exports = {
   checkIn,
   checkOut,
@@ -469,6 +511,7 @@ module.exports = {
   getMyAttendance,
   getAllAttendance,
   getProviderAttendance,
+  getHeadmasterAttendance,
   updateAttendance,
   deleteAttendance,
   getMonthlySummary,

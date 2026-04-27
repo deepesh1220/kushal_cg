@@ -11,6 +11,7 @@ const {
   deleteAttendance,
   getMonthlySummary,
   getDailyReport,
+  getHeadmasterAttendance,
 } = require('../controllers/attendanceController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
 
@@ -30,6 +31,9 @@ router.get('/',                       authorize('attendance:view_all'),        g
 
 // ── VT Provider — view their teachers ────────────────────────────────────────
 router.get('/provider',               authorize('attendance:view_teachers'),   getProviderAttendance);
+
+// ── Headmaster — view attendance of their school's VTs ───────────────────────
+router.post('/headmaster',            authorize('attendance:view_all'),        getHeadmasterAttendance);
 
 // ── Monthly summary ───────────────────────────────────────────────────────────
 router.get('/summary/:userId',        authorize('attendance:report'),          getMonthlySummary);
