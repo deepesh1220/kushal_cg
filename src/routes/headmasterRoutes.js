@@ -7,6 +7,7 @@ const {
   getByDistrict,
   getByBlock,
   getSchoolLeaves,
+  updateSchoolTime,
 } = require('../controllers/headmasterController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
 
@@ -24,6 +25,7 @@ router.get('/leaves', authenticate, authorize('leave:view_all'), getSchoolLeaves
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 router.get('/:teacher_code',    /* authenticate, */ getHeadmaster);
 router.post('/',                /* authenticate, */ createHeadmaster);
+router.patch('/school-time',    /* authenticate, */ updateSchoolTime);
 router.patch('/:teacher_code',  /* authenticate, */ updateHeadmaster);
 router.delete('/:teacher_code', /* authenticate, */ deleteHeadmaster);
 

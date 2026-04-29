@@ -270,6 +270,14 @@ const initDB = async () => {
       );
     `);
 
+    // ─────────────────────────────────────────────────────────
+    // ALTER TABLE: mst_schools
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      ALTER TABLE IF EXISTS mst_schools ADD COLUMN IF NOT EXISTS sch_open_time TIME;
+      ALTER TABLE IF EXISTS mst_schools ADD COLUMN IF NOT EXISTS sch_close_time TIME;
+    `);
+
     await client.query('COMMIT');
     console.log('✅ All tables created/verified successfully');
 

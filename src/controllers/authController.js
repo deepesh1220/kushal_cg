@@ -345,6 +345,7 @@ const login = async (req, res) => {
             email: user.email,
             phone: user.phone,
             role: user.role_name,
+            udise_code: user.udise_code,
             profile_photo: user.profile_photo,
             permissions,
           },

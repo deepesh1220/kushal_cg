@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const Headmaster = require('../models/Headmaster');
 const Leave = require('../models/Leave');
+const { pool } = require('../config/db');
 
 // ─── GET  /api/headmaster/:teacher_code ───────────────────────────────────────
 const getHeadmaster = async (req, res, next) => {
@@ -167,6 +168,44 @@ const getSchoolLeaves = async (req, res, next) => {
   }
 };
 
+// ─── PATCH /api/headmaster/school-time ──────────────────────────────────────────
+const updateSchoolTime = async (req, res, next) => {
+  try {
+    const { udise_code, sch_open_time, sch_close_time } = req.body;
+
+    if (!udise_code || !sch_open_time || !sch_close_time) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'udise_code, sch_open_time, and sch_close_time are required',
+      });
+    }
+
+    const updateQuery = `
+      UPDATE mst_schools
+      SET sch_open_time = $1, sch_close_time = $2
+      WHERE udise_sch_code = $3
+      RETURNING *;
+    `;
+    const result = await pool.query(updateQuery, [sch_open_time, sch_close_time, udise_code]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'School not found in mst_schools' });
+    }
+
+    // Optional: Keep users table in sync for this headmaster's school
+    await pool.query(`
+      UPDATE users 
+      SET school_open_time = $1, school_close_time = $2 
+      WHERE udise_code = $3 AND role_id = (SELECT id FROM roles WHERE name = 'headmaster' LIMIT 1)
+    `, [sch_open_time, sch_close_time, udise_code]);
+
+    res.json({ status: 'success', message: 'School timings updated successfully', data: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+};
+
+
 module.exports = {
   getHeadmaster,
   createHeadmaster,
@@ -175,4 +214,5 @@ module.exports = {
   getByDistrict,
   getByBlock,
   getSchoolLeaves,
+  updateSchoolTime,
 };
