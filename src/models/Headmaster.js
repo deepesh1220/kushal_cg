@@ -292,6 +292,16 @@ const Headmaster = {
     );
     return result.rowCount > 0;
   },
-};
+
+  async findSchDetails(udise_code) {
+    const result = await pool.query(
+      `SELECT udise_sch_code,school_name,sch_open_time, sch_close_time,latitude,longitude
+       FROM mst_schools
+       WHERE udise_sch_code = $1`,
+      [udise_code]
+    );
+    return result.rows;
+  },
+}
 
 module.exports = Headmaster;

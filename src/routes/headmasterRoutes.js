@@ -7,6 +7,7 @@ const {
   getByDistrict,
   getByBlock,
   updateSchoolTime,
+  getSchoolDetails,
 } = require('../controllers/headmasterController');
 
 // Plug in your auth middleware here when ready, e.g.:
@@ -17,6 +18,7 @@ const router = Router();
 // ── District / Block lookup (defined BEFORE /:teacher_code to avoid param clash) ─
 router.get('/district/:district_id', /* authenticate, */ getByDistrict);
 router.get('/block/:block_id',       /* authenticate, */ getByBlock);
+router.post('/school',    /* authenticate, */ getSchoolDetails);
 
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 router.get('/:teacher_code',    /* authenticate, */ getHeadmaster);

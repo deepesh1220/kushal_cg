@@ -127,6 +127,14 @@ const updateSchoolTime = async (req, res, next) => {
   }
 };
 
+const getSchoolDetails = async (req, res, next) => {
+  try {
+    const list = await Headmaster.findSchDetails(req.body.udise_code);
+    res.json({ status: 'success', data: list, count: list.length });
+  } catch (err) {
+    next(err);
+  }
+};
 
 module.exports = {
   getHeadmaster,
@@ -136,4 +144,5 @@ module.exports = {
   getByDistrict,
   getByBlock,
   updateSchoolTime,
+  getSchoolDetails,
 };
