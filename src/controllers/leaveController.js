@@ -1,5 +1,8 @@
 const Leave = require('../models/Leave');
 const { pool } = require('../config/db');
+const { sendExcel, sendPDF } = require("../utils/export.utile");
+const ExcelJS = require("exceljs");
+const PDFDocument = require("pdfkit");
 
 const parseDateStr = (dateStr) => {
   if (!dateStr) return dateStr;
@@ -342,6 +345,45 @@ const getLeaveReport = async (req, res) => {
   }
 };
 
+
+
+const downloadMonthlyAttendance = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const now = new Date();
+    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const month = req.query.month || req.body.month || currentMonth;
+    const { format } = req.query;
+
+    if (!format) {
+      return res.status(400).json({
+        success: false,
+        message: "format is required",
+      });
+    }
+
+    const report = await Leave.getAttendanceReport(userId, month);
+
+    if (format === "excel") {
+      return sendExcel(report, res);
+    }
+
+    if (format === "pdf") {
+      return sendPDF(report, res);
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: "Invalid format",
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+
 module.exports = {
   applyLeave,
   getMyLeaves,
@@ -349,5 +391,6 @@ module.exports = {
   approveRejectLeave,
   updateLeave,
   deleteLeave,
-  getLeaveReport
+  getLeaveReport,
+  downloadMonthlyAttendance
 };

@@ -1,5 +1,7 @@
 const { pool } = require('../config/db');
 
+
+ dayjs = require("dayjs");
 class Leave {
   // ─── Check for overlapping leaves ───────────────────────────────────────────
   static async checkOverlap(userId, fromDate, toDate, excludeId = null) {
@@ -256,6 +258,99 @@ class Leave {
     `, [id]);
     return result.rows[0] || null;
   }
+
+
+
+
+static async getAttendanceReport(userId, month) {
+  if (!month) {
+    throw new Error("Month is required (YYYY-MM)");
+  }
+
+  const [year, monthNum] = month.split("-").map(Number);
+
+  const startDate = dayjs(`${month}-01`).startOf("month");
+  const endDate = dayjs(`${month}-01`).endOf("month");
+
+  const today = dayjs();
+
+  // 🔴 Prevent future month
+  if (startDate.isAfter(today, "month")) {
+    throw new Error("Future month not allowed");
+  }
+
+  // 🔴 If current month → limit till today
+  const isCurrentMonth =
+    today.year() === year && today.month() + 1 === monthNum;
+
+  const lastDay = isCurrentMonth ? today.date() : endDate.date();
+
+  // ─────────── Fetch attendance ───────────
+  const attendanceResult = await pool.query(
+    `
+    SELECT date
+    FROM attendance_records
+    WHERE user_id = $1
+    AND date BETWEEN $2 AND $3
+  `,
+    [userId, startDate.format("YYYY-MM-DD"), endDate.format("YYYY-MM-DD")]
+  );
+
+  // Convert to Set for fast lookup
+  const attendanceSet = new Set(
+    attendanceResult.rows.map((r) =>
+      dayjs(r.date).format("YYYY-MM-DD")
+    )
+  );
+
+  // ─────────── Fetch leaves ───────────
+  const leaveResult = await pool.query(
+    `
+    SELECT from_date, to_date
+    FROM leave_requests
+    WHERE user_id = $1
+    AND status = 'approved'
+    AND from_date <= $3
+    AND to_date >= $2
+  `,
+    [userId, startDate.format("YYYY-MM-DD"), endDate.format("YYYY-MM-DD")]
+  );
+
+  // Expand leave dates
+  const leaveSet = new Set();
+
+  leaveResult.rows.forEach((leave) => {
+    let current = dayjs(leave.from_date);
+    const end = dayjs(leave.to_date);
+
+    while (current.isBefore(end) || current.isSame(end)) {
+      leaveSet.add(current.format("YYYY-MM-DD"));
+      current = current.add(1, "day");
+    }
+  });
+
+  // ─────────── Build final attendance map ───────────
+  const attendanceMap = {};
+
+  for (let day = 1; day <= lastDay; day++) {
+    const date = dayjs(`${month}-${day}`).format("YYYY-MM-DD");
+
+    if (attendanceSet.has(date)) {
+      attendanceMap[day] = "P";
+    } else if (leaveSet.has(date)) {
+      attendanceMap[day] = "L";
+    } else {
+      attendanceMap[day] = "A";
+    }
+  }
+
+  return {
+    userId,
+    month,
+    totalDays: lastDay,
+    attendance: attendanceMap,
+  };
+}
 }
 
 module.exports = Leave;
