@@ -26,13 +26,6 @@ const register = async (req, res) => {
     });
   }
 
-  if (!req.file) {
-    return res.status(400).json({
-      status: false,
-      message: 'Profile image is required for registration.',
-    });
-  }
-
   try {
     // ── Resolve role first so we know if this is a VT registration ───────────
     let resolvedRoleId = null;
@@ -40,6 +33,7 @@ const register = async (req, res) => {
     let vtStaff = null;
     let finalName = name;
     let finalEmail = email;
+    let finalUdise = req.body.udise_code;
 
     if (role_id) {
       const role = await Role.findActiveById(role_id);
@@ -54,6 +48,13 @@ const register = async (req, res) => {
       const defaultRole = await Role.findByName(VT_ROLE_NAME);
       resolvedRoleId = defaultRole?.id || null;
       roleName = defaultRole?.name || null;
+    }
+
+    if ((roleName === VT_ROLE_NAME || roleName === 'headmaster') && !req.file) {
+      return res.status(400).json({
+        status: false,
+        message: 'Profile image is required for registration.',
+      });
     }
 
     // ── GATE: If registering as vocational_teacher verify mobile in vt_staff_details ──
@@ -103,20 +104,6 @@ const register = async (req, res) => {
         return res.status(409).json({ status: false, message: 'An account with this email already exists.' });
       }
 
-    } else if (roleName === 'headmaster') {
-      if (!name || !email) {
-        return res.status(400).json({ status: false, message: 'Name and email are required.' });
-      }
-      if (!req.body.udise_code) {
-        return res.status(400).json({ status: false, message: 'School UDISE code is required for Headmaster registration.' });
-      }
-      if (!school_open_time || !school_close_time) {
-        return res.status(400).json({ status: false, message: 'school_open_time and school_close_time are required for Headmaster registration.' });
-      }
-      const emailExists = await User.emailExists(email);
-      if (emailExists) {
-        return res.status(409).json({ status: false, message: 'An account with this email already exists.' });
-      }
     } else if (roleName === 'headmaster') {
       if (!name || !email) {
         return res.status(400).json({ status: false, message: 'Name and email are required.' });
