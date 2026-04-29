@@ -254,6 +254,22 @@ const initDB = async () => {
       );
     `);
 
+    // ─────────────────────────────────────────────────────────
+    // TABLE: mst_deo
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS mst_deo (
+         id SERIAL PRIMARY KEY,
+         district_cd INTEGER,
+         district_name VARCHAR(200),
+	       deo_name VARCHAR(255) NOT NULL,
+         mobile BIGINT,
+	       alternate_mobile BIGINT,
+         designation VARCHAR(50),
+	       email VARCHAR(200) UNIQUE default null
+      );
+    `);
+
     await client.query('COMMIT');
     console.log('✅ All tables created/verified successfully');
 

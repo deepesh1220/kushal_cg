@@ -5,6 +5,7 @@ const RefreshToken = require('../models/RefreshToken');
 const VtStaffDetail = require('../models/VtStaffDetail');
 const Attendance = require('../models/Attendance');
 const Headmaster = require('../models/Headmaster');
+const Deo = require('../models/Deo');
 const {
   generateAccessToken,
   generateRefreshToken,
@@ -210,6 +211,82 @@ const register = async (req, res) => {
 // ─── POST /api/auth/login ──────────────────────────────────────────────────────
 const login = async (req, res) => {
   const { email, phone, password, teacher_code, mobile } = req.body;
+
+  // ── DEO login via email & mobile ──────────────────────────────────────────
+  if (email && !password && (mobile || phone)) {
+    try {
+      const inputMobile = mobile || phone;
+      const deo = await Deo.findByEmailAndMobile(email, inputMobile);
+
+      if (!deo) {
+        return res.status(401).json({ status: false, message: 'Invalid DEO email or mobile number.' });
+      }
+
+      // Ensure they exist in the users table for foreign key relations
+      let user = await User.findByPhone(inputMobile);
+
+      if (!user) {
+        const defaultRole = await Role.findByName('deo');
+        const password_hash = await bcrypt.hash(String(inputMobile), 12); // dummy password
+
+        const newUser = await User.create({
+          name: deo.deo_name || 'DEO',
+          email: deo.email,
+          phone: inputMobile,
+          password_hash,
+          role_id: defaultRole ? defaultRole.id : null,
+          is_active: true
+        });
+        user = await User.findById(newUser.id);
+      }
+
+      if (user && !user.is_active) {
+        return res.status(403).json({ status: false, message: 'Your account has been deactivated. Contact administrator.' });
+      }
+
+      const permissions = await User.getEffectivePermissions(user.role_id, user.id);
+      const tokenPayload = {
+        id: user.id,
+        email: user.email,
+        role: user.role_name,
+        role_id: user.role_id,
+      };
+
+      const accessToken = generateAccessToken(tokenPayload);
+      const refreshToken = generateRefreshToken(tokenPayload);
+      const expiresAt = getRefreshTokenExpiry();
+
+      await RefreshToken.create(user.id, refreshToken, expiresAt);
+
+      return res.status(200).json({
+        status: true,
+        message: 'DEO login successful.',
+        data: {
+          user: {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
+            role: user.role_name,
+            profile_photo: user.profile_photo,
+            permissions,
+          },
+          deo_details: {
+            district_cd: deo.district_cd,
+            district_name: deo.district_name,
+            designation: deo.designation
+          },
+          tokens: {
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          },
+        },
+      });
+    } catch (error) {
+      console.error('DEO login error:', error.message);
+      return res.status(500).json({ status: 'error', message: 'Server error during DEO login.' });
+    }
+  }
 
   // ── Headmaster login via teacher_code & mobile ────────────────────────────
   if (teacher_code && (mobile || phone)) {
