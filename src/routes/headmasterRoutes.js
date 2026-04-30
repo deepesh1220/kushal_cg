@@ -6,9 +6,9 @@ const {
   deleteHeadmaster,
   getByDistrict,
   getByBlock,
+  getSchoolLeaves,
   updateSchoolTime,
   getSchoolDetails,
-  getSchoolLeaves,
 } = require('../controllers/headmasterController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
 

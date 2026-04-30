@@ -220,7 +220,7 @@ module.exports = {
   deleteHeadmaster,
   getByDistrict,
   getByBlock,
+  getSchoolLeaves,
   updateSchoolTime,
   getSchoolDetails,
-  getSchoolLeaves,
 };
