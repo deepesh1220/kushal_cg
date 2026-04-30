@@ -8,7 +8,8 @@ const {
   approveRejectLeave,
   updateLeave,
   deleteLeave,
-  getLeaveReport
+  getLeaveReport,
+  downloadMonthlyAttendance
 } = require('../controllers/leaveController');
 
 // All leave routes require authentication
@@ -36,5 +37,14 @@ router.get('/all', authorize('leave:view_all'), getAllLeaves);
 
 // Approve or reject a leave request
 router.patch('/:id/status', authorize('leave:approve'), approveRejectLeave);
+
+
+// ── Attendance Download ───────────────────────────────────────────────
+router.get(
+  '/attendance/download',
+  authorize('leave:view_own'),
+  downloadMonthlyAttendance
+);
+
 
 module.exports = router;
