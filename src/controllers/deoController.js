@@ -1,6 +1,7 @@
 const { pool } = require('../config/db');
 const User = require('../models/User');
-const Deo = require('../models/Deo');
+// const Deo = require('../models/Deo'); // model not created yet — using raw SQL instead
+
 
 // ─── GET /api/deo/schools-vts ────────────────────────────────────────────────
 const getSchoolsAndVts = async (req, res) => {
