@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const Headmaster = require('../models/Headmaster');
 const { pool } = require('../config/db');
+const Leave = require('../models/Leave');
 
 // ─── GET  /api/headmaster/:teacher_code ───────────────────────────────────────
 const getHeadmaster = async (req, res, next) => {
@@ -135,6 +136,82 @@ const getSchoolDetails = async (req, res, next) => {
     next(err);
   }
 };
+// ─── GET /api/headmaster/leaves ──────────────────────────────────────────────
+// Returns all leave requests of VTs belonging to the headmaster's school.
+// Auth: authenticate + authorize('leaves:view') (applied in route)
+//
+// Query params:
+//   status       – pending | approved | rejected  (optional)
+//   fromDate     – YYYY-MM-DD  (optional, inclusive)
+//   toDate       – YYYY-MM-DD  (optional, inclusive)
+//   teacherCode  – VT teacher code  (optional)
+//   page         – page number, default 1
+//   limit        – records per page, default 20, max 100
+const getSchoolLeaves = async (req, res, next) => {
+  try {
+    // ── 1. Guard: headmaster must be linked to a school ──────────────────────
+    const udiseCode = req.user?.udise_code;
+
+    if (!udiseCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Your account is not linked to a school UDISE code. Contact administrator.',
+      });
+    }
+
+    // ── 2. Extract & validate query params ───────────────────────────────────
+    const VALID_STATUSES = new Set(['pending', 'approved', 'rejected']);
+    const {
+      status,
+      fromDate,
+      toDate,
+      teacherCode,
+      page = '1',
+      limit = '20',
+    } = req.query;
+
+    if (status && !VALID_STATUSES.has(status.toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status "${status}". Must be one of: pending, approved, rejected.`,
+      });
+    }
+
+    // Basic date format guard (YYYY-MM-DD)
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    if (fromDate && !DATE_RE.test(fromDate)) {
+      return res.status(400).json({ success: false, message: 'fromDate must be in YYYY-MM-DD format.' });
+    }
+    if (toDate && !DATE_RE.test(toDate)) {
+      return res.status(400).json({ success: false, message: 'toDate must be in YYYY-MM-DD format.' });
+    }
+    if (fromDate && toDate && fromDate > toDate) {
+      return res.status(400).json({ success: false, message: 'fromDate cannot be after toDate.' });
+    }
+
+    // ── 3. Delegate to model ──────────────────────────────────────────────────
+    const result = await Leave.getSchoolLeaves(udiseCode, {
+      status: status?.toLowerCase() || undefined,
+      from_date: fromDate || undefined,
+      to_date: toDate || undefined,
+      teacher_code: teacherCode || undefined,
+      page,
+      limit,
+    });
+
+    // ── 4. Return structured response ─────────────────────────────────────────
+    return res.status(200).json({
+      success: true,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+      total_pages: result.total_pages,
+      data: result.data,
+    });
+  } catch (err) {
+    next(err); // Passed to global error handler in app.js
+  }
+};
 
 module.exports = {
   getHeadmaster,
@@ -145,4 +222,5 @@ module.exports = {
   getByBlock,
   updateSchoolTime,
   getSchoolDetails,
+  getSchoolLeaves,
 };
