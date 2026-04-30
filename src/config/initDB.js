@@ -254,6 +254,30 @@ const initDB = async () => {
       );
     `);
 
+    // ─────────────────────────────────────────────────────────
+    // TABLE: mst_deo
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS mst_deo (
+         id SERIAL PRIMARY KEY,
+         district_cd INTEGER,
+         district_name VARCHAR(200),
+	       deo_name VARCHAR(255) NOT NULL,
+         mobile BIGINT,
+	       alternate_mobile BIGINT,
+         designation VARCHAR(50),
+	       email VARCHAR(200) UNIQUE default null
+      );
+    `);
+
+    // ─────────────────────────────────────────────────────────
+    // ALTER TABLE: mst_schools
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      ALTER TABLE IF EXISTS mst_schools ADD COLUMN IF NOT EXISTS sch_open_time TIME;
+      ALTER TABLE IF EXISTS mst_schools ADD COLUMN IF NOT EXISTS sch_close_time TIME;
+    `);
+
     await client.query('COMMIT');
     console.log('✅ All tables created/verified successfully');
 
