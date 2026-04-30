@@ -94,22 +94,22 @@ const getByBlock = async (req, res, next) => {
 // ─── PATCH /api/headmaster/school-time ──────────────────────────────────────────
 const updateSchoolTime = async (req, res, next) => {
   try {
-    const { udise_code, sch_open_time, sch_close_time } = req.body;
+    const { udise_code, sch_open_time, sch_close_time, graceTime } = req.body;
 
-    if (!udise_code || !sch_open_time || !sch_close_time) {
+    if (!udise_code || !sch_open_time || !sch_close_time || graceTime === undefined) {
       return res.status(400).json({
         status: 'error',
-        message: 'udise_code, sch_open_time, and sch_close_time are required',
+        message: 'udise_code, sch_open_time, sch_close_time, and graceTime are required',
       });
     }
 
     const updateQuery = `
       UPDATE mst_schools
-      SET sch_open_time = $1, sch_close_time = $2
-      WHERE udise_sch_code = $3
+      SET sch_open_time = $1, sch_close_time = $2, grace_time = $3
+      WHERE udise_sch_code = $4
       RETURNING *;
     `;
-    const result = await pool.query(updateQuery, [sch_open_time, sch_close_time, udise_code]);
+    const result = await pool.query(updateQuery, [sch_open_time, sch_close_time, graceTime, udise_code]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ status: 'error', message: 'School not found in mst_schools' });
