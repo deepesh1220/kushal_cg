@@ -30,48 +30,73 @@ const getSchoolsAndVts = async (req, res) => {
       return res.status(403).json({ status: false, message: 'DEO profile not found.' });
     }
 
+    const { udise_code, vtUserId } = req.query;
+
     const district_cd = deo.district_cd;
 
     // 3. Fetch schools for this district_cd
+    let schoolsQueryArgs = [district_cd];
+    let schoolsWhereStr = "WHERE vtp = 1 AND district_cd = $1";
+
+    if (udise_code) {
+      schoolsQueryArgs.push(udise_code);
+      schoolsWhereStr += ` AND udise_sch_code = $${schoolsQueryArgs.length}`;
+    }
+
     const schoolsQuery = `
-      SELECT udise_code, school_name, block_name, district_name 
+      SELECT udise_sch_code as udise_code, school_name, block_name, district_name 
       FROM mst_schools 
-      WHERE district_cd = $1
+      ${schoolsWhereStr}
     `;
-    const schoolsResult = await pool.query(schoolsQuery, [district_cd]);
+    const schoolsResult = await pool.query(schoolsQuery, schoolsQueryArgs);
     const schools = schoolsResult.rows;
 
     if (schools.length === 0) {
       return res.status(200).json({
         status: true,
         data: [],
+        counts: { schools: 0, vts: 0, vtps: 0 },
         message: 'No schools found for this district.'
       });
     }
 
     // 4. Fetch VTs for these schools
-    // Using vt_staff_details since it's the master table for VTs
     const udiseCodes = schools.map(s => s.udise_code);
-    
+    let vtsQueryArgs = [udiseCodes];
+    let vtsWhereStr = "WHERE v.udise_code = ANY($1)";
+
+    if (vtUserId) {
+      vtsQueryArgs.push(vtUserId);
+      vtsWhereStr += ` AND u.id = $${vtsQueryArgs.length}`;
+    }
+
     const vtsQuery = `
       SELECT 
-        id, vt_name, vt_mob, vt_email, trade, vtp_name, udise_code
-      FROM vt_staff_details
-      WHERE udise_code = ANY($1)
+        v.id as vt_staff_id, u.id as user_id, v.vt_name, v.vt_mob, v.vt_email, v.trade, v.vtp_name, v.udise_code
+      FROM vt_staff_details v
+      LEFT JOIN users u ON u.vt_staff_id = v.id
+      ${vtsWhereStr}
     `;
-    const vtsResult = await pool.query(vtsQuery, [udiseCodes]);
+    const vtsResult = await pool.query(vtsQuery, vtsQueryArgs);
     const vts = vtsResult.rows;
 
     // 5. Group VTs by school
     const schoolsWithVts = schools.map(school => {
-      // Find all VTs belonging to this school
-      // Make sure to compare as strings just in case bigint is returned as string
       const schoolVts = vts.filter(vt => String(vt.udise_code) === String(school.udise_code));
       return {
         ...school,
         vts: schoolVts
       };
+    }).filter(school => {
+      // If vtUserId filter is applied, only show schools that have the matching VT
+      if (vtUserId) {
+        return school.vts.length > 0;
+      }
+      return true;
     });
+
+    // Compute unique VTPs
+    const uniqueVTPs = new Set(vts.filter(vt => vt.vtp_name).map(vt => vt.vtp_name));
 
     return res.status(200).json({
       status: true,
@@ -79,6 +104,11 @@ const getSchoolsAndVts = async (req, res) => {
       district: {
         district_cd: deo.district_cd,
         district_name: deo.district_name
+      },
+      counts: {
+        schools: schoolsWithVts.length,
+        vts: vts.length,
+        vtps: uniqueVTPs.size
       },
       data: schoolsWithVts
     });

@@ -276,6 +276,7 @@ const initDB = async () => {
     await client.query(`
       ALTER TABLE IF EXISTS mst_schools ADD COLUMN IF NOT EXISTS sch_open_time TIME;
       ALTER TABLE IF EXISTS mst_schools ADD COLUMN IF NOT EXISTS sch_close_time TIME;
+      ALTER TABLE IF EXISTS mst_schools ADD COLUMN IF NOT EXISTS grace_time INTEGER;
     `);
 
     await client.query('COMMIT');
