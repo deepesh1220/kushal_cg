@@ -170,7 +170,7 @@ const initDB = async () => {
         from_date    DATE    NOT NULL,
         to_date      DATE    NOT NULL,
         leave_type   VARCHAR(20) DEFAULT 'full-day'
-                       CHECK (leave_type IN ('full-day','first-half','second-half','od')),
+                       CHECK (leave_type IN ('full-day','first-half','second-half','od','regularization')),
         reason       TEXT,
         status       VARCHAR(20) DEFAULT 'pending'
                        CHECK (status IN ('pending','approved','rejected')),
@@ -305,7 +305,7 @@ const initDB = async () => {
     // ─────────────────────────────────────────────────────────
     await client.query(`
       ALTER TABLE leave_requests DROP CONSTRAINT IF EXISTS leave_requests_leave_type_check;
-      ALTER TABLE leave_requests ADD CONSTRAINT leave_requests_leave_type_check CHECK (leave_type IN ('full-day','first-half','second-half','od'));
+      ALTER TABLE leave_requests ADD CONSTRAINT leave_requests_leave_type_check CHECK (leave_type IN ('full-day','first-half','second-half','od','regularization'));
 
       ALTER TABLE attendance_records DROP CONSTRAINT IF EXISTS attendance_records_status_check;
       ALTER TABLE attendance_records ADD CONSTRAINT attendance_records_status_check CHECK (status IN ('present','absent','late','half_day','on_leave','od'));
