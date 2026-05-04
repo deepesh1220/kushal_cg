@@ -483,6 +483,86 @@ const approveOnDuty = async (req, res) => {
   }
 };
 
+// ─── GET /api/leaves/od/my ──────────────────────────────────────────────────
+// User views their own OD requests
+const getMyOnDutyRequests = async (req, res) => {
+  const userId = req.user.id;
+  let { status, from_date, to_date, limit, offset, page } = req.query;
+
+  try {
+    const parsedLimit = limit ? parseInt(limit, 10) : 10;
+    const parsedPage = page ? parseInt(page, 10) : 1;
+    const parsedOffset = offset ? parseInt(offset, 10) : (parsedPage - 1) * parsedLimit;
+
+    if (from_date) from_date = parseDateStr(from_date);
+    if (to_date) to_date = parseDateStr(to_date);
+
+    // Fetch OD requests specifically
+    const odData = await Leave.findByUser(userId, {
+      status,
+      leave_type: 'od',
+      from_date,
+      to_date,
+      limit: parsedLimit,
+      offset: parsedOffset,
+    });
+
+    return res.status(200).json({
+      status: true,
+      pagination: {
+        totalRecords: odData.totalRecords,
+        totalPages: Math.ceil(odData.totalRecords / parsedLimit),
+        currentPage: parsedPage,
+        limit: parsedLimit
+      },
+      data: odData.data
+    });
+  } catch (error) {
+    return res.status(500).json({ status: false, message: error.message });
+  }
+};
+
+// ─── GET /api/leaves/od/:id ──────────────────────────────────────────────────
+// Get a specific OD request by ID
+const getOnDutyById = async (req, res) => {
+  const { id } = req.params;
+  const user = req.user;
+
+  try {
+    const odRequest = await Leave.findById(id);
+
+    if (!odRequest) {
+      return res.status(404).json({ status: false, message: 'On Duty request not found.' });
+    }
+
+    if (odRequest.leave_type !== 'od') {
+      return res.status(400).json({ status: false, message: 'This is not an On Duty request.' });
+    }
+
+    // Check authorization: Admin, Headmaster of the school, or the VT who applied
+    const isOwner = odRequest.user_id === user.id;
+    const isAdmin = ['admin', 'super_admin'].includes(user.role_name);
+
+    // For headmasters, we check if the VT belongs to their school
+    let isAuthorizedHM = false;
+    if (user.role_name === 'headmaster') {
+      const authError = await _validateVtBelongsToHeadmaster(odRequest.user_id, user);
+      if (!authError) isAuthorizedHM = true;
+    }
+
+    if (!isOwner && !isAdmin && !isAuthorizedHM) {
+      return res.status(403).json({ status: false, message: 'You are not authorized to view this request.' });
+    }
+
+    return res.status(200).json({
+      status: true,
+      data: odRequest
+    });
+  } catch (error) {
+    return res.status(500).json({ status: false, message: error.message });
+  }
+};
+
 module.exports = {
   applyLeave,
   getMyLeaves,
@@ -493,5 +573,7 @@ module.exports = {
   getLeaveReport,
   downloadMonthlyAttendance,
   applyOnDuty,
-  approveOnDuty
+  approveOnDuty,
+  getMyOnDutyRequests,
+  getOnDutyById
 };
