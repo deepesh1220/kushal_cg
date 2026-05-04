@@ -9,7 +9,9 @@ const {
   updateLeave,
   deleteLeave,
   getLeaveReport,
-  downloadMonthlyAttendance
+  downloadMonthlyAttendance,
+  applyOnDuty,
+  approveOnDuty
 } = require('../controllers/leaveController');
 
 // All leave routes require authentication
@@ -38,6 +40,12 @@ router.get('/all', authorize('leave:view_all'), getAllLeaves);
 // Approve or reject a leave request
 router.patch('/:id/status', authorize('leave:approve'), approveRejectLeave);
 
+// ── On Duty (OD) routes ─────────────────────────────────────────────────────
+// Apply for On Duty
+router.post('/apply-od', authorize('leave:request'), applyOnDuty);
+
+// Approve or reject On Duty request
+router.patch('/:id/od-status', authorize('leave:approve'), approveOnDuty);
 
 // ── Attendance Download ───────────────────────────────────────────────
 router.get(

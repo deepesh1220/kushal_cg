@@ -140,7 +140,7 @@ const initDB = async () => {
         check_in_time   TIMESTAMPTZ,
         check_out_time  TIMESTAMPTZ,
         status          VARCHAR(20) DEFAULT 'present'
-                          CHECK (status IN ('present','absent','late','half_day','on_leave')),
+                          CHECK (status IN ('present','absent','late','half_day','on_leave','od')),
         latitude        NUMERIC(10, 8),
         longitude       NUMERIC(11, 8),
         checkout_latitude NUMERIC(10, 8),
@@ -170,7 +170,7 @@ const initDB = async () => {
         from_date    DATE    NOT NULL,
         to_date      DATE    NOT NULL,
         leave_type   VARCHAR(20) DEFAULT 'full-day'
-                       CHECK (leave_type IN ('full-day','first-half','second-half')),
+                       CHECK (leave_type IN ('full-day','first-half','second-half','od')),
         reason       TEXT,
         status       VARCHAR(20) DEFAULT 'pending'
                        CHECK (status IN ('pending','approved','rejected')),
@@ -298,6 +298,17 @@ const initDB = async () => {
         updated_at TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE (udise_code, report_month, report_year)
       );
+    `);
+
+    // ─────────────────────────────────────────────────────────
+    // ALTER CONSTRAINTS for OD feature
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      ALTER TABLE leave_requests DROP CONSTRAINT IF EXISTS leave_requests_leave_type_check;
+      ALTER TABLE leave_requests ADD CONSTRAINT leave_requests_leave_type_check CHECK (leave_type IN ('full-day','first-half','second-half','od'));
+
+      ALTER TABLE attendance_records DROP CONSTRAINT IF EXISTS attendance_records_status_check;
+      ALTER TABLE attendance_records ADD CONSTRAINT attendance_records_status_check CHECK (status IN ('present','absent','late','half_day','on_leave','od'));
     `);
 
     await client.query('COMMIT');
