@@ -119,6 +119,100 @@ const getSchoolsAndVts = async (req, res) => {
   }
 };
 
+// ─── GET /api/deo/dashboard-counts ───────────────────────────────────────────
+const getDeoDashboardCounts = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { month, year } = req.query;
+
+    const currentMonth = month ? parseInt(month, 10) : new Date().getMonth() + 1;
+    const currentYear = year ? parseInt(year, 10) : new Date().getFullYear();
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ status: false, message: 'User not found.' });
+    }
+
+    let deo = null;
+    if (user.email) {
+      const deoResult = await pool.query('SELECT * FROM mst_deo WHERE email = $1 LIMIT 1', [user.email]);
+      deo = deoResult.rows[0];
+    }
+    if (!deo && user.phone) {
+      const deoResult = await pool.query('SELECT * FROM mst_deo WHERE mobile = $1 LIMIT 1', [user.phone]);
+      deo = deoResult.rows[0];
+    }
+
+    if (!deo) {
+      return res.status(403).json({ status: false, message: 'DEO profile not found.' });
+    }
+
+    const district_cd = deo.district_cd;
+
+    // 1. Total Schools
+    const schoolsQuery = `SELECT COUNT(*) as count FROM mst_schools WHERE vtp = 1 AND district_cd = $1`;
+    const schoolsResult = await pool.query(schoolsQuery, [district_cd]);
+    const totalSchools = parseInt(schoolsResult.rows[0].count, 10);
+
+    // 2. Total VTs
+    const vtsQuery = `
+      SELECT COUNT(*) as count 
+      FROM vt_staff_details v
+      JOIN mst_schools s ON v.udise_code = s.udise_sch_code
+      WHERE s.vtp = 1 AND s.district_cd = $1
+    `;
+    const vtsResult = await pool.query(vtsQuery, [district_cd]);
+    const totalVts = parseInt(vtsResult.rows[0].count, 10);
+
+    // 3. Report Counts
+    const reportsQuery = `
+      SELECT r.deo_approval_status, COUNT(*) as count
+      FROM monthly_school_reports r
+      JOIN mst_schools s ON r.udise_code = s.udise_sch_code
+      WHERE s.vtp = 1 AND s.district_cd = $1 AND r.report_month = $2 AND r.report_year = $3
+      GROUP BY r.deo_approval_status
+    `;
+    const reportsResult = await pool.query(reportsQuery, [district_cd, currentMonth, currentYear]);
+
+    let approved = 0;
+    let rejected = 0;
+    let pending = 0;
+
+    reportsResult.rows.forEach(row => {
+      if (row.deo_approval_status === 'approved') approved += parseInt(row.count, 10);
+      else if (row.deo_approval_status === 'rejected') rejected += parseInt(row.count, 10);
+      else if (row.deo_approval_status === 'pending') pending += parseInt(row.count, 10);
+    });
+
+    const totalGenerated = approved + rejected + pending;
+    const notGenerated = totalSchools > totalGenerated ? totalSchools - totalGenerated : 0;
+
+    return res.status(200).json({
+      status: true,
+      message: 'Dashboard counts fetched successfully.',
+      data: {
+        total_schools: totalSchools,
+        total_vts: totalVts,
+        reports: {
+          month: currentMonth,
+          year: currentYear,
+          approved,
+          rejected,
+          pending: pending + notGenerated, // Combines explicit pending + not yet generated
+          explicit_pending: pending,
+          not_generated: notGenerated,
+          total_generated: totalGenerated
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('getDeoDashboardCounts error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error fetching DEO dashboard counts.' });
+  }
+};
+
 module.exports = {
-  getSchoolsAndVts
+  getSchoolsAndVts,
+  getDeoDashboardCounts
 };

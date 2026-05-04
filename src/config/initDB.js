@@ -279,6 +279,27 @@ const initDB = async () => {
       ALTER TABLE IF EXISTS mst_schools ADD COLUMN IF NOT EXISTS grace_time INTEGER;
     `);
 
+    // ─────────────────────────────────────────────────────────
+    // TABLE: monthly_school_reports
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS monthly_school_reports (
+        id SERIAL PRIMARY KEY,
+        udise_code BIGINT NOT NULL,
+        report_month INTEGER NOT NULL,
+        report_year INTEGER NOT NULL,
+        hm_approval_status VARCHAR(20) DEFAULT 'pending' CHECK (hm_approval_status IN ('pending', 'approved', 'rejected')),
+        vtp_approval_status VARCHAR(20) DEFAULT 'pending' CHECK (vtp_approval_status IN ('pending', 'approved', 'rejected')),
+        deo_approval_status VARCHAR(20) DEFAULT 'pending' CHECK (deo_approval_status IN ('pending', 'approved', 'rejected')),
+        hm_remarks TEXT,
+        vtp_remarks TEXT,
+        deo_remarks TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (udise_code, report_month, report_year)
+      );
+    `);
+
     await client.query('COMMIT');
     console.log('✅ All tables created/verified successfully');
 

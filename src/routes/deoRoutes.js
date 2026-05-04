@@ -10,5 +10,6 @@ router.use(authenticate);
 // Requires user to be logged in and ideally have the 'deo' role or related permission.
 // Using authorize('users:view') as a placeholder; adjust as needed.
 router.get('/schools-vts', authorize('attendance:view_all'), deoController.getSchoolsAndVts);
+router.get('/dashboard-counts', authorize('attendance:view_all'), deoController.getDeoDashboardCounts);
 
 module.exports = router;
