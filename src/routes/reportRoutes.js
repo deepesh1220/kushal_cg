@@ -3,7 +3,8 @@ const router = express.Router();
 const { authenticate, authorize } = require('../middleware/authMiddleware');
 const {
   downloadMonthlyAttendance,
-  getMonthlySummary
+  getMonthlySummary,
+  approveMonthlyReport
 } = require('../controllers/reportController');
 
 // All report routes require authentication
@@ -21,6 +22,12 @@ router.get(
   '/attendance/download',
   authorize('leave:view_own'), // Requires 'leave:view_own' or specific report permission
   downloadMonthlyAttendance
+);
+
+// ── Approve Monthly Report ────────────────────────────────────────────
+router.post(
+  '/approve',
+  approveMonthlyReport
 );
 
 module.exports = router;

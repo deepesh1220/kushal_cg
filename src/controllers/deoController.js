@@ -216,10 +216,13 @@ const getDeoDashboardCounts = async (req, res) => {
 const getSchoolReports = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { month, year, udise_code } = req.query;
+    const { month, year, udise_code, page = 1, limit = 50, status } = req.query;
 
     const currentMonth = month ? parseInt(month, 10) : new Date().getMonth() + 1;
     const currentYear = year ? parseInt(year, 10) : new Date().getFullYear();
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 50;
+    const offsetNum = (pageNum - 1) * limitNum;
 
     const user = await User.findById(userId);
     if (!user) {
@@ -250,6 +253,30 @@ const getSchoolReports = async (req, res) => {
       whereClause += ` AND s.udise_sch_code = $${queryArgs.length}`;
     }
 
+    if (status) {
+      queryArgs.push(status);
+      whereClause += ` AND COALESCE(r.deo_approval_status, 'pending') = $${queryArgs.length}`;
+    }
+
+    const countQuery = `
+      SELECT COUNT(*) 
+      FROM mst_schools s
+      LEFT JOIN monthly_school_reports r 
+        ON s.udise_sch_code = r.udise_code 
+        AND r.report_month = $2 
+        AND r.report_year = $3
+      WHERE ${whereClause}
+    `;
+
+    const countResult = await pool.query(countQuery, queryArgs);
+    const totalItems = parseInt(countResult.rows[0].count, 10);
+    const totalPages = Math.ceil(totalItems / limitNum);
+
+    queryArgs.push(limitNum);
+    const limitIndex = queryArgs.length;
+    queryArgs.push(offsetNum);
+    const offsetIndex = queryArgs.length;
+
     const query = `
       SELECT 
         s.udise_sch_code as udise_code, 
@@ -259,9 +286,9 @@ const getSchoolReports = async (req, res) => {
         r.id as report_id,
         r.report_month,
         r.report_year,
-        COALESCE(r.hm_approval_status, 'not_generated') as hm_approval_status,
-        COALESCE(r.vtp_approval_status, 'not_generated') as vtp_approval_status,
-        COALESCE(r.deo_approval_status, 'not_generated') as deo_approval_status,
+        COALESCE(r.hm_approval_status, 'pending') as hm_approval_status,
+        COALESCE(r.vtp_approval_status, 'pending') as vtp_approval_status,
+        COALESCE(r.deo_approval_status, 'pending') as deo_approval_status,
         r.hm_remarks,
         r.vtp_remarks,
         r.deo_remarks
@@ -272,6 +299,7 @@ const getSchoolReports = async (req, res) => {
         AND r.report_year = $3
       WHERE ${whereClause}
       ORDER BY s.school_name ASC
+      LIMIT $${limitIndex} OFFSET $${offsetIndex}
     `;
 
     const result = await pool.query(query, queryArgs);
@@ -281,6 +309,12 @@ const getSchoolReports = async (req, res) => {
       message: 'School reports fetched successfully.',
       month: currentMonth,
       year: currentYear,
+      pagination: {
+        totalItems,
+        totalPages,
+        currentPage: pageNum,
+        limit: limitNum
+      },
       data: result.rows
     });
 
