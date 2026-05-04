@@ -332,17 +332,22 @@ static async getAttendanceReport(userId, month) {
   // ─────────── Build final attendance map ───────────
   const attendanceMap = {};
 
-  for (let day = 1; day <= lastDay; day++) {
-    const date = dayjs(`${month}-${day}`).format("YYYY-MM-DD");
+for (let day = 1; day <= lastDay; day++) {
+  const date = dayjs(`${month}-${day}`).format("YYYY-MM-DD");
+  const dayOfWeek = dayjs(date).day(); // 0 = Sunday, 6 = Saturday
 
-    if (attendanceSet.has(date)) {
-      attendanceMap[day] = "P";
-    } else if (leaveSet.has(date)) {
-      attendanceMap[day] = "L";
-    } else {
-      attendanceMap[day] = "A";
-    }
+  if (dayOfWeek === 6) {
+    attendanceMap[day] = "SA";
+  } else if (dayOfWeek === 0) {
+    attendanceMap[day] = "SU";
+  } else if (attendanceSet.has(date)) {
+    attendanceMap[day] = "P";
+  } else if (leaveSet.has(date)) {
+    attendanceMap[day] = "L";
+  } else {
+    attendanceMap[day] = "A";
   }
+}
 
   return {
     userId,
