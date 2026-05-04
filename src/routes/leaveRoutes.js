@@ -11,7 +11,9 @@ const {
   getLeaveReport,
   downloadMonthlyAttendance,
   applyOnDuty,
-  approveOnDuty
+  approveOnDuty,
+  getMyOnDutyRequests,
+  getOnDutyById
 } = require('../controllers/leaveController');
 
 // All leave routes require authentication
@@ -46,6 +48,12 @@ router.post('/apply-od', authorize('leave:request'), applyOnDuty);
 
 // Approve or reject On Duty request
 router.patch('/:id/od-status', authorize('leave:approve'), approveOnDuty);
+
+// Get my own OD requests
+router.get('/od/my', authorize('leave:view_own'), getMyOnDutyRequests);
+
+// Get specific OD request by ID
+router.get('/od/:id', authorize('leave:view_own'), getOnDutyById);
 
 // ── Attendance Download ───────────────────────────────────────────────
 router.get(
