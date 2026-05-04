@@ -11,5 +11,6 @@ router.use(authenticate);
 // Using authorize('users:view') as a placeholder; adjust as needed.
 router.get('/schools-vts', authorize('attendance:view_all'), deoController.getSchoolsAndVts);
 router.get('/dashboard-counts', authorize('attendance:view_all'), deoController.getDeoDashboardCounts);
+router.get('/school-reports', authorize('attendance:view_all'), deoController.getSchoolReports);
 
 module.exports = router;
