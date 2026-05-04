@@ -212,7 +212,86 @@ const getDeoDashboardCounts = async (req, res) => {
   }
 };
 
+// ─── GET /api/deo/school-reports ─────────────────────────────────────────────
+const getSchoolReports = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { month, year, udise_code } = req.query;
+
+    const currentMonth = month ? parseInt(month, 10) : new Date().getMonth() + 1;
+    const currentYear = year ? parseInt(year, 10) : new Date().getFullYear();
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ status: false, message: 'User not found.' });
+    }
+
+    let deo = null;
+    if (user.email) {
+      const deoResult = await pool.query('SELECT * FROM mst_deo WHERE email = $1 LIMIT 1', [user.email]);
+      deo = deoResult.rows[0];
+    }
+    if (!deo && user.phone) {
+      const deoResult = await pool.query('SELECT * FROM mst_deo WHERE mobile = $1 LIMIT 1', [user.phone]);
+      deo = deoResult.rows[0];
+    }
+
+    if (!deo) {
+      return res.status(403).json({ status: false, message: 'DEO profile not found.' });
+    }
+
+    const district_cd = deo.district_cd;
+
+    let queryArgs = [district_cd, currentMonth, currentYear];
+    let whereClause = "s.vtp = 1 AND s.district_cd = $1";
+
+    if (udise_code) {
+      queryArgs.push(udise_code);
+      whereClause += ` AND s.udise_sch_code = $${queryArgs.length}`;
+    }
+
+    const query = `
+      SELECT 
+        s.udise_sch_code as udise_code, 
+        s.school_name, 
+        s.block_name, 
+        s.district_name,
+        r.id as report_id,
+        r.report_month,
+        r.report_year,
+        COALESCE(r.hm_approval_status, 'not_generated') as hm_approval_status,
+        COALESCE(r.vtp_approval_status, 'not_generated') as vtp_approval_status,
+        COALESCE(r.deo_approval_status, 'not_generated') as deo_approval_status,
+        r.hm_remarks,
+        r.vtp_remarks,
+        r.deo_remarks
+      FROM mst_schools s
+      LEFT JOIN monthly_school_reports r 
+        ON s.udise_sch_code = r.udise_code 
+        AND r.report_month = $2 
+        AND r.report_year = $3
+      WHERE ${whereClause}
+      ORDER BY s.school_name ASC
+    `;
+
+    const result = await pool.query(query, queryArgs);
+
+    return res.status(200).json({
+      status: true,
+      message: 'School reports fetched successfully.',
+      month: currentMonth,
+      year: currentYear,
+      data: result.rows
+    });
+
+  } catch (error) {
+    console.error('getSchoolReports error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error fetching school reports.' });
+  }
+};
+
 module.exports = {
   getSchoolsAndVts,
-  getDeoDashboardCounts
+  getDeoDashboardCounts,
+  getSchoolReports
 };
