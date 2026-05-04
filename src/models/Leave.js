@@ -98,6 +98,7 @@ class Leave {
         COUNT(*) FILTER (WHERE leave_type = 'full-day') AS full_day,
         COUNT(*) FILTER (WHERE leave_type = 'first-half') AS first_half,
         COUNT(*) FILTER (WHERE leave_type = 'second-half') AS second_half,
+        COUNT(*) FILTER (WHERE leave_type = 'od') AS od,
         COUNT(*) FILTER (WHERE status = 'pending') AS pending,
         COUNT(*) FILTER (WHERE status = 'approved') AS accepted,
         COUNT(*) FILTER (WHERE status = 'rejected') AS rejected
@@ -111,6 +112,7 @@ class Leave {
       full_day: parseInt(row.full_day || 0, 10),
       first_half: parseInt(row.first_half || 0, 10),
       second_half: parseInt(row.second_half || 0, 10),
+      od: parseInt(row.od || 0, 10),
       pending: parseInt(row.pending || 0, 10),
       accepted: parseInt(row.accepted || 0, 10),
       rejected: parseInt(row.rejected || 0, 10)
@@ -170,6 +172,7 @@ class Leave {
         COUNT(*) FILTER (WHERE leave_type = 'full-day') AS full_day,
         COUNT(*) FILTER (WHERE leave_type = 'first-half') AS first_half,
         COUNT(*) FILTER (WHERE leave_type = 'second-half') AS second_half,
+        COUNT(*) FILTER (WHERE leave_type = 'od') AS od,
         COUNT(*) FILTER (WHERE status = 'pending') AS pending,
         COUNT(*) FILTER (WHERE status = 'approved') AS accepted,
         COUNT(*) FILTER (WHERE status = 'rejected') AS rejected
@@ -217,6 +220,101 @@ class Leave {
     const result = await pool.query(query, params);
     return result.rows;
   }
+
+  // ─── Get all leave requests for a headmaster's school ───────────────────────
+  // Used by: GET /api/headmaster/leaves
+  // Scoped to udise_code so headmaster only sees their school's VTs.
+  //
+  // INDEX SUGGESTIONS (add to DB schema for production performance):
+  //   CREATE INDEX idx_leave_requests_user_id     ON leave_requests(user_id);
+  //   CREATE INDEX idx_leave_requests_status       ON leave_requests(status);
+  //   CREATE INDEX idx_leave_requests_from_date    ON leave_requests(from_date);
+  //   CREATE INDEX idx_vt_staff_details_udise_code ON vt_staff_details(udise_code);
+  //   CREATE INDEX idx_users_vt_staff_id           ON users(vt_staff_id);
+  static async getSchoolLeaves(udiseCode, {
+    status,
+    from_date,
+    to_date,
+    teacher_code,
+    page = 1,
+    limit = 20,
+  } = {}) {
+    // Clamp pagination values
+    const parsedLimit  = Math.min(Math.max(parseInt(limit,  10) || 20, 1), 100);
+    const parsedPage   = Math.max(parseInt(page, 10) || 1, 1);
+    const offset       = (parsedPage - 1) * parsedLimit;
+
+    // ── Build dynamic filter clauses (school-scoped) ─────────────────────────
+    const filterParams  = [udiseCode]; // $1 always = udise_code
+    let   filterClauses = '';
+
+    if (status) {
+      filterParams.push(status.toLowerCase());
+      filterClauses += ` AND l.status = $${filterParams.length}`;
+    }
+    if (from_date) {
+      filterParams.push(from_date);
+      filterClauses += ` AND l.from_date >= $${filterParams.length}`;
+    }
+    if (to_date) {
+      filterParams.push(to_date);
+      filterClauses += ` AND l.to_date <= $${filterParams.length}`;
+    }
+    if (teacher_code) {
+      // teacher_code for VTs is their user ID (vt_staff_details has no teacher_code column)
+      filterParams.push(teacher_code);
+      filterClauses += ` AND u.id = $${filterParams.length}`;
+    }
+
+
+    const baseWhere = `
+      FROM leave_requests l
+      JOIN  users            u ON u.id  = l.user_id
+      JOIN  vt_staff_details v ON v.id  = u.vt_staff_id
+      LEFT JOIN users        r ON r.id  = l.reviewed_by
+      WHERE v.udise_code = $1
+      ${filterClauses}
+    `;
+
+    // ── COUNT query (pagination metadata) ───────────────────────────────────
+    const countResult = await pool.query(
+      `SELECT COUNT(*) AS total ${baseWhere}`,
+      filterParams
+    );
+    const total = parseInt(countResult.rows[0].total, 10);
+
+    // ── Data query ───────────────────────────────────────────────────────────
+    const dataParams = [...filterParams, parsedLimit, offset];
+    const dataResult = await pool.query(
+      `SELECT
+         l.id           AS leave_id,
+         u.id           AS vt_user_id,
+         u.name         AS teacher_name,
+         u.phone        AS vt_phone,
+         v.vt_aadhar    AS vt_aadhar,
+         l.leave_type,
+         l.from_date,
+         l.to_date,
+         l.status,
+         l.reason,
+         l.created_at   AS applied_at,
+         r.name         AS reviewed_by_name,
+         l.reviewed_at
+       ${baseWhere}
+       ORDER BY l.created_at DESC
+       LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+      dataParams
+    );
+
+    return {
+      total,
+      page: parsedPage,
+      limit: parsedLimit,
+      total_pages: Math.ceil(total / parsedLimit),
+      data: dataResult.rows,
+    };
+  }
+
 
   // ─── Update leave request (before approval) ─────────────────────────────────
   static async update(id, { from_date, to_date, reason, leave_type }) {

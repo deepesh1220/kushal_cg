@@ -5,6 +5,7 @@ const RefreshToken = require('../models/RefreshToken');
 const VtStaffDetail = require('../models/VtStaffDetail');
 const Attendance = require('../models/Attendance');
 const Headmaster = require('../models/Headmaster');
+const Deo = require('../models/Deo');
 const {
   generateAccessToken,
   generateRefreshToken,
@@ -26,13 +27,6 @@ const register = async (req, res) => {
     });
   }
 
-  if (!req.file) {
-    return res.status(400).json({
-      status: false,
-      message: 'Profile image is required for registration.',
-    });
-  }
-
   try {
     // ── Resolve role first so we know if this is a VT registration ───────────
     let resolvedRoleId = null;
@@ -40,6 +34,7 @@ const register = async (req, res) => {
     let vtStaff = null;
     let finalName = name;
     let finalEmail = email;
+    let finalUdise = req.body.udise_code;
 
     if (role_id) {
       const role = await Role.findActiveById(role_id);
@@ -54,6 +49,13 @@ const register = async (req, res) => {
       const defaultRole = await Role.findByName(VT_ROLE_NAME);
       resolvedRoleId = defaultRole?.id || null;
       roleName = defaultRole?.name || null;
+    }
+
+    if ((roleName === VT_ROLE_NAME || roleName === 'headmaster') && !req.file) {
+      return res.status(400).json({
+        status: false,
+        message: 'Profile image is required for registration.',
+      });
     }
 
     // ── GATE: If registering as vocational_teacher verify mobile in vt_staff_details ──
@@ -103,20 +105,6 @@ const register = async (req, res) => {
         return res.status(409).json({ status: false, message: 'An account with this email already exists.' });
       }
 
-    } else if (roleName === 'headmaster') {
-      if (!name || !email) {
-        return res.status(400).json({ status: false, message: 'Name and email are required.' });
-      }
-      if (!req.body.udise_code) {
-        return res.status(400).json({ status: false, message: 'School UDISE code is required for Headmaster registration.' });
-      }
-      if (!school_open_time || !school_close_time) {
-        return res.status(400).json({ status: false, message: 'school_open_time and school_close_time are required for Headmaster registration.' });
-      }
-      const emailExists = await User.emailExists(email);
-      if (emailExists) {
-        return res.status(409).json({ status: false, message: 'An account with this email already exists.' });
-      }
     } else if (roleName === 'headmaster') {
       if (!name || !email) {
         return res.status(400).json({ status: false, message: 'Name and email are required.' });
@@ -224,6 +212,82 @@ const register = async (req, res) => {
 const login = async (req, res) => {
   const { email, phone, password, teacher_code, mobile } = req.body;
 
+  // ── DEO login via email & mobile ──────────────────────────────────────────
+  if (email && !password && (mobile || phone)) {
+    try {
+      const inputMobile = mobile || phone;
+      const deo = await Deo.findByEmailAndMobile(email, inputMobile);
+
+      if (!deo) {
+        return res.status(401).json({ status: false, message: 'Invalid DEO email or mobile number.' });
+      }
+
+      // Ensure they exist in the users table for foreign key relations
+      let user = await User.findByPhone(inputMobile);
+
+      if (!user) {
+        const defaultRole = await Role.findByName('deo');
+        const password_hash = await bcrypt.hash(String(inputMobile), 12); // dummy password
+
+        const newUser = await User.create({
+          name: deo.deo_name || 'DEO',
+          email: deo.email,
+          phone: inputMobile,
+          password_hash,
+          role_id: defaultRole ? defaultRole.id : null,
+          is_active: true
+        });
+        user = await User.findById(newUser.id);
+      }
+
+      if (user && !user.is_active) {
+        return res.status(403).json({ status: false, message: 'Your account has been deactivated. Contact administrator.' });
+      }
+
+      const permissions = await User.getEffectivePermissions(user.role_id, user.id);
+      const tokenPayload = {
+        id: user.id,
+        email: user.email,
+        role: user.role_name,
+        role_id: user.role_id,
+      };
+
+      const accessToken = generateAccessToken(tokenPayload);
+      const refreshToken = generateRefreshToken(tokenPayload);
+      const expiresAt = getRefreshTokenExpiry();
+
+      await RefreshToken.create(user.id, refreshToken, expiresAt);
+
+      return res.status(200).json({
+        status: true,
+        message: 'DEO login successful.',
+        data: {
+          user: {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
+            role: user.role_name,
+            profile_photo: user.profile_photo,
+            permissions,
+          },
+          deo_details: {
+            district_cd: deo.district_cd,
+            district_name: deo.district_name,
+            designation: deo.designation
+          },
+          tokens: {
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          },
+        },
+      });
+    } catch (error) {
+      console.error('DEO login error:', error.message);
+      return res.status(500).json({ status: 'error', message: 'Server error during DEO login.' });
+    }
+  }
+
   // ── Headmaster login via teacher_code & mobile ────────────────────────────
   if (teacher_code && (mobile || phone)) {
     try {
@@ -281,6 +345,7 @@ const login = async (req, res) => {
             email: user.email,
             phone: user.phone,
             role: user.role_name,
+            udise_code: user.udise_code,
             profile_photo: user.profile_photo,
             permissions,
           },

@@ -140,7 +140,7 @@ const initDB = async () => {
         check_in_time   TIMESTAMPTZ,
         check_out_time  TIMESTAMPTZ,
         status          VARCHAR(20) DEFAULT 'present'
-                          CHECK (status IN ('present','absent','late','half_day','on_leave')),
+                          CHECK (status IN ('present','absent','late','half_day','on_leave','od')),
         latitude        NUMERIC(10, 8),
         longitude       NUMERIC(11, 8),
         checkout_latitude NUMERIC(10, 8),
@@ -170,7 +170,7 @@ const initDB = async () => {
         from_date    DATE    NOT NULL,
         to_date      DATE    NOT NULL,
         leave_type   VARCHAR(20) DEFAULT 'full-day'
-                       CHECK (leave_type IN ('full-day','first-half','second-half')),
+                       CHECK (leave_type IN ('full-day','first-half','second-half','od')),
         reason       TEXT,
         status       VARCHAR(20) DEFAULT 'pending'
                        CHECK (status IN ('pending','approved','rejected')),
@@ -252,6 +252,63 @@ const initDB = async () => {
         CONSTRAINT headmasters_pkey         PRIMARY KEY (teacher_code),
         CONSTRAINT headmasters_email_unique UNIQUE (email)
       );
+    `);
+
+    // ─────────────────────────────────────────────────────────
+    // TABLE: mst_deo
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS mst_deo (
+         id SERIAL PRIMARY KEY,
+         district_cd INTEGER,
+         district_name VARCHAR(200),
+	       deo_name VARCHAR(255) NOT NULL,
+         mobile BIGINT,
+	       alternate_mobile BIGINT,
+         designation VARCHAR(50),
+	       email VARCHAR(200) UNIQUE default null
+      );
+    `);
+
+    // ─────────────────────────────────────────────────────────
+    // ALTER TABLE: mst_schools
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      ALTER TABLE IF EXISTS mst_schools ADD COLUMN IF NOT EXISTS sch_open_time TIME;
+      ALTER TABLE IF EXISTS mst_schools ADD COLUMN IF NOT EXISTS sch_close_time TIME;
+      ALTER TABLE IF EXISTS mst_schools ADD COLUMN IF NOT EXISTS grace_time INTEGER;
+    `);
+
+    // ─────────────────────────────────────────────────────────
+    // TABLE: monthly_school_reports
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS monthly_school_reports (
+        id SERIAL PRIMARY KEY,
+        udise_code BIGINT NOT NULL,
+        report_month INTEGER NOT NULL,
+        report_year INTEGER NOT NULL,
+        hm_approval_status VARCHAR(20) DEFAULT 'pending' CHECK (hm_approval_status IN ('pending', 'approved', 'rejected')),
+        vtp_approval_status VARCHAR(20) DEFAULT 'pending' CHECK (vtp_approval_status IN ('pending', 'approved', 'rejected')),
+        deo_approval_status VARCHAR(20) DEFAULT 'pending' CHECK (deo_approval_status IN ('pending', 'approved', 'rejected')),
+        hm_remarks TEXT,
+        vtp_remarks TEXT,
+        deo_remarks TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (udise_code, report_month, report_year)
+      );
+    `);
+
+    // ─────────────────────────────────────────────────────────
+    // ALTER CONSTRAINTS for OD feature
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      ALTER TABLE leave_requests DROP CONSTRAINT IF EXISTS leave_requests_leave_type_check;
+      ALTER TABLE leave_requests ADD CONSTRAINT leave_requests_leave_type_check CHECK (leave_type IN ('full-day','first-half','second-half','od'));
+
+      ALTER TABLE attendance_records DROP CONSTRAINT IF EXISTS attendance_records_status_check;
+      ALTER TABLE attendance_records ADD CONSTRAINT attendance_records_status_check CHECK (status IN ('present','absent','late','half_day','on_leave','od'));
     `);
 
     await client.query('COMMIT');
