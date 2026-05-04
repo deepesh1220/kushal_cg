@@ -99,6 +99,7 @@ class Leave {
         COUNT(*) FILTER (WHERE leave_type = 'first-half') AS first_half,
         COUNT(*) FILTER (WHERE leave_type = 'second-half') AS second_half,
         COUNT(*) FILTER (WHERE leave_type = 'od') AS od,
+        COUNT(*) FILTER (WHERE leave_type = 'regularization') AS regularization,
         COUNT(*) FILTER (WHERE status = 'pending') AS pending,
         COUNT(*) FILTER (WHERE status = 'approved') AS accepted,
         COUNT(*) FILTER (WHERE status = 'rejected') AS rejected
@@ -113,6 +114,7 @@ class Leave {
       first_half: parseInt(row.first_half || 0, 10),
       second_half: parseInt(row.second_half || 0, 10),
       od: parseInt(row.od || 0, 10),
+      regularization: parseInt(row.regularization || 0, 10),
       pending: parseInt(row.pending || 0, 10),
       accepted: parseInt(row.accepted || 0, 10),
       rejected: parseInt(row.rejected || 0, 10)
@@ -173,6 +175,7 @@ class Leave {
         COUNT(*) FILTER (WHERE leave_type = 'first-half') AS first_half,
         COUNT(*) FILTER (WHERE leave_type = 'second-half') AS second_half,
         COUNT(*) FILTER (WHERE leave_type = 'od') AS od,
+        COUNT(*) FILTER (WHERE leave_type = 'regularization') AS regularization,
         COUNT(*) FILTER (WHERE status = 'pending') AS pending,
         COUNT(*) FILTER (WHERE status = 'approved') AS accepted,
         COUNT(*) FILTER (WHERE status = 'rejected') AS rejected

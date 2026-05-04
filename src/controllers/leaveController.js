@@ -563,6 +563,145 @@ const getOnDutyById = async (req, res) => {
   }
 };
 
+// ─── POST /api/leaves/apply-regularization ───────────────────────────────────
+const applyRegularization = async (req, res) => {
+  const userId = req.user.id;
+  let { date, reason } = req.body;
+
+  if (!date || !reason) {
+    return res.status(400).json({ status: false, message: 'date and reason are required.' });
+  }
+
+  date = parseDateStr(date);
+  const parsedDate = new Date(date);
+
+  if (isNaN(parsedDate.getTime())) {
+    return res.status(400).json({ status: false, message: 'Invalid date format. Please use YYYY-MM-DD or DD-MM-YYYY.' });
+  }
+  
+  if (parsedDate > new Date()) {
+    return res.status(400).json({ status: false, message: 'Cannot request regularization for a future date.' });
+  }
+
+  try {
+    const isOverlap = await Leave.checkOverlap(userId, parsedDate, parsedDate);
+    if (isOverlap) {
+      return res.status(400).json({ status: false, message: 'You already have a pending or approved request for this date.' });
+    }
+
+    const leave = await Leave.create({ 
+      user_id: userId, 
+      from_date: date, 
+      to_date: date, 
+      reason, 
+      leave_type: 'regularization' 
+    });
+    
+    return res.status(201).json({ status: true, message: 'Attendance regularization request submitted successfully.', data: leave });
+  } catch (error) {
+    console.error('Apply Regularization error:', error.message);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+};
+
+// ─── PATCH /api/leaves/:id/regularize-status ─────────────────────────────────
+const approveRegularization = async (req, res) => {
+  const reviewer = req.user;
+  const leaveId = req.body.id || req.params.id || req.body.leave_id;
+  const status = req.body.status || req.params.status || req.query.status;
+
+  if (!['approved', 'rejected'].includes(status)) {
+    return res.status(400).json({ status: false, message: 'Status must be either approved or rejected.' });
+  }
+
+  try {
+    const leave = await Leave.findById(leaveId);
+    if (!leave) {
+      return res.status(404).json({ status: false, message: 'Regularization request not found.' });
+    }
+
+    if (leave.status !== 'pending') {
+      return res.status(400).json({ status: false, message: `Request is already ${leave.status}` });
+    }
+
+    if (leave.leave_type !== 'regularization') {
+      return res.status(400).json({ status: false, message: 'This is not a regularization request.' });
+    }
+
+    const authError = await _validateVtBelongsToHeadmaster(leave.user_id, reviewer);
+    if (authError) {
+      return res.status(authError.status).json(authError.body);
+    }
+
+    const updated = await Leave.updateStatus(leaveId, { status, reviewerId: reviewer.id });
+
+    if (status === 'approved') {
+      const d = new Date(leave.from_date);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const dateStr = `${year}-${month}-${day}`;
+      
+      const checkInTime = `${dateStr} 10:00:00`;
+      const checkOutTime = `${dateStr} 17:00:00`;
+      
+      await pool.query(`
+        INSERT INTO attendance_records (user_id, date, status, check_in_time, check_out_time, remarks, marked_by)
+        VALUES ($1, $2, 'present', $4, $5, 'Attendance Regularized by Headmaster', $3)
+        ON CONFLICT (user_id, date) 
+        DO UPDATE SET 
+          status = 'present', 
+          check_in_time = COALESCE(attendance_records.check_in_time, $4),
+          check_out_time = COALESCE(attendance_records.check_out_time, $5),
+          remarks = 'Attendance Regularized by Headmaster',
+          updated_at = NOW()
+      `, [leave.user_id, dateStr, reviewer.id, checkInTime, checkOutTime]);
+    }
+
+    return res.status(200).json({ status: true, message: `Regularization request successfully ${status}.`, data: updated });
+  } catch (error) {
+    console.error('Approve/Reject Regularization error:', error.message);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+};
+
+// ─── GET /api/leaves/regularization/my ──────────────────────────────────────
+const getMyRegularizationRequests = async (req, res) => {
+  const userId = req.user.id;
+  let { status, from_date, to_date, limit, offset, page } = req.query;
+
+  try {
+    const parsedLimit = limit ? parseInt(limit, 10) : 10;
+    const parsedPage = page ? parseInt(page, 10) : 1;
+    const parsedOffset = offset ? parseInt(offset, 10) : (parsedPage - 1) * parsedLimit;
+
+    if (from_date) from_date = parseDateStr(from_date);
+    if (to_date) to_date = parseDateStr(to_date);
+
+    const regData = await Leave.findByUser(userId, {
+      status, 
+      leave_type: 'regularization', 
+      from_date, 
+      to_date,
+      limit: parsedLimit,
+      offset: parsedOffset,
+    });
+
+    return res.status(200).json({
+      status: true,
+      pagination: {
+        totalRecords: regData.totalRecords,
+        totalPages: Math.ceil(regData.totalRecords / parsedLimit),
+        currentPage: parsedPage,
+        limit: parsedLimit
+      },
+      data: regData.data
+    });
+  } catch (error) {
+    return res.status(500).json({ status: false, message: error.message });
+  }
+};
+
 module.exports = {
   applyLeave,
   getMyLeaves,
@@ -575,5 +714,8 @@ module.exports = {
   applyOnDuty,
   approveOnDuty,
   getMyOnDutyRequests,
-  getOnDutyById
+  getOnDutyById,
+  applyRegularization,
+  approveRegularization,
+  getMyRegularizationRequests
 };
