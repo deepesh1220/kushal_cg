@@ -12,6 +12,7 @@ const {
   verifyRefreshToken,
   getRefreshTokenExpiry,
 } = require('../utils/jwtUtils');
+const { toIST } = require('../utils/timeUtils');
 
 const VT_ROLE_NAME = 'vocational_teacher';
 const VTP_ROLE_NAME = 'vocational_teacher_provider';
@@ -541,8 +542,8 @@ const getMe = async (req, res) => {
 
     if (attendanceRecord) {
       attendanceData = {
-        check_in: attendanceRecord.check_in_time,
-        check_out: attendanceRecord.check_out_time,
+        check_in: toIST(attendanceRecord.check_in_time),
+        check_out: toIST(attendanceRecord.check_out_time),
         status: attendanceRecord.status
       };
     }
