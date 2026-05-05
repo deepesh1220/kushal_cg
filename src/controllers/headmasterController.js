@@ -213,6 +213,44 @@ const getSchoolLeaves = async (req, res, next) => {
   }
 };
 
+// ─── PATCH /api/headmaster/update-coordinates ─────────────────────────────────
+const updateSchoolLatLong = async (req, res, next) => {
+  try {
+    const { udise_code, latitude, longitude } = req.body;
+
+    if (!udise_code || latitude === undefined || longitude === undefined) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'udise_code, latitude, and longitude are required',
+      });
+    }
+
+    const updateQuery = `
+      UPDATE mst_schools
+      SET latitude = $1, longitude = $2
+      WHERE udise_sch_code = $3
+      RETURNING *;
+    `;
+    const result = await pool.query(updateQuery, [latitude, longitude, udise_code]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'School not found in mst_schools' });
+    }
+
+    res.json({
+      status: 'success',
+      message: 'School coordinates updated successfully',
+      data: {
+        udise_code: result.rows[0].udise_sch_code,
+        latitude: result.rows[0].latitude,
+        longitude: result.rows[0].longitude,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getHeadmaster,
   createHeadmaster,
@@ -223,4 +261,5 @@ module.exports = {
   getSchoolLeaves,
   updateSchoolTime,
   getSchoolDetails,
+  updateSchoolLatLong,
 };
