@@ -1,7 +1,7 @@
 const { pool } = require('../config/db');
+const LeaveBalance = require('./LeaveBalance');
 
-
- dayjs = require("dayjs");
+const dayjs = require("dayjs");
 class Leave {
   // ─── Check for overlapping leaves ───────────────────────────────────────────
   static async checkOverlap(userId, fromDate, toDate, excludeId = null) {
@@ -167,7 +167,7 @@ class Leave {
     const recordsResult = await pool.query(recordsQuery, params);
 
     // overall totals for the same filter
-    const totalParams = params.slice(0, params.length - 2); 
+    const totalParams = params.slice(0, params.length - 2);
     const totalsQuery = `
       SELECT
         COUNT(*) AS total_leaves,
@@ -243,13 +243,13 @@ class Leave {
     limit = 20,
   } = {}) {
     // Clamp pagination values
-    const parsedLimit  = Math.min(Math.max(parseInt(limit,  10) || 20, 1), 100);
-    const parsedPage   = Math.max(parseInt(page, 10) || 1, 1);
-    const offset       = (parsedPage - 1) * parsedLimit;
+    const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const parsedPage = Math.max(parseInt(page, 10) || 1, 1);
+    const offset = (parsedPage - 1) * parsedLimit;
 
     // ── Build dynamic filter clauses (school-scoped) ─────────────────────────
-    const filterParams  = [udiseCode]; // $1 always = udise_code
-    let   filterClauses = '';
+    const filterParams = [udiseCode]; // $1 always = udise_code
+    let filterClauses = '';
 
     if (status) {
       filterParams.push(status.toLowerCase());
@@ -363,100 +363,234 @@ class Leave {
 
 
 
-static async getAttendanceReport(userId, month) {
-  if (!month) {
-    throw new Error("Month is required (YYYY-MM)");
-  }
-
-  const [year, monthNum] = month.split("-").map(Number);
-
-  const startDate = dayjs(`${month}-01`).startOf("month");
-  const endDate = dayjs(`${month}-01`).endOf("month");
-
-  const today = dayjs();
-
-  // 🔴 Prevent future month
-  if (startDate.isAfter(today, "month")) {
-    throw new Error("Future month not allowed");
-  }
-
-  // 🔴 If current month → limit till today
-  const isCurrentMonth =
-    today.year() === year && today.month() + 1 === monthNum;
-
-  const lastDay = isCurrentMonth ? today.date() : endDate.date();
-
-  // ─────────── Fetch attendance ───────────
-  const attendanceResult = await pool.query(
-    `
-    SELECT date
-    FROM attendance_records
-    WHERE user_id = $1
-    AND date BETWEEN $2 AND $3
-  `,
-    [userId, startDate.format("YYYY-MM-DD"), endDate.format("YYYY-MM-DD")]
-  );
-
-  // Convert to Set for fast lookup
-  const attendanceSet = new Set(
-    attendanceResult.rows.map((r) =>
-      dayjs(r.date).format("YYYY-MM-DD")
-    )
-  );
-
-  // ─────────── Fetch leaves ───────────
-  const leaveResult = await pool.query(
-    `
-    SELECT from_date, to_date
-    FROM leave_requests
-    WHERE user_id = $1
-    AND status = 'approved'
-    AND from_date <= $3
-    AND to_date >= $2
-  `,
-    [userId, startDate.format("YYYY-MM-DD"), endDate.format("YYYY-MM-DD")]
-  );
-
-  // Expand leave dates
-  const leaveSet = new Set();
-
-  leaveResult.rows.forEach((leave) => {
-    let current = dayjs(leave.from_date);
-    const end = dayjs(leave.to_date);
-
-    while (current.isBefore(end) || current.isSame(end)) {
-      leaveSet.add(current.format("YYYY-MM-DD"));
-      current = current.add(1, "day");
+  static async getAttendanceReport(userId, month) {
+    if (!month) {
+      throw new Error("Month is required (YYYY-MM)");
     }
-  });
 
-  // ─────────── Build final attendance map ───────────
-  const attendanceMap = {};
+    const [year, monthNum] = month.split("-").map(Number);
 
-for (let day = 1; day <= lastDay; day++) {
-  const date = dayjs(`${month}-${day}`).format("YYYY-MM-DD");
-  const dayOfWeek = dayjs(date).day(); // 0 = Sunday, 6 = Saturday
+    const startDate = dayjs(`${month}-01`).startOf("month");
+    const endDate = dayjs(`${month}-01`).endOf("month");
 
-  if (dayOfWeek === 6) {
-    attendanceMap[day] = "SA";
-  } else if (dayOfWeek === 0) {
-    attendanceMap[day] = "SU";
-  } else if (attendanceSet.has(date)) {
-    attendanceMap[day] = "P";
-  } else if (leaveSet.has(date)) {
-    attendanceMap[day] = "L";
-  } else {
-    attendanceMap[day] = "A";
+    const today = dayjs();
+
+    // 🔴 Prevent future month
+    if (startDate.isAfter(today, "month")) {
+      throw new Error("Future month not allowed");
+    }
+
+    // 🔴 If current month → limit till today
+    const isCurrentMonth =
+      today.year() === year && today.month() + 1 === monthNum;
+
+    const lastDay = isCurrentMonth ? today.date() : endDate.date();
+
+    // ─────────── Fetch attendance ───────────
+    const attendanceResult = await pool.query(
+      `
+      SELECT date
+      FROM attendance_records
+      WHERE user_id = $1
+      AND date BETWEEN $2 AND $3
+    `,
+      [userId, startDate.format("YYYY-MM-DD"), endDate.format("YYYY-MM-DD")]
+    );
+
+    // Convert to Set for fast lookup
+    const attendanceSet = new Set(
+      attendanceResult.rows.map((r) =>
+        dayjs(r.date).format("YYYY-MM-DD")
+      )
+    );
+
+    // ─────────── Fetch leaves ───────────
+    const leaveResult = await pool.query(
+      `
+      SELECT from_date, to_date
+      FROM leave_requests
+      WHERE user_id = $1
+      AND status = 'approved'
+      AND from_date <= $3
+      AND to_date >= $2
+    `,
+      [userId, startDate.format("YYYY-MM-DD"), endDate.format("YYYY-MM-DD")]
+    );
+
+    // Expand leave dates
+    const leaveSet = new Set();
+
+    leaveResult.rows.forEach((leave) => {
+      let current = dayjs(leave.from_date);
+      const end = dayjs(leave.to_date);
+
+      while (current.isBefore(end) || current.isSame(end)) {
+        leaveSet.add(current.format("YYYY-MM-DD"));
+        current = current.add(1, "day");
+      }
+    });
+
+    // ─────────── Build final attendance map ───────────
+    const attendanceMap = {};
+
+    for (let day = 1; day <= lastDay; day++) {
+      const date = dayjs(`${month}-${day}`).format("YYYY-MM-DD");
+
+      if (dayOfWeek === 6) {
+        attendanceMap[day] = "SA";
+      } else if (dayOfWeek === 0) {
+        attendanceMap[day] = "SU";
+      } else if (attendanceSet.has(date)) {
+        attendanceMap[day] = "P";
+      } else if (leaveSet.has(date)) {
+        attendanceMap[day] = "L";
+      } else {
+        attendanceMap[day] = "A";
+      }
+    }
+
+    return {
+      userId,
+      month,
+      totalDays: lastDay,
+      attendance: attendanceMap,
+    };
   }
-}
 
-  return {
-    userId,
-    month,
-    totalDays: lastDay,
-    attendance: attendanceMap,
-  };
-}
+  // ─── Check if user has sufficient leave balance ───────────────────────────
+  static async checkLeaveBalance(userId, leaveType, year = new Date().getFullYear()) {
+    return await LeaveBalance.checkSufficientBalance(userId, leaveType, year);
+  }
+
+  // ─── Approve leave with balance deduction ─────────────────────────────────
+  static async approveWithDeduction(leaveId, { reviewerId, status }) {
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      // Get leave request details
+      const leaveResult = await client.query(`
+        SELECT * FROM leave_requests WHERE id = $1 FOR UPDATE
+      `, [leaveId]);
+
+      if (leaveResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return { success: false, message: 'Leave request not found' };
+      }
+
+      const leave = leaveResult.rows[0];
+
+      if (leave.status !== 'pending') {
+        await client.query('ROLLBACK');
+        return { success: false, message: `Leave is already ${leave.status}` };
+      }
+
+      // Auto-credit current month's EL if not already credited (lazy accrual)
+      await LeaveBalance.ensureCurrentMonthCredit(leave.user_id);
+
+      // Check balance before approval
+      const balanceCheck = await LeaveBalance.checkSufficientBalance(
+        leave.user_id,
+        leave.leave_type
+      );
+
+      if (!balanceCheck.sufficient) {
+        await client.query('ROLLBACK');
+        return {
+          success: false,
+          message: `Insufficient leave balance. Required: ${balanceCheck.required}, Available: ${balanceCheck.available}`,
+          insufficientBalance: true,
+          required: balanceCheck.required,
+          available: balanceCheck.available
+        };
+      }
+
+      // Update leave status
+      const updatedLeave = await client.query(`
+        UPDATE leave_requests
+        SET status = $1, reviewed_by = $2, reviewed_at = NOW(), updated_at = NOW()
+        WHERE id = $3
+        RETURNING *
+      `, [status, reviewerId, leaveId]);
+
+      // Deduct leave balance
+      const deductionResult = await LeaveBalance.deductLeave(
+        leaveId,
+        leave.user_id,
+        leave.leave_type,
+        reviewerId
+      );
+
+      if (!deductionResult.success) {
+        await client.query('ROLLBACK');
+        return {
+          success: false,
+          message: deductionResult.message,
+          deductionFailed: true
+        };
+      }
+
+      await client.query('COMMIT');
+
+      return {
+        success: true,
+        message: `Leave approved and ${deductionResult.deductedAmount} EL deducted`,
+        leave: updatedLeave.rows[0],
+        deduction: deductionResult
+      };
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      return {
+        success: false,
+        message: error.message,
+        error: error.message
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  // ─── Get leave request with balance info for principal view ───────────────
+  static async getLeaveRequestWithBalance(leaveId) {
+    const leaveResult = await pool.query(`
+      SELECT
+        l.*,
+        u.name as user_name,
+        u.email,
+        v.udise_code,
+        v.school_name,
+        v.trade,
+        r.name as reviewer_name
+      FROM leave_requests l
+      JOIN users u ON l.user_id = u.id
+      LEFT JOIN vt_staff_details v ON u.vt_staff_id = v.id
+      LEFT JOIN users r ON l.reviewed_by = r.id
+      WHERE l.id = $1
+    `, [leaveId]);
+
+    if (leaveResult.rows.length === 0) {
+      return null;
+    }
+
+    const leave = leaveResult.rows[0];
+
+    // Get balance info
+    const balance = await LeaveBalance.getBalanceByUserId(leave.user_id);
+
+    // Check if sufficient balance
+    const balanceCheck = await LeaveBalance.checkSufficientBalance(
+      leave.user_id,
+      leave.leave_type
+    );
+
+    return {
+      ...leave,
+      balance: balance,
+      balanceCheck: balanceCheck
+    };
+  }
 }
 
 module.exports = Leave;
