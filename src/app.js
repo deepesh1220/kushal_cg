@@ -7,6 +7,8 @@ dotenv.config();
 
 const { createDatabaseIfNotExists } = require('./config/db');
 const initDB = require('./config/initDB');
+const { initLeaveCreditCronJob } = require('./jobs/leaveCreditJob');
+const { initYearEndCarryForwardCronJob } = require('./jobs/yearEndCarryForwardJob');
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 const apiRoutes = require('./routes/routes.js');
@@ -51,6 +53,10 @@ const startServer = async () => {
     app.listen(PORT, () => {
       console.log(`\n🚀 Server running on http://localhost:${PORT}`);
       console.log(`📋 Health check: http://localhost:${PORT}/api/health\n`);
+
+      // Initialize leave credit & year-end cron jobs
+      initLeaveCreditCronJob();
+      initYearEndCarryForwardCronJob();
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error.message);

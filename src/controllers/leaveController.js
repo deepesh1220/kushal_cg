@@ -90,6 +90,27 @@ const applyLeave = async (req, res) => {
       return res.status(400).json({ status: false, message: 'You already have a pending or approved leave request during this period.' });
     }
 
+    // Pre-validate balance & monthly cap so VT is warned up-front
+    const LeaveBalance = require('../models/LeaveBalance');
+    const reqType = leave_type || 'full-day';
+    // Lazy-credit current month EL so first-time applicants see correct balance
+    await LeaveBalance.ensureCurrentMonthCredit(userId);
+    const check = await LeaveBalance.checkSufficientBalance(userId, reqType);
+    if (!check.balanceOk) {
+      return res.status(400).json({
+        status: false,
+        message: `Insufficient leave balance. Required ${check.required}, available ${check.available}.`,
+        balanceCheck: check
+      });
+    }
+    if (!check.monthlyCapOk) {
+      return res.status(400).json({
+        status: false,
+        message: `Monthly usage cap exceeded. Used ${check.monthlyUsed}/${check.monthlyCap} this month.`,
+        balanceCheck: check
+      });
+    }
+
     const leave = await Leave.create({ user_id: userId, from_date, to_date, reason, leave_type });
     return res.status(201).json({ status: true, message: 'Leave request submitted successfully.', data: leave });
   } catch (error) {
@@ -184,7 +205,7 @@ const approveRejectLeave = async (req, res) => {
     if (!leave) {
       return res.status(404).json({ status: false, message: 'Leave request not found.' });
     }
-
+ 
     if (leave.status !== 'pending') {
       return res.status(400).json({ status: false, message: `Leave is already ${leave.status}` });
     }
@@ -195,12 +216,36 @@ const approveRejectLeave = async (req, res) => {
       return res.status(authError.status).json(authError.body);
     }
 
+    // Update leave status first (primary action — never blocks on balance issues)
     const updated = await Leave.updateStatus(leaveId, { status, reviewerId: reviewer.id });
 
-    // Optional: Could automatically mark attendance records as 'on_leave' for the dates here
-    // Leaving out the automatic mark for now to keep it safe and modular
+    // On approval, attempt EL deduction (non-blocking — logs failure but doesn't fail approval)
+    let deductionInfo = null;
+    if (status === 'approved') {
+      try {
+        const LeaveBalance = require('../models/LeaveBalance');
+        // Lazy credit current month if not yet credited
+        await LeaveBalance.ensureCurrentMonthCredit(leave.user_id);
+        // Deduct the leave amount
+        const deduction = await LeaveBalance.deductLeave(
+          leaveId, leave.user_id, leave.leave_type, reviewer.id
+        );
+        deductionInfo = deduction;
+        if (!deduction.success) {
+          console.warn(`[Leave ${leaveId}] Approved but deduction failed: ${deduction.message}`);
+        }
+      } catch (e) {
+        console.error(`[Leave ${leaveId}] Deduction error (approval still succeeded):`, e.message);
+        deductionInfo = { success: false, message: e.message };
+      }
+    }
 
-    return res.status(200).json({ status: true, message: `Leave successfully ${status}.`, data: updated });
+    return res.status(200).json({
+      status: true,
+      message: `Leave successfully ${status}.`,
+      data: updated,
+      ...(deductionInfo ? { deduction: deductionInfo } : {})
+    });
   } catch (error) {
     console.error('Approve/Reject leave error:', error.message);
     return res.status(500).json({ status: false, message: error.message });

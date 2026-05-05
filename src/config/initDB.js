@@ -187,6 +187,73 @@ const initDB = async () => {
     `);
 
     // ─────────────────────────────────────────────────────────
+    // TABLE: leave_balance
+    // Tracks earned leave (EL) balance for each VT
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS leave_balance (
+        id                SERIAL PRIMARY KEY,
+        user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        opening_balance   DECIMAL(5,2) DEFAULT 0.00,    -- Opening balance at year start (= previous year closing capped)
+        total_earned      DECIMAL(5,2) DEFAULT 0.00,    -- Total EL credited this year (capped 18)
+        total_used        DECIMAL(5,2) DEFAULT 0.00,    -- Total EL used this year
+        remaining_balance DECIMAL(5,2) DEFAULT 0.00,    -- Current available balance
+        carried_forward   DECIMAL(5,2) DEFAULT 0.00,    -- Leave carried from previous year
+        closing_balance   DECIMAL(5,2) DEFAULT 0.00,    -- Closing balance at year end (set by year-end job)
+        year              INTEGER DEFAULT EXTRACT(YEAR FROM NOW()),
+        created_at        TIMESTAMPTZ DEFAULT NOW(),
+        updated_at        TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (user_id, year)
+      );
+    `);
+
+    // Backfill opening_balance & closing_balance columns on existing DBs
+    await client.query(`ALTER TABLE leave_balance ADD COLUMN IF NOT EXISTS opening_balance DECIMAL(5,2) DEFAULT 0.00;`);
+    await client.query(`ALTER TABLE leave_balance ADD COLUMN IF NOT EXISTS closing_balance DECIMAL(5,2) DEFAULT 0.00;`);
+
+    // ─────────────────────────────────────────────────────────
+    // TABLE: monthly_leave_credit_log
+    // Audit log for monthly 1.5 EL credit cron job
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS monthly_leave_credit_log (
+        id             SERIAL PRIMARY KEY,
+        user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        year           INTEGER NOT NULL,
+        month          INTEGER NOT NULL,  -- 1-12
+        credited_leave DECIMAL(3,1) DEFAULT 1.5,
+        credited_at    TIMESTAMPTZ DEFAULT NOW(),
+        status         VARCHAR(20) DEFAULT 'success' CHECK (status IN ('success', 'failed', 'skipped')),
+        error_message  TEXT,
+        UNIQUE (user_id, year, month)
+      );
+    `);
+
+    // ─────────────────────────────────────────────────────────
+    // TABLE: leave_deduction_log
+    // Audit log for leave deductions when approved
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS leave_deduction_log (
+        id              SERIAL PRIMARY KEY,
+        leave_request_id INTEGER NOT NULL REFERENCES leave_requests(id) ON DELETE CASCADE,
+        user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        deducted_amount  DECIMAL(3,1) NOT NULL,  -- 1.0 for full-day, 0.5 for half-day
+        leave_type       VARCHAR(20) NOT NULL,
+        deducted_at      TIMESTAMPTZ DEFAULT NOW(),
+        reviewed_by      INTEGER REFERENCES users(id) ON DELETE SET NULL
+      );
+    `);
+
+    // Indexes for leave balance tables
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_leave_balance_user_id ON leave_balance(user_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_leave_balance_year ON leave_balance(year);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_monthly_credit_log_user_id ON monthly_leave_credit_log(user_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_monthly_credit_log_year_month ON monthly_leave_credit_log(year, month);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_leave_deduction_user_id ON leave_deduction_log(user_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_leave_deduction_leave_id ON leave_deduction_log(leave_request_id);`);
+
+    // ─────────────────────────────────────────────────────────
     // TABLE: headmasters  (kushal_cg domain)
     // Stores headmaster / principal records synced from MIS.
     // teacher_code is the natural PK assigned by the MIS system.
@@ -316,7 +383,7 @@ const seedDefaults = async (client) => {
     },
     {
       name: 'deo',
-      description: 'Data Entry Operator — enter and update attendance data on behalf of teachers',
+      description: 'District Education Officer — enter and update attendance data on behalf of teachers',
     },
     {
       name: 'headmaster',
@@ -371,6 +438,9 @@ const seedDefaults = async (client) => {
     { name: 'leave:view_own', module: 'leave', action: 'view_own', description: 'View own leave requests' },
     { name: 'leave:view_all', module: 'leave', action: 'view_all', description: 'View leave requests of all users' },
     { name: 'leave:approve', module: 'leave', action: 'approve', description: 'Approve or reject leave requests' },
+    { name: 'leave:view_balance_own', module: 'leave', action: 'view_balance_own', description: 'View own leave balance' },
+    { name: 'leave:view_balance_all', module: 'leave', action: 'view_balance_all', description: 'View leave balance of all users' },
+    { name: 'leave:manage_balance', module: 'leave', action: 'manage_balance', description: 'Manage leave credits and adjustments' },
     // ── Permissions management ───────────────────────────────────────────────
     { name: 'permissions:manage', module: 'permissions', action: 'manage', description: 'Manage system permissions' },
     // ── VT Approval ─────────────────────────────────────────────────────────
@@ -413,7 +483,7 @@ const seedDefaults = async (client) => {
     'roles:view', 'roles:assign',
     'attendance:view_all', 'attendance:create', 'attendance:create_others',
     'attendance:update', 'attendance:delete', 'attendance:report',
-    'leave:view_all', 'leave:approve',
+    'leave:view_all', 'leave:approve', 'leave:view_balance_all', 'leave:manage_balance',
   ]);
 
   // ── 3. deo → data entry for attendance on behalf of others ───────────────────
@@ -432,6 +502,7 @@ const seedDefaults = async (client) => {
     'attendance:report',
     'leave:view_all',
     'leave:approve',
+    'leave:view_balance_all',
     'vt:approve',
   ]);
 
@@ -452,6 +523,7 @@ const seedDefaults = async (client) => {
     'attendance:view_own',
     'leave:request',
     'leave:view_own',
+    'leave:view_balance_own',
   ]);
 
   console.log('✅ Default roles & permissions seeded');
