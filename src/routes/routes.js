@@ -12,6 +12,7 @@ const headmasterRoutes = require('./headmasterRoutes');
 const deoRoutes = require('./deoRoutes');
 const holidayRoutes = require('./holidayRoutes');
 const reportRoutes = require('./reportRoutes');
+const superAdminRoutes = require('./superAdminRoutes');
 
 // ─── Register API Routes ──────────────────────────────────────────────────────
 router.use('/auth', authRoutes);
@@ -24,5 +25,6 @@ router.use('/leaves', leaveRoutes);
 router.use('/deo', deoRoutes);
 router.use('/holidays', holidayRoutes);
 router.use('/reports', reportRoutes);
+router.use('/super-admin', superAdminRoutes);
 
 module.exports = router;
