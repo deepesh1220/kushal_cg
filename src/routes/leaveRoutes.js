@@ -9,7 +9,14 @@ const {
   updateLeave,
   deleteLeave,
   getLeaveReport,
-  downloadMonthlyAttendance
+  downloadMonthlyAttendance,
+  applyOnDuty,
+  approveOnDuty,
+  getMyOnDutyRequests,
+  getOnDutyById,
+  applyRegularization,
+  approveRegularization,
+  getMyRegularizationRequests
 } = require('../controllers/leaveController');
 
 // All leave routes require authentication
@@ -38,6 +45,28 @@ router.get('/all', authorize('leave:view_all'), getAllLeaves);
 // Approve or reject a leave request
 router.patch('/:id/status', authorize('leave:approve'), approveRejectLeave);
 
+// ── On Duty (OD) routes ─────────────────────────────────────────────────────
+// Apply for On Duty
+router.post('/apply-od', authorize('leave:request'), applyOnDuty);
+
+// Approve or reject On Duty request
+router.patch('/:id/od-status', authorize('leave:approve'), approveOnDuty);
+
+// Get my own OD requests
+router.get('/od/my', authorize('leave:view_own'), getMyOnDutyRequests);
+
+// Get specific OD request by ID
+router.get('/od/:id', authorize('leave:view_own'), getOnDutyById);
+
+// ── Attendance Regularization routes ────────────────────────────────────────
+// Apply for Regularization
+router.post('/apply-regularization', authorize('leave:request'), applyRegularization);
+
+// Approve or reject Regularization request
+router.patch('/:id/regularize-status', authorize('leave:approve'), approveRegularization);
+
+// Get my own regularization requests
+router.get('/regularization/my', authorize('leave:view_own'), getMyRegularizationRequests);
 
 // ── Attendance Download ───────────────────────────────────────────────
 router.get(
