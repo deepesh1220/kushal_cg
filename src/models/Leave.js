@@ -98,6 +98,8 @@ class Leave {
         COUNT(*) FILTER (WHERE leave_type = 'full-day') AS full_day,
         COUNT(*) FILTER (WHERE leave_type = 'first-half') AS first_half,
         COUNT(*) FILTER (WHERE leave_type = 'second-half') AS second_half,
+        COUNT(*) FILTER (WHERE leave_type = 'od') AS od,
+        COUNT(*) FILTER (WHERE leave_type = 'regularization') AS regularization,
         COUNT(*) FILTER (WHERE status = 'pending') AS pending,
         COUNT(*) FILTER (WHERE status = 'approved') AS accepted,
         COUNT(*) FILTER (WHERE status = 'rejected') AS rejected
@@ -111,6 +113,8 @@ class Leave {
       full_day: parseInt(row.full_day || 0, 10),
       first_half: parseInt(row.first_half || 0, 10),
       second_half: parseInt(row.second_half || 0, 10),
+      od: parseInt(row.od || 0, 10),
+      regularization: parseInt(row.regularization || 0, 10),
       pending: parseInt(row.pending || 0, 10),
       accepted: parseInt(row.accepted || 0, 10),
       rejected: parseInt(row.rejected || 0, 10)
@@ -163,13 +167,15 @@ class Leave {
     const recordsResult = await pool.query(recordsQuery, params);
 
     // overall totals for the same filter
-    const totalParams = params.slice(0, params.length - 2); 
+    const totalParams = params.slice(0, params.length - 2);
     const totalsQuery = `
       SELECT
         COUNT(*) AS total_leaves,
         COUNT(*) FILTER (WHERE leave_type = 'full-day') AS full_day,
         COUNT(*) FILTER (WHERE leave_type = 'first-half') AS first_half,
         COUNT(*) FILTER (WHERE leave_type = 'second-half') AS second_half,
+        COUNT(*) FILTER (WHERE leave_type = 'od') AS od,
+        COUNT(*) FILTER (WHERE leave_type = 'regularization') AS regularization,
         COUNT(*) FILTER (WHERE status = 'pending') AS pending,
         COUNT(*) FILTER (WHERE status = 'approved') AS accepted,
         COUNT(*) FILTER (WHERE status = 'rejected') AS rejected
@@ -237,13 +243,13 @@ class Leave {
     limit = 20,
   } = {}) {
     // Clamp pagination values
-    const parsedLimit  = Math.min(Math.max(parseInt(limit,  10) || 20, 1), 100);
-    const parsedPage   = Math.max(parseInt(page, 10) || 1, 1);
-    const offset       = (parsedPage - 1) * parsedLimit;
+    const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const parsedPage = Math.max(parseInt(page, 10) || 1, 1);
+    const offset = (parsedPage - 1) * parsedLimit;
 
     // ── Build dynamic filter clauses (school-scoped) ─────────────────────────
-    const filterParams  = [udiseCode]; // $1 always = udise_code
-    let   filterClauses = '';
+    const filterParams = [udiseCode]; // $1 always = udise_code
+    let filterClauses = '';
 
     if (status) {
       filterParams.push(status.toLowerCase());
@@ -430,7 +436,11 @@ class Leave {
     for (let day = 1; day <= lastDay; day++) {
       const date = dayjs(`${month}-${day}`).format("YYYY-MM-DD");
 
-      if (attendanceSet.has(date)) {
+      if (dayOfWeek === 6) {
+        attendanceMap[day] = "SA";
+      } else if (dayOfWeek === 0) {
+        attendanceMap[day] = "SU";
+      } else if (attendanceSet.has(date)) {
         attendanceMap[day] = "P";
       } else if (leaveSet.has(date)) {
         attendanceMap[day] = "L";

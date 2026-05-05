@@ -9,6 +9,7 @@ const {
   getSchoolLeaves,
   updateSchoolTime,
   getSchoolDetails,
+  updateSchoolLatLong,
 } = require('../controllers/headmasterController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
 
@@ -28,6 +29,7 @@ router.get('/leaves', authenticate, authorize('leave:view_all'), getSchoolLeaves
 router.get('/:teacher_code',    /* authenticate, */ getHeadmaster);
 router.post('/',                /* authenticate, */ createHeadmaster);
 router.patch('/school-time',    /* authenticate, */ updateSchoolTime);
+router.patch('/update-lat-long', updateSchoolLatLong);
 router.patch('/:teacher_code',  /* authenticate, */ updateHeadmaster);
 router.delete('/:teacher_code', /* authenticate, */ deleteHeadmaster);
 
