@@ -5,8 +5,13 @@ const {
   getAllVts,
   approveVt,
   rejectVt,
+  getVtByMobile,
 } = require('../controllers/vtApprovalController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
+
+// Public route — lookup VT details by mobile (used during registration)
+// POST /api/vt/by-mobile  →  body: { mobile }
+router.post('/by-mobile', getVtByMobile);
 
 router.use(authenticate);
 

@@ -171,4 +171,39 @@ const _validateVtBelongsToHeadmaster = async (vtUserId, headmaster) => {
   return null;
 };
 
-module.exports = { getPendingVts, getAllVts, approveVt, rejectVt };
+// ─── POST /api/vt/by-mobile ────────────────────────────────────────────────────────────
+// Get VT staff details from vt_staff_details table using mobile number
+const getVtByMobile = async (req, res) => {
+  try {
+    const { mobile } = req.body;
+
+    if (!mobile) {
+      return res.status(400).json({ status: false, message: 'mobile is required.' });
+    }
+
+    const { pool } = require('../config/db');
+
+    const result = await pool.query(
+      `SELECT * FROM vt_staff_details WHERE vt_mob = $1 LIMIT 1`,
+      [String(mobile)]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({
+        status: false,
+        message: 'No VT staff found with the provided mobile number.',
+      });
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: 'VT staff details fetched successfully.',
+      data: result.rows[0],
+    });
+  } catch (err) {
+    console.error('getVtByMobile error:', err.message);
+    return res.status(500).json({ status: false, message: 'Server error while fetching VT details.' });
+  }
+};
+
+module.exports = { getPendingVts, getAllVts, approveVt, rejectVt, getVtByMobile };
