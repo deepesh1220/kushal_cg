@@ -42,7 +42,7 @@ app.use((err, req, res, next) => {
 });
 
 // ─── Bootstrap: Create DB → Init Tables → Start Server ───────────────────────
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5062;
 
 const startServer = async () => {
   try {
