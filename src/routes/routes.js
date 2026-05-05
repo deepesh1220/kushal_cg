@@ -27,6 +27,7 @@ const deoRoutes = require('./deoRoutes');
 const holidayRoutes = require('./holidayRoutes');
 
 const reportRoutes = require('./reportRoutes');
+const superAdminRoutes = require('./superAdminRoutes');
 
 
 
@@ -53,6 +54,7 @@ router.use('/deo', deoRoutes);
 router.use('/holidays', holidayRoutes);
 
 router.use('/reports', reportRoutes);
+router.use('/super-admin', superAdminRoutes);
 
 
 
