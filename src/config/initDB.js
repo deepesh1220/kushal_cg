@@ -33,6 +33,14 @@ const initDB = async () => {
       );
     `);
 
+    // Ensure profile-extension columns exist on vt_staff_details
+    await client.query(`
+      ALTER TABLE vt_staff_details
+        ADD COLUMN IF NOT EXISTS dob                      DATE,
+        ADD COLUMN IF NOT EXISTS educational_qualification VARCHAR(200),
+        ADD COLUMN IF NOT EXISTS date_of_joining          DATE;
+    `);
+
     // ─────────────────────────────────────────────────────────
     // TABLE: roles
     // Stores dynamic roles (admin, teacher, student, hr, etc.)

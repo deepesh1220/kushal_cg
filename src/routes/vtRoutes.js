@@ -6,6 +6,7 @@ const {
   approveVt,
   rejectVt,
   getVtByMobile,
+  updateVtProfile,
 } = require('../controllers/vtApprovalController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
 
@@ -26,5 +27,8 @@ router.patch('/:userId/approve', authorize('vt:approve'), approveVt);
 
 // Headmaster & admin — reject a VT
 router.patch('/:userId/reject', authorize('vt:approve'), rejectVt);
+
+// VT — update own profile on vt_staff_details (VT only)
+router.patch('/update-profile', authorize('attendance:create'), updateVtProfile);
 
 module.exports = router;
