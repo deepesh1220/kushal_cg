@@ -210,249 +210,227 @@ const register = async (req, res) => {
 };
 
 // ─── POST /api/auth/login ──────────────────────────────────────────────────────
+// Unified login: always send { email, password, role_id } from Postman.
+// The backend maps those fields to the correct credentials per role:
+//
+//   role_id (headmaster)   → email = teacher_code, password = mobile
+//   role_id (deo)          → email = email,         password = mobile
+//   role_id (vocational_teacher) → email = phone,   password = password
+//   role_id (admin/super_admin)  → email = email,   password = password
+// ─────────────────────────────────────────────────────────────────────────────
 const login = async (req, res) => {
-  const { email, phone, password, teacher_code, mobile } = req.body;
+  const { role_id, email, password } = req.body;
 
-  // ── DEO login via email & mobile ──────────────────────────────────────────
-  if (email && !password && (mobile || phone)) {
-    try {
-      const inputMobile = mobile || phone;
-      const deo = await Deo.findByEmailAndMobile(email, inputMobile);
-
-      if (!deo) {
-        return res.status(401).json({ status: false, message: 'Invalid DEO email or mobile number.' });
-      }
-
-      // Ensure they exist in the users table for foreign key relations
-      let user = await User.findByPhone(inputMobile);
-
-      if (!user) {
-        const defaultRole = await Role.findByName('deo');
-        const password_hash = await bcrypt.hash(String(inputMobile), 12); // dummy password
-
-        const newUser = await User.create({
-          name: deo.deo_name || 'DEO',
-          email: deo.email,
-          phone: inputMobile,
-          password_hash,
-          role_id: defaultRole ? defaultRole.id : null,
-          is_active: true
-        });
-        user = await User.findById(newUser.id);
-      }
-
-      if (user && !user.is_active) {
-        return res.status(403).json({ status: false, message: 'Your account has been deactivated. Contact administrator.' });
-      }
-
-      const permissions = await User.getEffectivePermissions(user.role_id, user.id);
-      const tokenPayload = {
-        id: user.id,
-        email: user.email,
-        role: user.role_name,
-        role_id: user.role_id,
-      };
-
-      const accessToken = generateAccessToken(tokenPayload);
-      const refreshToken = generateRefreshToken(tokenPayload);
-      const expiresAt = getRefreshTokenExpiry();
-
-      await RefreshToken.create(user.id, refreshToken, expiresAt);
-
-      return res.status(200).json({
-        status: true,
-        message: 'DEO login successful.',
-        data: {
-          user: {
-            id: user.id,
-            name: user.name,
-            email: user.email,
-            phone: user.phone,
-            role: user.role_name,
-            profile_photo: user.profile_photo,
-            permissions,
-          },
-          deo_details: {
-            district_cd: deo.district_cd,
-            district_name: deo.district_name,
-            designation: deo.designation
-          },
-          tokens: {
-            access_token: accessToken,
-            refresh_token: refreshToken,
-          },
-        },
-      });
-    } catch (error) {
-      console.error('DEO login error:', error.message);
-      return res.status(500).json({ status: 'error', message: 'Server error during DEO login.' });
-    }
+  if (!role_id) {
+    return res.status(400).json({ status: false, message: 'role_id is required.' });
+  }
+  if (!email || !password) {
+    return res.status(400).json({ status: false, message: 'email and password are required.' });
   }
 
-  // ── Headmaster login via teacher_code & mobile ────────────────────────────
-  if (teacher_code && (mobile || phone)) {
-    try {
-      const inputMobile = mobile || phone;
-      const headmaster = await Headmaster.findByTeacherCode(teacher_code);
+  try {
+    // ── Resolve role name from role_id ────────────────────────────────────────
+    const roleRow = await Role.findById(role_id);
+    if (!roleRow) {
+      return res.status(400).json({ status: false, message: 'Invalid role_id provided.' });
+    }
+    const roleName = roleRow.name;
 
+    // ── Helper: build & store tokens ─────────────────────────────────────────
+    const issueTokens = async (user) => {
+      const permissions = await User.getEffectivePermissions(user.role_id, user.id);
+      const payload = { id: user.id, email: user.email, role: user.role_name, role_id: user.role_id };
+      const accessToken = generateAccessToken(payload);
+      const refreshToken = generateRefreshToken(payload);
+      await RefreshToken.create(user.id, refreshToken, getRefreshTokenExpiry());
+      return { accessToken, refreshToken, permissions };
+    };
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // HEADMASTER  →  email = teacher_code, password = mobile
+    // ══════════════════════════════════════════════════════════════════════════
+    if (roleName === 'headmaster') {
+      const teacher_code = email;        // mapped from email field
+      const inputMobile = password;      // mapped from password field
+
+      const headmaster = await Headmaster.findByTeacherCode(teacher_code);
       if (!headmaster || String(headmaster.mobile) !== String(inputMobile)) {
         return res.status(401).json({ status: false, message: 'Invalid teacher code or mobile number.' });
       }
 
-      // Ensure they exist in the users table for foreign key relations (tokens, attendance, etc.)
       let user = await User.findByPhone(inputMobile);
-
       if (!user) {
         const defaultRole = await Role.findByName('headmaster');
-        const password_hash = await bcrypt.hash(String(inputMobile), 12); // dummy password
-
+        const password_hash = await bcrypt.hash(String(inputMobile), 12);
         const newUser = await User.create({
           name: headmaster.t_name || 'Headmaster',
           email: headmaster.email || `${teacher_code}@headmaster.local`,
-          phone: inputMobile,
-          password_hash,
+          phone: inputMobile, password_hash,
           role_id: defaultRole ? defaultRole.id : null,
-          udise_code: headmaster.udise_code,
-          is_active: true
+          udise_code: headmaster.udise_code, is_active: true,
         });
         user = await User.findById(newUser.id);
       }
 
-      if (user && !user.is_active) {
+      if (!user.is_active) {
         return res.status(403).json({ status: false, message: 'Your account has been deactivated. Contact administrator.' });
       }
 
-      const permissions = await User.getEffectivePermissions(user.role_id, user.id);
-      const tokenPayload = {
-        id: user.id,
-        email: user.email,
-        role: user.role_name,
-        role_id: user.role_id,
-      };
-
-      const accessToken = generateAccessToken(tokenPayload);
-      const refreshToken = generateRefreshToken(tokenPayload);
-      const expiresAt = getRefreshTokenExpiry();
-
-      await RefreshToken.create(user.id, refreshToken, expiresAt);
-
+      const { accessToken, refreshToken, permissions } = await issueTokens(user);
       return res.status(200).json({
         status: true,
         message: 'Headmaster login successful.',
         data: {
           user: {
-            id: user.id,
-            name: user.name,
-            email: user.email,
-            phone: user.phone,
-            role: user.role_name,
-            udise_code: user.udise_code,
-            profile_photo: user.profile_photo,
+            id: user.id, name: user.name, email: user.email,
+            phone: user.phone, role: user.role_name, role_id: user.role_id,
+            udise_code: user.udise_code, profile_photo: user.profile_photo,
             permissions,
           },
-          tokens: {
-            access_token: accessToken,
-            refresh_token: refreshToken,
+          headmaster_details: {
+            teacher_code: headmaster.teacher_code,
+            school_name: headmaster.school_name,
+            block_name: headmaster.block_name,
+            district_name: headmaster.district_name,
           },
+          tokens: { access_token: accessToken, refresh_token: refreshToken },
         },
       });
-    } catch (error) {
-      console.error('Headmaster login error:', error.message);
-      return res.status(500).json({ status: 'error', message: 'Server error during headmaster login.' });
-    }
-  }
-
-  // ── Normal Login ────────────────────────────────────────────────────────
-  if ((!email && !phone) || !password) {
-    return res.status(400).json({
-      status: false,
-      message: 'Email or phone, and password are required.',
-    });
-  }
-
-  try {
-    // Find by email OR phone
-    let user = null;
-    if (email) {
-      user = await User.findByEmail(email);
-    } else {
-      user = await User.findByPhone(phone);
     }
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // DEO  →  email = email, password = mobile
+    // ══════════════════════════════════════════════════════════════════════════
+    if (roleName === 'deo') {
+      const inputEmail = email;           // email field stays as email
+      const inputMobile = password;       // mapped from password field
+
+      const deo = await Deo.findByEmailAndMobile(inputEmail, inputMobile);
+      if (!deo) {
+        return res.status(401).json({ status: false, message: 'Invalid DEO email or mobile number.' });
+      }
+
+      let user = await User.findByPhone(inputMobile);
+      if (!user) {
+        const defaultRole = await Role.findByName('deo');
+        const password_hash = await bcrypt.hash(String(inputMobile), 12);
+        const newUser = await User.create({
+          name: deo.deo_name || 'DEO', email: deo.email, phone: inputMobile,
+          password_hash, role_id: defaultRole ? defaultRole.id : null, is_active: true,
+        });
+        user = await User.findById(newUser.id);
+      }
+
+      if (!user.is_active) {
+        return res.status(403).json({ status: false, message: 'Your account has been deactivated. Contact administrator.' });
+      }
+
+      const { accessToken, refreshToken, permissions } = await issueTokens(user);
+      return res.status(200).json({
+        status: true,
+        message: 'DEO login successful.',
+        data: {
+          user: {
+            id: user.id, name: user.name, email: user.email,
+            phone: user.phone, role: user.role_name, role_id: user.role_id,
+            profile_photo: user.profile_photo, permissions,
+          },
+          deo_details: {
+            district_cd: deo.district_cd, district_name: deo.district_name, designation: deo.designation,
+          },
+          tokens: { access_token: accessToken, refresh_token: refreshToken },
+        },
+      });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // VOCATIONAL TEACHER  →  email = phone, password = password
+    // ══════════════════════════════════════════════════════════════════════════
+    if (roleName === 'vocational_teacher') {
+      const inputPhone = email;            // mapped from email field (phone number)
+
+      const user = await User.findByPhone(inputPhone);
+      if (!user) {
+        return res.status(401).json({ status: false, message: 'Invalid credentials.' });
+      }
+
+      if (user.role_name !== 'vocational_teacher') {
+        return res.status(403).json({ status: false, message: 'Role mismatch. Use the correct role_id for your account.' });
+      }
+
+      if (user.vt_approval_status === 'pending') {
+        return res.status(403).json({ status: false, code: 'VT_PENDING_APPROVAL', message: 'Your registration is pending approval from your school Headmaster. Please wait.' });
+      }
+      if (user.vt_approval_status === 'rejected') {
+        return res.status(403).json({ status: false, code: 'VT_REJECTED', message: 'Your registration was rejected by the Headmaster. Contact your school or administrator.' });
+      }
+      if (!user.is_active) {
+        return res.status(403).json({ status: false, message: 'Your account has been deactivated. Contact administrator.' });
+      }
+
+      const isMatch = await bcrypt.compare(password, user.password_hash);
+      if (!isMatch) {
+        return res.status(401).json({ status: false, message: 'Invalid credentials.' });
+      }
+
+      const { accessToken, refreshToken, permissions } = await issueTokens(user);
+      return res.status(200).json({
+        status: true,
+        message: 'Login successful.',
+        data: {
+          user: {
+            id: user.id, name: user.name, email: user.email,
+            phone: user.phone, role: user.role_name, role_id: user.role_id,
+            udise_code: user.udise_code, profile_photo: user.profile_photo,
+            vt_approval_status: user.vt_approval_status,
+            permissions,
+          },
+          tokens: { access_token: accessToken, refresh_token: refreshToken },
+        },
+      });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // ADMIN / SUPER_ADMIN / OTHER  →  email = email, password = password
+    // ══════════════════════════════════════════════════════════════════════════
+    let user = await User.findByEmail(email);
     if (!user) {
       return res.status(401).json({ status: false, message: 'Invalid credentials.' });
     }
 
-    // ── VT approval gate ────────────────────────────────────────────────────
-    if (user.vt_approval_status === 'pending') {
-      return res.status(403).json({
-        status: false,
-        code: 'VT_PENDING_APPROVAL',
-        message: 'Your registration is pending approval from your school Headmaster. Please wait.',
-      });
-    }
-
-    if (user.vt_approval_status === 'rejected') {
-      return res.status(403).json({
-        status: false,
-        code: 'VT_REJECTED',
-        message: 'Your registration was rejected by the Headmaster. Contact your school or administrator.',
-      });
+    // Ensure user actually belongs to the requested role
+    if (String(user.role_id) !== String(role_id)) {
+      return res.status(403).json({ status: false, message: 'Role mismatch. Use the correct role_id for your account.' });
     }
 
     if (!user.is_active) {
-      return res.status(403).json({
-        status: false,
-        message: 'Your account has been deactivated. Contact administrator.',
-      });
+      return res.status(403).json({ status: false, message: 'Your account has been deactivated. Contact administrator.' });
     }
 
-    // Validate password
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
       return res.status(401).json({ status: false, message: 'Invalid credentials.' });
     }
 
-    // Fetch effective permissions via model
-    const permissions = await User.getEffectivePermissions(user.role_id, user.id);
-
-    // Build token payload
-    const tokenPayload = {
-      id: user.id,
-      email: user.email,
-      role: user.role_name,
-      role_id: user.role_id,
-    };
-
-    const accessToken = generateAccessToken(tokenPayload);
-    const refreshToken = generateRefreshToken(tokenPayload);
-    const expiresAt = getRefreshTokenExpiry();
-
-    // Store refresh token via model
-    await RefreshToken.create(user.id, refreshToken, expiresAt);
-
+    const { accessToken, refreshToken, permissions } = await issueTokens(user);
     return res.status(200).json({
       status: true,
       message: 'Login successful.',
       data: {
         user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          phone: user.phone,
-          role: user.role_name,
-          profile_photo: user.profile_photo,
+          id: user.id, name: user.name, email: user.email,
+          phone: user.phone, role: user.role_name, role_id: user.role_id,
+          udise_code: user.udise_code, profile_photo: user.profile_photo,
+          vt_approval_status: user.vt_approval_status,
           permissions,
         },
-        tokens: {
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        },
+        tokens: { access_token: accessToken, refresh_token: refreshToken },
       },
     });
+
   } catch (error) {
     console.error('Login error:', error.message);
-    return res.status(500).json({ status: 'error', message: 'Server error during login.' });
+    return res.status(500).json({ status: false, message: 'Server error during login.' });
   }
 };
 
@@ -589,4 +567,89 @@ const getMe = async (req, res) => {
   }
 };
 
-module.exports = { register, login, refreshToken, logout, getMe };
+// ─── POST /api/auth/login/vt ──────────────────────────────────────────────────
+// Dedicated VT login: phone + password. Returns same structure as /login.
+const loginVT = async (req, res) => {
+  try {
+    const { phone, password } = req.body;
+
+    if (!phone || !password) {
+      return res.status(400).json({ status: false, message: 'phone and password are required.' });
+    }
+
+    const user = await User.findByPhone(phone);
+    if (!user) {
+      return res.status(401).json({ status: false, message: 'Invalid credentials.' });
+    }
+
+    // Role guard
+    if (user.role_name !== 'vocational_teacher') {
+      return res.status(403).json({ status: false, message: 'This endpoint is for Vocational Teachers only.' });
+    }
+
+    // Approval gate
+    if (user.vt_approval_status === 'pending') {
+      return res.status(403).json({
+        status: false,
+        code: 'VT_PENDING_APPROVAL',
+        message: 'Your registration is pending approval from your school Headmaster. Please wait.',
+      });
+    }
+    if (user.vt_approval_status === 'rejected') {
+      return res.status(403).json({
+        status: false,
+        code: 'VT_REJECTED',
+        message: 'Your registration was rejected by the Headmaster. Contact your school or administrator.',
+      });
+    }
+    if (!user.is_active) {
+      return res.status(403).json({ status: false, message: 'Your account has been deactivated. Contact administrator.' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password_hash);
+    if (!isMatch) {
+      return res.status(401).json({ status: false, message: 'Invalid credentials.' });
+    }
+
+    const permissions = await User.getEffectivePermissions(user.role_id, user.id);
+
+    const tokenPayload = {
+      id: user.id,
+      email: user.email,
+      role: user.role_name,
+      role_id: user.role_id,
+    };
+
+    const accessToken = generateAccessToken(tokenPayload);
+    const refreshToken = generateRefreshToken(tokenPayload);
+    const expiresAt = getRefreshTokenExpiry();
+    await RefreshToken.create(user.id, refreshToken, expiresAt);
+
+    return res.status(200).json({
+      status: true,
+      message: 'Login successful.',
+      data: {
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          role: user.role_name,
+          udise_code: user.udise_code,
+          profile_photo: user.profile_photo,
+          vt_approval_status: user.vt_approval_status,
+          permissions,
+        },
+        tokens: {
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        },
+      },
+    });
+  } catch (err) {
+    console.error('VT login error:', err.message);
+    return res.status(500).json({ status: false, message: 'Server error during VT login.' });
+  }
+};
+
+module.exports = { register, login, loginVT, refreshToken, logout, getMe };
