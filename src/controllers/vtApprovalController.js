@@ -171,4 +171,118 @@ const _validateVtBelongsToHeadmaster = async (vtUserId, headmaster) => {
   return null;
 };
 
-module.exports = { getPendingVts, getAllVts, approveVt, rejectVt };
+// ─── POST /api/vt/by-mobile ────────────────────────────────────────────────────────────
+// Get VT staff details from vt_staff_details table using mobile number
+const getVtByMobile = async (req, res) => {
+  try {
+    const { mobile } = req.body;
+
+    if (!mobile) {
+      return res.status(400).json({ status: false, message: 'mobile is required.' });
+    }
+
+    const { pool } = require('../config/db');
+
+    const result = await pool.query(
+      `SELECT * FROM vt_staff_details WHERE vt_mob = $1 LIMIT 1`,
+      [String(mobile)]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({
+        status: false,
+        message: 'No VT staff found with the provided mobile number.',
+      });
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: 'VT staff details fetched successfully.',
+      data: result.rows[0],
+    });
+  } catch (err) {
+    console.error('getVtByMobile error:', err.message);
+    return res.status(500).json({ status: false, message: 'Server error while fetching VT details.' });
+  }
+};
+
+// ─── PATCH /api/vt/update-profile ─────────────────────────────────────────────────────────────
+// Update VT's own profile on vt_staff_details table.
+// Authenticated VT only — matches record by their linked vt_staff_id.
+// Updatable fields:
+//   vt_name, vt_email, vt_mob, vt_aadhar, vtp_pan,
+//   dob, educational_qualification, date_of_joining
+const updateVtProfile = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { pool } = require('../config/db');
+
+    // Resolve vt_staff_id from users table
+    const userRow = await pool.query(
+      `SELECT vt_staff_id FROM users WHERE id = $1 LIMIT 1`,
+      [userId]
+    );
+
+    const vtStaffId = userRow.rows[0]?.vt_staff_id;
+    if (!vtStaffId) {
+      return res.status(400).json({
+        status: false,
+        message: 'Your account is not linked to a VT staff record.',
+      });
+    }
+
+    const {
+      vt_name,
+      vt_email,
+      vt_mob,
+      dob,
+      educational_qualification,
+      date_of_joining,
+    } = req.body;
+
+    // Helper: convert DD-MM-YYYY → YYYY-MM-DD (also accepts YYYY-MM-DD passthrough)
+    const parseDate = (raw) => {
+      if (!raw) return null;
+      const ddmmyyyy = /^(\d{2})-(\d{2})-(\d{4})$/;
+      const m = String(raw).match(ddmmyyyy);
+      if (m) return `${m[3]}-${m[2]}-${m[1]}`; // YYYY-MM-DD
+      return raw; // already ISO or null handled above
+    };
+
+    const dobParsed = parseDate(dob);
+    const dateOfJoiningParsed = parseDate(date_of_joining);
+
+    const result = await pool.query(
+      `UPDATE vt_staff_details SET
+        vt_name                  = COALESCE($1,  vt_name),
+        vt_email                 = COALESCE($2,  vt_email),
+        vt_mob                   = COALESCE($3,  vt_mob),
+        dob                      = COALESCE($4,  dob),
+        educational_qualification = COALESCE($5,  educational_qualification),
+        date_of_joining          = COALESCE($6,  date_of_joining),
+        updated_at               = NOW()
+      WHERE id = $7
+      RETURNING *`,
+      [
+        vt_name || null,
+        vt_email || null,
+        vt_mob || null,
+        dobParsed,
+        educational_qualification || null,
+        dateOfJoiningParsed,
+        vtStaffId,
+      ]
+    );
+
+    return res.status(200).json({
+      status: true,
+      message: 'VT profile updated successfully.',
+      data: result.rows[0],
+    });
+  } catch (err) {
+    console.error('updateVtProfile error:', err.message);
+    return res.status(500).json({ status: false, message: 'Server error while updating VT profile.' });
+  }
+};
+
+module.exports = { getPendingVts, getAllVts, approveVt, rejectVt, getVtByMobile, updateVtProfile };

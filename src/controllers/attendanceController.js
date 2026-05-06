@@ -1,4 +1,5 @@
 const Attendance = require('../models/Attendance');
+const { formatAttendanceRecord, toIST } = require('../utils/timeUtils');
 
 // Haversine formula to calculate distance in meters
 const getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
@@ -121,7 +122,7 @@ const checkIn = async (req, res) => {
     return res.status(201).json({
       status: true,
       message: 'Check-in successful.',
-      data: record,
+      data: formatAttendanceRecord(record),
     });
   } catch (error) {
     console.error('Check-in error:', error.message);
@@ -226,7 +227,7 @@ const checkOut = async (req, res) => {
     return res.status(200).json({
       status: true,
       message: 'Check-out successful.',
-      data: updated,
+      data: formatAttendanceRecord(updated),
     });
   } catch (error) {
     console.error('Check-out error:', error.message);
