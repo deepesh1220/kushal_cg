@@ -387,6 +387,46 @@ const initDB = async () => {
       ALTER TABLE attendance_records ADD CONSTRAINT attendance_records_status_check CHECK (status IN ('present','absent','late','half_day','on_leave','od'));
     `);
 
+    // ─────────────────────────────────────────────────────────
+    // TABLE: od_requests
+    // Dedicated On-Duty request table (separate from leave_requests)
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS od_requests (
+        id           SERIAL PRIMARY KEY,
+        user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        from_date    DATE    NOT NULL,
+        to_date      DATE    NOT NULL,
+        reason       TEXT,
+        status       VARCHAR(20) DEFAULT 'pending'
+                       CHECK (status IN ('pending','approved','rejected')),
+        reviewed_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        reviewed_at  TIMESTAMPTZ,
+        created_at   TIMESTAMPTZ DEFAULT NOW(),
+        updated_at   TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    // ─────────────────────────────────────────────────────────
+    // TABLE: regularization_requests
+    // Dedicated single-date attendance regularization table
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS regularization_requests (
+        id           SERIAL PRIMARY KEY,
+        user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        date         DATE    NOT NULL,
+        reason       TEXT    NOT NULL,
+        status       VARCHAR(20) DEFAULT 'pending'
+                       CHECK (status IN ('pending','approved','rejected')),
+        reviewed_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        reviewed_at  TIMESTAMPTZ,
+        created_at   TIMESTAMPTZ DEFAULT NOW(),
+        updated_at   TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (user_id, date)
+      );
+    `);
+
     await client.query('COMMIT');
     console.log('✅ All tables created/verified successfully');
 
