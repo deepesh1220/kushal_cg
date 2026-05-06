@@ -249,8 +249,8 @@ const updateVtProfile = async (req, res) => {
       return raw; // already ISO or null handled above
     };
 
-    const dobParsed            = parseDate(dob);
-    const dateOfJoiningParsed  = parseDate(date_of_joining);
+    const dobParsed = parseDate(dob);
+    const dateOfJoiningParsed = parseDate(date_of_joining);
 
     const result = await pool.query(
       `UPDATE vt_staff_details SET
@@ -259,13 +259,14 @@ const updateVtProfile = async (req, res) => {
         vt_mob                   = COALESCE($3,  vt_mob),
         dob                      = COALESCE($4,  dob),
         educational_qualification = COALESCE($5,  educational_qualification),
-        date_of_joining          = COALESCE($6,  date_of_joining)
+        date_of_joining          = COALESCE($6,  date_of_joining),
+        updated_at               = NOW()
       WHERE id = $7
       RETURNING *`,
       [
         vt_name || null,
         vt_email || null,
-        vt_mob   || null,
+        vt_mob || null,
         dobParsed,
         educational_qualification || null,
         dateOfJoiningParsed,

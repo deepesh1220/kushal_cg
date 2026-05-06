@@ -38,7 +38,8 @@ const initDB = async () => {
       ALTER TABLE vt_staff_details
         ADD COLUMN IF NOT EXISTS dob                      DATE,
         ADD COLUMN IF NOT EXISTS educational_qualification VARCHAR(200),
-        ADD COLUMN IF NOT EXISTS date_of_joining          DATE;
+        ADD COLUMN IF NOT EXISTS date_of_joining          DATE,
+        ADD COLUMN IF NOT EXISTS updated_at               TIMESTAMPTZ DEFAULT NOW();
     `);
 
     // ─────────────────────────────────────────────────────────
