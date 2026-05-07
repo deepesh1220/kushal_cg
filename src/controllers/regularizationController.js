@@ -176,7 +176,7 @@ const applyRegularizationWithLocation = async (req, res) => {
 // req.body: { status }
 const approveRegularization = async (req, res) => {
   const reviewer = req.user;
-  const regId    = req.params.id;
+  const regId = req.params.id;
   const { status } = req.body;
 
   if (!['approved', 'rejected'].includes(status)) {
@@ -201,13 +201,13 @@ const approveRegularization = async (req, res) => {
 
     // On approval → upsert attendance_records as 'present' with regularization timestamps
     if (status === 'approved') {
-      const d        = new Date(reg.date);
-      const dateStr  = d.toISOString().split('T')[0];
-      
+      const d = new Date(reg.date);
+      const dateStr = d.toISOString().split('T')[0];
+
       // The check_in_time should be the exact time the VT applied for regularization
       const appliedTime = new Date(reg.created_at);
       const timeStr = appliedTime.toTimeString().split(' ')[0]; // gets HH:MM:SS
-      const checkIn  = `${dateStr} ${timeStr}`;
+      const checkIn = `${dateStr} ${timeStr}`;
 
       await pool.query(`
         INSERT INTO attendance_records (user_id, date, status, check_in_time, check_out_time, remarks, marked_by)
@@ -236,12 +236,12 @@ const getMyRegularizationRequests = async (req, res) => {
   let { status, from_date, to_date, limit, offset, page } = req.query;
 
   try {
-    const parsedLimit  = limit  ? parseInt(limit, 10)  : 10;
-    const parsedPage   = page   ? parseInt(page, 10)   : 1;
+    const parsedLimit = limit ? parseInt(limit, 10) : 10;
+    const parsedPage = page ? parseInt(page, 10) : 1;
     const parsedOffset = offset ? parseInt(offset, 10) : (parsedPage - 1) * parsedLimit;
 
     if (from_date) from_date = parseDateStr(from_date);
-    if (to_date)   to_date   = parseDateStr(to_date);
+    if (to_date) to_date = parseDateStr(to_date);
 
     const regData = await Regularization.findByUser(userId, {
       status, from_date, to_date,
@@ -253,9 +253,9 @@ const getMyRegularizationRequests = async (req, res) => {
       status: true,
       pagination: {
         totalRecords: regData.totalRecords,
-        totalPages:   Math.ceil(regData.totalRecords / parsedLimit),
-        currentPage:  parsedPage,
-        limit:        parsedLimit,
+        totalPages: Math.ceil(regData.totalRecords / parsedLimit),
+        currentPage: parsedPage,
+        limit: parsedLimit,
       },
       data: regData.data,
     });
@@ -264,9 +264,50 @@ const getMyRegularizationRequests = async (req, res) => {
   }
 };
 
-module.exports = { 
-  applyRegularization, 
+// ─── POST /api/regularization/filter ──────────────────────────────────────────
+// Admin / Headmaster gets regularizations by udise_code or user_id via POST body
+// req.body: { udise_code, user_id, status, from_date, to_date, limit, page }
+const getAllRegularizations = async (req, res) => {
+  let { udise_code, user_id, status, from_date, to_date, limit, page } = req.body;
+
+  try {
+    const parsedLimit = limit ? parseInt(limit, 10) : 10;
+    const parsedPage = page ? parseInt(page, 10) : 1;
+    const parsedOffset = (parsedPage - 1) * parsedLimit;
+
+    if (from_date) from_date = parseDateStr(from_date);
+    if (to_date) to_date = parseDateStr(to_date);
+
+    const regData = await Regularization.findAll({
+      udise_code,
+      user_id,
+      status,
+      from_date,
+      to_date,
+      limit: parsedLimit,
+      offset: parsedOffset
+    });
+
+    return res.status(200).json({
+      status: true,
+      pagination: {
+        totalRecords: regData.totalRecords,
+        totalPages: Math.ceil(regData.totalRecords / parsedLimit),
+        currentPage: parsedPage,
+        limit: parsedLimit,
+      },
+      data: regData.data,
+    });
+  } catch (error) {
+    console.error('getAllRegularizations error:', error.message);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+};
+
+module.exports = {
+  applyRegularization,
   applyRegularizationWithLocation,
-  approveRegularization, 
-  getMyRegularizationRequests 
+  approveRegularization,
+  getMyRegularizationRequests,
+  getAllRegularizations
 };

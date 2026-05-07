@@ -6,6 +6,7 @@ const {
   applyRegularizationWithLocation,
   approveRegularization,
   getMyRegularizationRequests,
+  getAllRegularizations,
 } = require('../controllers/regularizationController');
 
 // All regularization routes require authentication
@@ -24,6 +25,10 @@ router.post('/apply-with-location', authorize('leave:request'), applyRegularizat
 router.get('/my', authorize('leave:view_own'), getMyRegularizationRequests);
 
 // ── Admin / Headmaster routes ─────────────────────────────────────────────────
+// Get all regularizations (filtered by udise_code or user_id via POST body)
+// POST /api/regularization/list
+router.post('/list', authorize('leave:approve'), getAllRegularizations);
+
 // Approve or reject a regularization request
 // PATCH /api/regularization/:id/status   body: { status }
 router.patch('/:id/status', authorize('leave:approve'), approveRegularization);
