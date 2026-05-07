@@ -44,24 +44,24 @@ const checkIn = async (req, res) => {
     const udiseCode = vtRecord.rows[0]?.udise_code;
 
     if (udiseCode) {
-      // 1. Verify Distance using mst_schools
-      if (latitude && longitude) {
-        const schoolRecord = await pool.query(`
-          SELECT latitude, longitude
-          FROM mst_schools
-          WHERE udise_sch_code = $1
-          LIMIT 1
-        `, [udiseCode]);
+      // Fetch School Data from mst_schools
+      const schoolRecord = await pool.query(`
+        SELECT latitude, longitude, sch_open_time, sch_close_time, grace_time
+        FROM mst_schools
+        WHERE udise_sch_code = $1
+        LIMIT 1
+      `, [udiseCode]);
 
-        const schoolLat = schoolRecord.rows[0]?.latitude;
-        const schoolLon = schoolRecord.rows[0]?.longitude;
+      const school = schoolRecord.rows[0];
 
-        if (schoolLat && schoolLon) {
+      if (school) {
+        // 1. Verify Distance
+        if (latitude && longitude && school.latitude && school.longitude) {
           const distance = getDistanceInMeters(
             parseFloat(latitude),
             parseFloat(longitude),
-            parseFloat(schoolLat),
-            parseFloat(schoolLon)
+            parseFloat(school.latitude),
+            parseFloat(school.longitude)
           );
 
           if (distance > 300) {
@@ -71,38 +71,45 @@ const checkIn = async (req, res) => {
             });
           }
         }
-      }
 
-      // 2. Verify School Timings from Headmaster
-      const hmRecord = await pool.query(`
-        SELECT school_open_time, school_close_time 
-        FROM users 
-        WHERE udise_code = $1 
-          AND role_id = (SELECT id FROM roles WHERE name = 'headmaster' LIMIT 1)
-        LIMIT 1
-      `, [udiseCode]);
+        // 2. Verify School Timings
+        if (school.sch_open_time) {
+          const now = new Date();
+          const currentMins = now.getHours() * 60 + now.getMinutes();
+          const [openH, openM] = school.sch_open_time.split(':').map(Number);
+          const openTotalMins = openH * 60 + openM;
 
-      const hm = hmRecord.rows[0];
-      if (hm && hm.school_open_time && hm.school_close_time) {
-        const now = new Date();
-        const currentMins = now.getHours() * 60 + now.getMinutes();
-        const [openH, openM] = hm.school_open_time.split(':').map(Number);
-        const [closeH, closeM] = hm.school_close_time.split(':').map(Number);
-        const openTotalMins = openH * 60 + openM;
-        const closeTotalMins = closeH * 60 + closeM;
+          let closeTotalMins = null;
+          if (school.sch_close_time) {
+            const [closeH, closeM] = school.sch_close_time.split(':').map(Number);
+            closeTotalMins = closeH * 60 + closeM;
+          }
 
-        // Allow check-in up to 60 mins early, but block if too early or if after close time
-        if (currentMins < openTotalMins - 60) {
-          return res.status(403).json({
-            status: false,
-            message: `Too early to check in. School opens at ${hm.school_open_time}.`
-          });
-        }
-        if (currentMins > closeTotalMins) {
-          return res.status(403).json({
-            status: false,
-            message: `School is already closed (${hm.school_close_time}). Check-in not allowed.`
-          });
+          const graceMins = school.grace_time ? parseInt(school.grace_time, 10) : 0;
+          const lateCutoffMins = openTotalMins + graceMins;
+
+          // Allow check-in up to 60 mins early
+          if (currentMins < openTotalMins - 60) {
+            return res.status(403).json({
+              status: false,
+              message: `Too early to check in. School opens at ${school.sch_open_time}.`
+            });
+          }
+
+          // Strict restriction: if after grace time, require regularization
+          if (currentMins > lateCutoffMins) {
+            return res.status(403).json({
+              status: false,
+              message: `You are late. School opening time was ${school.sch_open_time} with a grace period of ${graceMins} minutes. Please apply for regularization to mark your attendance.`
+            });
+          }
+
+          if (closeTotalMins && currentMins > closeTotalMins) {
+            return res.status(403).json({
+              status: false,
+              message: `School is already closed (${school.sch_close_time}). Check-in not allowed.`
+            });
+          }
         }
       }
     }
@@ -166,24 +173,24 @@ const checkOut = async (req, res) => {
     const udiseCode = vtRecord.rows[0]?.udise_code;
 
     if (udiseCode) {
-      // 1. Verify Distance using mst_schools
-      if (latitude && longitude) {
-        const schoolRecord = await pool.query(`
-          SELECT latitude, longitude
-          FROM mst_schools
-          WHERE udise_sch_code = $1
-          LIMIT 1
-        `, [udiseCode]);
+      // Fetch School Data from mst_schools
+      const schoolRecord = await pool.query(`
+        SELECT latitude, longitude, sch_open_time
+        FROM mst_schools
+        WHERE udise_sch_code = $1
+        LIMIT 1
+      `, [udiseCode]);
 
-        const schoolLat = schoolRecord.rows[0]?.latitude;
-        const schoolLon = schoolRecord.rows[0]?.longitude;
+      const school = schoolRecord.rows[0];
 
-        if (schoolLat && schoolLon) {
+      if (school) {
+        // 1. Verify Distance
+        if (latitude && longitude && school.latitude && school.longitude) {
           const distance = getDistanceInMeters(
             parseFloat(latitude),
             parseFloat(longitude),
-            parseFloat(schoolLat),
-            parseFloat(schoolLon)
+            parseFloat(school.latitude),
+            parseFloat(school.longitude)
           );
 
           if (distance > 300) {
@@ -193,30 +200,21 @@ const checkOut = async (req, res) => {
             });
           }
         }
-      }
 
-      // 2. Verify School Timings from Headmaster
-      const hmRecord = await pool.query(`
-        SELECT school_open_time, school_close_time 
-        FROM users 
-        WHERE udise_code = $1 
-          AND role_id = (SELECT id FROM roles WHERE name = 'headmaster' LIMIT 1)
-        LIMIT 1
-      `, [udiseCode]);
+        // 2. Verify School Timings
+        if (school.sch_open_time) {
+          const now = new Date();
+          const currentMins = now.getHours() * 60 + now.getMinutes();
+          const [openH, openM] = school.sch_open_time.split(':').map(Number);
+          const openTotalMins = openH * 60 + openM;
 
-      const hm = hmRecord.rows[0];
-      if (hm && hm.school_open_time && hm.school_close_time) {
-        const now = new Date();
-        const currentMins = now.getHours() * 60 + now.getMinutes();
-        const [openH, openM] = hm.school_open_time.split(':').map(Number);
-        const openTotalMins = openH * 60 + openM;
-
-        // Block check-out if it's before the school has even opened
-        if (currentMins < openTotalMins) {
-          return res.status(403).json({
-            status: false,
-            message: `Cannot check-out before school open time (${hm.school_open_time}).`
-          });
+          // Block check-out if it's before the school has even opened
+          if (currentMins < openTotalMins) {
+            return res.status(403).json({
+              status: false,
+              message: `Cannot check-out before school open time (${school.sch_open_time}).`
+            });
+          }
         }
       }
     }
