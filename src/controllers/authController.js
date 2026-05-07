@@ -161,8 +161,15 @@ const register = async (req, res) => {
       password_hash,
       role_id: resolvedRoleId,
       vt_staff_id: vtStaff?.id || null,
-      // For VTP: store their organization name (= vtp_name in vt_staff_details)
-      organization_name: roleName === VTP_ROLE_NAME ? (name || null) : null,
+      // organization_name:
+      //   VT  → vtStaff.vtp_name  (the VTP organisation this VT belongs to, from vt_staff_details)
+      //   VTP → name field (the provider's own org name)
+      //   others → null
+      organization_name: isVt
+        ? (vtStaff?.vtp_name || null)
+        : roleName === VTP_ROLE_NAME
+          ? (name || null)
+          : null,
       udise_code: finalUdise || null,
       profile_photo: profile_photo,
       latitude: latitude ? parseFloat(latitude) : null,
