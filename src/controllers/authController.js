@@ -652,4 +652,15 @@ const loginVT = async (req, res) => {
   }
 };
 
-module.exports = { register, login, loginVT, refreshToken, logout, getMe };
+// ─── GET /api/auth/roles ──────────────────────────────────────────────────────
+const getRoles = async (req, res) => {
+  try {
+    const roles = await Role.findAll();
+    return res.status(200).json({ status: true, data: roles });
+  } catch (error) {
+    console.error('getRoles error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error while fetching roles.' });
+  }
+};
+
+module.exports = { register, login, loginVT, refreshToken, logout, getMe, getRoles };
