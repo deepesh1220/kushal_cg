@@ -5,7 +5,8 @@ const Role = {
   async findAll() {
     const result = await pool.query(`
       SELECT id, name, description, is_active, created_at
-      FROM roles
+      FROM roles 
+      WHERE id != 1
       ORDER BY id ASC
     `);
     return result.rows;
