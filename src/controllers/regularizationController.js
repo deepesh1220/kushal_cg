@@ -112,20 +112,22 @@ const approveRegularization = async (req, res) => {
     if (status === 'approved') {
       const d        = new Date(reg.date);
       const dateStr  = d.toISOString().split('T')[0];
-      const checkIn  = `${dateStr} 10:00:00`;
-      const checkOut = `${dateStr} 17:00:00`;
+      
+      // The check_in_time should be the exact time the VT applied for regularization
+      const appliedTime = new Date(reg.created_at);
+      const timeStr = appliedTime.toTimeString().split(' ')[0]; // gets HH:MM:SS
+      const checkIn  = `${dateStr} ${timeStr}`;
 
       await pool.query(`
         INSERT INTO attendance_records (user_id, date, status, check_in_time, check_out_time, remarks, marked_by)
-        VALUES ($1, $2, 'present', $4, $5, 'Attendance Regularized by Headmaster', $3)
+        VALUES ($1, $2, 'present', $4, NULL, 'Attendance Regularized by Headmaster', $3)
         ON CONFLICT (user_id, date)
         DO UPDATE SET
           status         = 'present',
           check_in_time  = COALESCE(attendance_records.check_in_time, $4),
-          check_out_time = COALESCE(attendance_records.check_out_time, $5),
           remarks        = 'Attendance Regularized by Headmaster',
           updated_at     = NOW()
-      `, [reg.user_id, dateStr, reviewer.id, checkIn, checkOut]);
+      `, [reg.user_id, dateStr, reviewer.id, checkIn]);
     }
 
     return res.status(200).json({ status: true, message: `Regularization request successfully ${status}.`, data: updated });
