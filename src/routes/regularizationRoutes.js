@@ -3,6 +3,7 @@ const router  = express.Router();
 const { authenticate, authorize } = require('../middleware/authMiddleware');
 const {
   applyRegularization,
+  applyRegularizationWithLocation,
   approveRegularization,
   getMyRegularizationRequests,
 } = require('../controllers/regularizationController');
@@ -14,6 +15,9 @@ router.use(authenticate);
 // Apply for an attendance regularization
 // POST /api/regularization/apply   body: { date, reason }
 router.post('/apply', authorize('leave:request'), applyRegularization);
+
+// POST /api/regularization/apply-with-location   body: { date, reason, latitude, longitude }
+router.post('/apply-with-location', authorize('leave:request'), applyRegularizationWithLocation);
 
 // Get my own regularization requests
 // GET /api/regularization/my   query: { status, from_date, to_date, page, limit }
