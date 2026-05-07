@@ -5,7 +5,8 @@ const Role = {
   async findAll() {
     const result = await pool.query(`
       SELECT id, name, description, is_active, created_at
-      FROM roles
+      FROM roles 
+      WHERE name not in ('super_admin','vocational_teacher')
       ORDER BY id ASC
     `);
     return result.rows;

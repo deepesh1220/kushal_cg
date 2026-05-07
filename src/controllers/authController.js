@@ -6,6 +6,7 @@ const VtStaffDetail = require('../models/VtStaffDetail');
 const Attendance = require('../models/Attendance');
 const Headmaster = require('../models/Headmaster');
 const Deo = require('../models/Deo');
+const Vtp = require('../models/Vtp');
 const {
   generateAccessToken,
   generateRefreshToken,
@@ -142,10 +143,11 @@ const register = async (req, res) => {
     // Hash password
     const password_hash = await bcrypt.hash(password, 12);
 
-    // ── Determine is_active and vt_approval_status ──────────────────────────
-    // VTs start as inactive + pending until headmaster approves
+    // ── Determine is_active and approval statuses ───────────────────────────
+    // VTs start as inactive + pending on BOTH layers (HM + VTP) until both approve
     const isVt = roleName === VT_ROLE_NAME;
     const vtApprovalStatus = isVt ? 'pending' : null;
+    const vtpApprovalStatus = isVt ? 'pending' : null;
     const isActiveOnRegister = isVt ? false : true;
 
     // ── Extract photo if uploaded ─────────────────────────────────────────────
@@ -168,13 +170,14 @@ const register = async (req, res) => {
       school_open_time: roleName === 'headmaster' ? school_open_time : null,
       school_close_time: roleName === 'headmaster' ? school_close_time : null,
       vt_approval_status: vtApprovalStatus,
+      vtp_approval_status: vtpApprovalStatus,
       is_active: isActiveOnRegister,
     });
 
     return res.status(201).json({
       status: true,
       message: isVt
-        ? 'Registration submitted. Awaiting approval from your school Headmaster.'
+        ? 'Registration submitted. Awaiting approval from your school Headmaster and VTP.'
         : 'Account created successfully.',
       data: {
         id: user.id,
@@ -192,6 +195,7 @@ const register = async (req, res) => {
           close_time: user.school_close_time
         } : null,
         vt_approval_status: user.vt_approval_status,
+        vtp_approval_status: user.vtp_approval_status,
         vt_details: vtStaff ? {
           district: vtStaff.district_name,
           block: vtStaff.block_name,
@@ -384,6 +388,103 @@ const login = async (req, res) => {
             udise_code: user.udise_code, profile_photo: user.profile_photo,
             vt_approval_status: user.vt_approval_status,
             permissions,
+          },
+          tokens: { access_token: accessToken, refresh_token: refreshToken },
+        },
+      });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // VTP (vocational_teacher_provider)  →  email = email/mobile, password = password
+    // First checks users table, then falls back to vtp table.
+    // Auto-provisions a users row on first VTP login for JWT compatibility.
+    // ══════════════════════════════════════════════════════════════════════════
+    if (roleName === 'vocational_teacher_provider') {
+      const inputIdentifier = email;   // could be email or mobile number
+      console.log(inputIdentifier);
+
+      // ── Step 1: Try users table first (returning VTP who already has a user row) ──
+      let user = await User.findByEmail(inputIdentifier);
+      if (!user && /^\d+$/.test(inputIdentifier)) {
+        user = await User.findByPhone(inputIdentifier);
+      }
+
+      if (user && String(user.role_id) === String(role_id)) {
+        // User exists in users table with matching VTP role — standard bcrypt check
+        if (!user.is_active) {
+          return res.status(403).json({ status: false, message: 'Your account has been deactivated. Contact administrator.' });
+        }
+
+        const isMatch = await bcrypt.compare(password, user.password_hash);
+        if (!isMatch) {
+          return res.status(401).json({ status: false, message: 'Invalid credentials.' });
+        }
+
+        const { accessToken, refreshToken, permissions } = await issueTokens(user);
+        return res.status(200).json({
+          status: true,
+          message: 'VTP login successful.',
+          data: {
+            user: {
+              id: user.id, name: user.name, email: user.email,
+              phone: user.phone, role: 'vtp', role_id: user.role_id,
+              profile_photo: user.profile_photo, permissions,
+            },
+            tokens: { access_token: accessToken, refresh_token: refreshToken },
+          },
+        });
+      }
+
+      // ── Step 2: Fall back to vtp table ─────────────────────────────────────
+      const vtpRecord = await Vtp.findByEmailOrMobile(inputIdentifier);
+      if (!vtpRecord) {
+        return res.status(401).json({ status: false, message: 'Invalid credentials.' });
+      }
+
+      if (vtpRecord.status !== 'active') {
+        return res.status(403).json({ status: false, message: 'Your VTP account is inactive. Contact administrator.' });
+      }
+
+      // ── First-login auth: vtp table has no password column, so password = mobile ──
+      // (same pattern used for Headmaster & DEO master tables)
+      if (String(password) !== String(vtpRecord.mobile)) {
+        return res.status(401).json({ status: false, message: 'Invalid credentials. For first login, use your registered mobile number as password.' });
+      }
+
+      // ── Auto-provision user row for JWT/token compatibility ───────────────
+      const vtpRole = await Role.findByName('vocational_teacher_provider');
+      const password_hash = await bcrypt.hash(password, 12);
+      let newUser;
+      try {
+        newUser = await User.create({
+          name: vtpRecord.vc_name,
+          email: vtpRecord.email,
+          phone: vtpRecord.mobile,
+          password_hash,
+          role_id: vtpRole ? vtpRole.id : null,
+          organization_name: vtpRecord.vtp_name,
+          is_active: true,
+        });
+      } catch (dupErr) {
+        // If user row already exists (race condition / duplicate), just fetch it
+        newUser = await User.findByEmail(vtpRecord.email);
+        if (!newUser) newUser = await User.findByPhone(vtpRecord.mobile);
+      }
+
+      user = await User.findById(newUser.id);
+      const { accessToken, refreshToken, permissions } = await issueTokens(user);
+      return res.status(200).json({
+        status: true,
+        message: 'VTP login successful.',
+        data: {
+          user: {
+            id: user.id, name: user.name, email: user.email,
+            phone: user.phone, role: 'vtp', role_id: user.role_id,
+            profile_photo: user.profile_photo, permissions,
+          },
+          vtp_details: {
+            vtp_name: vtpRecord.vtp_name,
+            coordinator_name: vtpRecord.vc_name,
           },
           tokens: { access_token: accessToken, refresh_token: refreshToken },
         },
@@ -587,7 +688,7 @@ const loginVT = async (req, res) => {
       return res.status(403).json({ status: false, message: 'This endpoint is for Vocational Teachers only.' });
     }
 
-    // Approval gate
+    // ── VT approval gate (Principal/HM layer) ──────────────────────────────────
     if (user.vt_approval_status === 'pending') {
       return res.status(403).json({
         status: false,
@@ -595,6 +696,7 @@ const loginVT = async (req, res) => {
         message: 'Your registration is pending approval from your school Headmaster. Please wait.',
       });
     }
+
     if (user.vt_approval_status === 'rejected') {
       return res.status(403).json({
         status: false,
@@ -602,6 +704,24 @@ const loginVT = async (req, res) => {
         message: 'Your registration was rejected by the Headmaster. Contact your school or administrator.',
       });
     }
+    // ── VTP approval gate (second layer) ──────────────────────────────────────
+    if (user.vtp_approval_status === 'pending') {
+      return res.status(403).json({
+        status: false,
+        code: 'VTP_PENDING_APPROVAL',
+        message: 'Your registration is pending approval from your VTP. Please wait.',
+      });
+    }
+
+    if (user.vtp_approval_status === 'rejected') {
+      return res.status(403).json({
+        status: false,
+        code: 'VTP_REJECTED',
+        message: 'Your registration was rejected by your VTP. Contact your VTP or administrator.',
+      });
+    }
+
+
     if (!user.is_active) {
       return res.status(403).json({ status: false, message: 'Your account has been deactivated. Contact administrator.' });
     }
@@ -652,4 +772,15 @@ const loginVT = async (req, res) => {
   }
 };
 
-module.exports = { register, login, loginVT, refreshToken, logout, getMe };
+// ─── GET /api/auth/roles ──────────────────────────────────────────────────────
+const getRoles = async (req, res) => {
+  try {
+    const roles = await Role.findAll();
+    return res.status(200).json({ status: true, data: roles });
+  } catch (error) {
+    console.error('getRoles error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error while fetching roles.' });
+  }
+};
+
+module.exports = { register, login, loginVT, refreshToken, logout, getMe, getRoles };

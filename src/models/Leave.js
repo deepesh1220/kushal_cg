@@ -361,8 +361,6 @@ class Leave {
   }
 
 
-
-
   static async getAttendanceReport(userId, month) {
     if (!month) {
       throw new Error("Month is required (YYYY-MM)");

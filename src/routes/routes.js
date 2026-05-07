@@ -16,6 +16,8 @@ const attendanceRoutes = require('./attendanceRoutes');
 
 const vtRoutes = require('./vtRoutes');
 
+const vtpApprovalRoutes = require('./vtpApprovalRoutes');
+
 const leaveRoutes = require('./leaveRoutes');
 
 const leaveBalanceRoutes = require('./leaveBalanceRoutes');
@@ -44,6 +46,8 @@ router.use('/permissions', permissionRoutes);
 router.use('/attendance', attendanceRoutes);
 
 router.use('/vt', vtRoutes);
+
+router.use('/vtp', vtpApprovalRoutes);
 
 router.use('/headmaster', headmasterRoutes);
 
