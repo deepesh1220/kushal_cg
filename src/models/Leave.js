@@ -375,6 +375,21 @@ class Leave {
 
     const today = dayjs();
 
+    const userResult = await pool.query(
+      `
+  SELECT id, name, email, udise_code
+  FROM users
+  WHERE id = $1
+  `,
+      [userId]
+    );
+
+    if (userResult.rows.length === 0) {
+      throw new Error("User not found");
+    }
+
+    const user = userResult.rows[0];
+
     // 🔴 Prevent future month
     if (startDate.isAfter(today, "month")) {
       throw new Error("Future month not allowed");
@@ -434,12 +449,15 @@ class Leave {
     const attendanceMap = {};
 
     for (let day = 1; day <= lastDay; day++) {
-      const date = dayjs(`${month}-${day}`).format("YYYY-MM-DD");
+      const currentDate = dayjs(`${month}-${String(day).padStart(2, "0")}`);
+      const date = currentDate.format("YYYY-MM-DD");
+
+      const dayOfWeek = currentDate.day(); // 0 = Sunday, 6 = Saturday
 
       if (dayOfWeek === 6) {
-        attendanceMap[day] = "SA";
+        attendanceMap[day] = "SA"; // Saturday
       } else if (dayOfWeek === 0) {
-        attendanceMap[day] = "SU";
+        attendanceMap[day] = "SU"; // Sunday
       } else if (attendanceSet.has(date)) {
         attendanceMap[day] = "P";
       } else if (leaveSet.has(date)) {
@@ -451,6 +469,9 @@ class Leave {
 
     return {
       userId,
+      employeeName: user.name,
+      employeeEmail: user.email,
+      udiseCode: user.udise_code,
       month,
       totalDays: lastDay,
       attendance: attendanceMap,
