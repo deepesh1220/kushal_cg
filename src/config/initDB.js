@@ -105,6 +105,8 @@ const initDB = async () => {
         school_close_time  TIME,
         vt_approval_status VARCHAR(20)  DEFAULT NULL
                              CHECK (vt_approval_status IN ('pending','accepted','rejected')),
+        vtp_approval_status VARCHAR(20) DEFAULT NULL
+                             CHECK (vtp_approval_status IN ('pending','accepted','rejected')),
         is_active          BOOLEAN      DEFAULT TRUE,
         profile_photo      TEXT,
         created_at         TIMESTAMPTZ  DEFAULT NOW(),
@@ -425,6 +427,54 @@ const initDB = async () => {
         updated_at   TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE (user_id, date)
       );
+      `);
+
+    // ─────────────────────────────────────────────────────────
+    // TABLE: vtp
+    // Vocational Training Provider master table.
+    // VTP users can log in via /auth/web/login with role_id for
+    // 'vocational_teacher_provider'.
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS vtp (
+        id                           SERIAL       PRIMARY KEY,
+        vc_name  VARCHAR(200) NOT NULL,
+        vtp_name                     VARCHAR(200) NOT NULL,
+        mobile                BIGINT       UNIQUE NOT NULL,
+        email                        VARCHAR(200) UNIQUE NOT NULL,
+        status                       VARCHAR(20)  DEFAULT 'active'
+                                       CHECK (status IN ('active','inactive')),
+        created_at                   TIMESTAMPTZ  DEFAULT NOW(),
+        updated_at                   TIMESTAMPTZ  DEFAULT NOW()
+      );
+    `);
+
+
+    // Indexes for VTP table
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_vtp_email   ON vtp (email);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_vtp_mobile  ON vtp (mobile);`);
+
+    // ALTER users: add vtp_approval_status (dual-approval layer)
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS vtp_approval_status VARCHAR(20) DEFAULT NULL;
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_vtp_approval_status_check;
+      ALTER TABLE users ADD CONSTRAINT users_vtp_approval_status_check
+        CHECK (vtp_approval_status IS NULL OR vtp_approval_status IN ('pending','accepted','rejected'));
+      -- Backfill: any existing VT (vt_approval_status NOT NULL) without vtp_approval_status starts as 'pending'
+      UPDATE users SET vtp_approval_status = 'pending'
+        WHERE vt_approval_status IS NOT NULL AND vtp_approval_status IS NULL;
+    `);
+
+    // ─────────────────────────────────────────────────────────
+    // ALTER users: audit timestamps for each approval layer
+    //   principal_updated_at  → set whenever vt_approval_status changes  (HM/Principal layer)
+    //   vtp_updated_at        → set whenever vtp_approval_status changes  (VTP layer)
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS principal_updated_at TIMESTAMPTZ DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS vtp_updated_at       TIMESTAMPTZ DEFAULT NULL;
     `);
 
     await client.query('COMMIT');
@@ -525,7 +575,8 @@ const seedDefaults = async (client) => {
     // ── Permissions management ───────────────────────────────────────────────
     { name: 'permissions:manage', module: 'permissions', action: 'manage', description: 'Manage system permissions' },
     // ── VT Approval ─────────────────────────────────────────────────────────
-    { name: 'vt:approve', module: 'vt', action: 'approve', description: 'Approve or reject Vocational Teacher registrations' },
+    { name: 'vt:approve', module: 'vt', action: 'approve', description: 'Approve or reject Vocational Teacher registrations (Principal/HM layer)' },
+    { name: 'vt:approve_vtp', module: 'vt', action: 'approve_vtp', description: 'Approve or reject Vocational Teacher registrations (VTP layer)' },
   ];
 
   for (const perm of defaultPermissions) {
@@ -590,12 +641,13 @@ const seedDefaults = async (client) => {
   // ── 2. admin also gets vt:approve ────────────────────────────────────────────
   await assignPerms('admin', ['vt:approve']);
 
-  // ── 5. vocational_teacher_provider → view & monitor their teachers ────────────
+  // ── 5. vocational_teacher_provider → view & monitor their teachers + VTP approval ──
   await assignPerms('vocational_teacher_provider', [
     'users:view',
     'attendance:view_teachers',
     'attendance:report',
     'leave:view_all',
+    'vt:approve_vtp',
   ]);
 
   // ── 6. vocational_teacher → mark own attendance & request leave ───────────────
@@ -606,7 +658,6 @@ const seedDefaults = async (client) => {
     'leave:view_own',
     'leave:view_balance_own',
   ]);
-
   console.log('✅ Default roles & permissions seeded');
 };
 

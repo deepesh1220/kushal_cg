@@ -7,7 +7,8 @@ const User = {
       SELECT
         u.id, u.name, u.email, u.phone,
         u.password_hash, u.is_active, u.profile_photo,
-        u.vt_approval_status, u.udise_code, u.organization_name,
+        u.vt_approval_status, u.vtp_approval_status,
+        u.udise_code, u.organization_name,
         u.latitude, u.longitude, u.school_open_time, u.school_close_time,
         r.id   AS role_id,
         r.name AS role_name
@@ -24,7 +25,8 @@ const User = {
       SELECT
         u.id, u.name, u.email, u.phone,
         u.password_hash, u.is_active, u.profile_photo,
-        u.vt_approval_status, u.udise_code, u.organization_name,
+        u.vt_approval_status, u.vtp_approval_status,
+        u.udise_code, u.organization_name,
         u.latitude, u.longitude, u.school_open_time, u.school_close_time,
         r.id   AS role_id,
         r.name AS role_name
@@ -41,7 +43,8 @@ const User = {
       SELECT
         u.id, u.name, u.email, u.phone,
         u.is_active, u.profile_photo,
-        u.vt_approval_status, u.udise_code, u.organization_name,
+        u.vt_approval_status, u.vtp_approval_status,
+        u.udise_code, u.organization_name,
         u.latitude, u.longitude, u.school_open_time, u.school_close_time,
         r.id   AS role_id,
         r.name AS role_name
@@ -69,13 +72,13 @@ const User = {
   },
 
   // ─── Create a new user ──────────────────────────────────────────────────────
-  async create({ name, email, phone, password_hash, role_id, vt_staff_id = null, organization_name = null, udise_code = null, profile_photo = null, latitude = null, longitude = null, school_open_time = null, school_close_time = null, vt_approval_status = null, is_active = true }) {
+  async create({ name, email, phone, password_hash, role_id, vt_staff_id = null, organization_name = null, udise_code = null, profile_photo = null, latitude = null, longitude = null, school_open_time = null, school_close_time = null, vt_approval_status = null, vtp_approval_status = null, is_active = true }) {
     const result = await pool.query(`
       INSERT INTO users
-        (name, email, phone, password_hash, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, is_active)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-      RETURNING id, name, email, phone, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, is_active, created_at
-    `, [name, email, phone || null, password_hash, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, is_active]);
+        (name, email, phone, password_hash, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, vtp_approval_status, is_active)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      RETURNING id, name, email, phone, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, vtp_approval_status, is_active, created_at
+    `, [name, email, phone || null, password_hash, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, vtp_approval_status, is_active]);
     return result.rows[0];
   },
 
@@ -104,21 +107,45 @@ const User = {
     return result.rows.map((r) => r.permission);
   },
 
-  // ─── Update approval status for VT ──────────────────────────────────────────
-  // status: 'accepted' → also sets is_active = true
-  // status: 'rejected' → keeps is_active = false
+  // ─── Update PRINCIPAL/HM approval status for a VT ──────────────────────────
+  // is_active is true ONLY when BOTH layers (vt + vtp) are 'accepted'
   async updateApprovalStatus(userId, status, reviewedBy) {
-    const isActive = status === 'accepted';
     const result = await pool.query(`
       UPDATE users
       SET
-        vt_approval_status = $1,
-        is_active          = $2,
-        updated_at         = NOW()
-      WHERE id = $3
+        vt_approval_status = $1::varchar,
+        is_active          = (
+          $1::varchar = 'accepted'
+          AND COALESCE(vtp_approval_status, 'pending') = 'accepted'
+        ),
+        principal_updated_at = NOW(),
+        updated_at           = NOW()
+      WHERE id = $2
         AND vt_approval_status IS NOT NULL
-      RETURNING id, name, email, phone, vt_approval_status, is_active
-    `, [status, isActive, userId]);
+      RETURNING id, name, email, phone, vt_approval_status, vtp_approval_status,
+                is_active, principal_updated_at, vtp_updated_at
+    `, [status, userId]);
+    return result.rows[0] || null;
+  },
+
+  // ─── Update VTP approval status for a VT ───────────────────────────────────
+  // is_active is true ONLY when BOTH layers (vt + vtp) are 'accepted'
+  async updateVtpApprovalStatus(userId, status, reviewedBy) {
+    const result = await pool.query(`
+      UPDATE users
+      SET
+        vtp_approval_status = $1::varchar,
+        is_active           = (
+          $1::varchar = 'accepted'
+          AND COALESCE(vt_approval_status, 'pending') = 'accepted'
+        ),
+        vtp_updated_at = NOW(),
+        updated_at     = NOW()
+      WHERE id = $2
+        AND vtp_approval_status IS NOT NULL
+      RETURNING id, name, email, phone, vt_approval_status, vtp_approval_status,
+                is_active, principal_updated_at, vtp_updated_at
+    `, [status, userId]);
     return result.rows[0] || null;
   },
 
@@ -128,7 +155,7 @@ const User = {
     const result = await pool.query(`
       SELECT
         u.id, u.name, u.email, u.phone,
-        u.vt_approval_status, u.created_at,
+        u.vt_approval_status, u.vtp_approval_status, u.is_active, u.created_at,
         v.district_name, v.block_name, v.school_name,
         v.vtp_name, v.trade, v.vt_aadhar, v.udise_code
       FROM users u
@@ -139,12 +166,29 @@ const User = {
     return result.rows;
   },
 
+  // ─── Get VTs assigned to a specific VTP (by vtp_name) ──────────────────────
+  // Used by VTP user to see VTs they own (vt_staff_details.vtp_name = vtp.organization_name)
+  async findVtsByVtpName(vtpName) {
+    const result = await pool.query(`
+      SELECT
+        u.id, u.name, u.email, u.phone,
+        u.vt_approval_status, u.vtp_approval_status, u.is_active, u.created_at,
+        v.district_name, v.block_name, v.school_name,
+        v.vtp_name, v.trade, v.vt_aadhar, v.udise_code
+      FROM users u
+      JOIN vt_staff_details v ON v.id = u.vt_staff_id
+      WHERE v.vtp_name = $1
+      ORDER BY u.created_at DESC
+    `, [vtpName]);
+    return result.rows;
+  },
+
   // ─── Get all VTs with approval status (admin view) ──────────────────────────
   async findAllVtsByStatus(status = null) {
     let query = `
       SELECT
         u.id, u.name, u.email, u.phone,
-        u.vt_approval_status, u.is_active, u.created_at,
+        u.vt_approval_status, u.vtp_approval_status, u.is_active, u.created_at,
         v.district_name, v.block_name, v.school_name,
         v.vtp_name, v.trade, v.udise_code
       FROM users u
