@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const Leave = require('../models/Leave');
 const { pool } = require('../config/db');
 
 const VTP_ROLE_NAME = 'vocational_teacher_provider';
@@ -46,6 +47,36 @@ const _validateVtBelongsToVtp = async (vtUserId, vtpUser) => {
         status: false,
         message: 'You are not authorized to approve VTs from a different VTP organization.',
       },
+    };
+  }
+
+  return null;
+};
+
+// ─── Internal helper for Leave ────────────────────────────────────────────────
+const _validateLeaveBelongsToVtp = async (leaveId, vtpUser) => {
+  if (['super_admin', 'admin'].includes(vtpUser.role_name)) return null;
+
+  const result = await pool.query(`
+    SELECT v.vtp_name
+    FROM leave_requests l
+    JOIN users u ON l.user_id = u.id
+    JOIN vt_staff_details v ON v.id = u.vt_staff_id
+    WHERE l.id = $1::integer
+  `, [leaveId]);
+
+  if (!result.rows.length) {
+    return {
+      status: 404,
+      body: { status: false, message: 'Leave request not found.' },
+    };
+  }
+
+  const vtpName = vtpUser.organization_name;
+  if (String(result.rows[0].vtp_name).trim() !== String(vtpName).trim()) {
+    return {
+      status: 403,
+      body: { status: false, message: 'You are not authorized to approve leaves for this VT.' },
     };
   }
 
@@ -171,4 +202,114 @@ const rejectVtByVtp = async (req, res) => {
   }
 };
 
-module.exports = { getVtpScopedVts, approveVtByVtp, rejectVtByVtp };
+// ─── GET /api/vtp/leaves ──────────────────────────────────────────────────────
+// VTP views leave requests scoped to their organization
+const getVtpScopedLeaves = async (req, res) => {
+  try {
+    const vtpUser = req.user;
+    const { status, from_date, to_date, teacher_code, page, limit } = req.query;
+
+    if (!['super_admin', 'admin'].includes(vtpUser.role_name)) {
+      if (vtpUser.role_name !== VTP_ROLE_NAME) {
+        return res.status(403).json({ status: false, message: 'Only VTP users can access this resource.' });
+      }
+      if (!vtpUser.organization_name) {
+        return res.status(400).json({
+          status: false,
+          message: 'Your account is not linked to a VTP organization name. Contact administrator.',
+        });
+      }
+    }
+
+    const vtpName = ['super_admin', 'admin'].includes(vtpUser.role_name) ? null : vtpUser.organization_name;
+
+    const result = await Leave.getVtpLeaves(vtpName, {
+      status,
+      from_date,
+      to_date,
+      teacher_code,
+      page,
+      limit,
+    });
+
+    return res.status(200).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    console.error('getVtpScopedLeaves error:', error.message);
+    return res.status(500).json({ status: 'error', message: error.message });
+  }
+};
+
+// ─── Leave Approval by VTP ───────────────────────────────────────────────────
+
+/**
+ * Approve a leave request by VTP
+ * PATCH /api/vtp/leave/:leaveId/approve
+ */
+const approveLeaveByVtp = async (req, res) => {
+  const { leaveId } = req.params;
+  const parsedLeaveId = parseInt(leaveId, 10);
+
+  try {
+    const validationError = await _validateLeaveBelongsToVtp(parsedLeaveId, req.user);
+    if (validationError) return res.status(validationError.status).json(validationError.body);
+
+    const updated = await Leave.updateVtpStatus(parsedLeaveId, { status: 'approved', reviewerId: req.user.id });
+
+    if (!updated) {
+      return res.status(404).json({ status: false, message: 'Leave request not found.' });
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: updated.leave_approved
+        ? 'Leave request fully approved (Principal + VTP).'
+        : 'Leave request approved by VTP. Awaiting Principal approval.',
+      data: updated,
+    });
+  } catch (error) {
+    console.error('approveLeaveByVtp error:', error.message);
+    return res.status(500).json({ status: 'error', message: error.message });
+  }
+};
+
+/**
+ * Reject a leave request by VTP
+ * PATCH /api/vtp/leave/:leaveId/reject
+ */
+const rejectLeaveByVtp = async (req, res) => {
+  const { leaveId } = req.params;
+  const parsedLeaveId = parseInt(leaveId, 10);
+
+  try {
+    const validationError = await _validateLeaveBelongsToVtp(parsedLeaveId, req.user);
+    if (validationError) return res.status(validationError.status).json(validationError.body);
+
+    const updated = await Leave.updateVtpStatus(parsedLeaveId, { status: 'rejected', reviewerId: req.user.id });
+
+    if (!updated) {
+      return res.status(404).json({ status: false, message: 'Leave request not found.' });
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: 'Leave request rejected by VTP.',
+      data: updated,
+    });
+  } catch (error) {
+    console.error('rejectLeaveByVtp error:', error.message);
+    return res.status(500).json({ status: 'error', message: error.message });
+  }
+};
+
+module.exports = {
+  getVtpScopedVts,
+  approveVtByVtp,
+  rejectVtByVtp,
+  getVtpScopedLeaves,
+  approveLeaveByVtp,
+  rejectLeaveByVtp
+};
+
