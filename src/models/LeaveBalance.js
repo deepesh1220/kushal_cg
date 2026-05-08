@@ -387,6 +387,64 @@ class LeaveBalance {
     return result.rows;
   }
 
+  // ─── Get All Teachers' Leave Balances by VTP Name ───────────────────────
+  static async getBalancesByVtpName(vtpName, year = new Date().getFullYear()) {
+    const result = await pool.query(`
+      SELECT
+        u.id                                             AS user_id,
+        u.name                                           AS teacher_name,
+        u.email,
+        u.phone,
+        v.vt_name,
+        v.trade,
+        v.udise_code,
+        v.school_name,
+
+        -- Leave balance (may be NULL if never credited — show zeros)
+        COALESCE(lb.opening_balance,   0) AS opening_balance,
+        COALESCE(lb.total_earned,      0) AS total_earned,
+        COALESCE(lb.total_used,        0) AS total_used,
+        COALESCE(lb.remaining_balance, 0) AS remaining_balance,
+        COALESCE(lb.carried_forward,   0) AS carried_forward,
+        COALESCE(lb.closing_balance,   0) AS closing_balance,
+        lb.year,
+        lb.updated_at                                    AS balance_updated_at,
+
+        -- Leave request counts
+        COUNT(lr.id)                                     AS total_leave_requests,
+        COUNT(lr.id) FILTER (WHERE lr.status = 'pending')  AS pending_leaves,
+        COUNT(lr.id) FILTER (WHERE lr.status = 'approved') AS approved_leaves,
+        COUNT(lr.id) FILTER (WHERE lr.status = 'rejected') AS rejected_leaves,
+        MAX(lr.from_date)                                AS last_leave_date,
+        (
+          SELECT lr2.leave_type FROM leave_requests lr2
+          WHERE lr2.user_id = u.id
+          ORDER BY lr2.created_at DESC LIMIT 1
+        )                                                AS last_leave_type
+
+      FROM users u
+      JOIN roles r               ON u.role_id = r.id
+      JOIN vt_staff_details v    ON v.id = u.vt_staff_id
+      LEFT JOIN leave_balance lb ON lb.user_id = u.id AND lb.year = $2
+      LEFT JOIN leave_requests lr ON lr.user_id = u.id
+
+      WHERE TRIM(v.vtp_name) = TRIM($1)
+        AND r.name = 'vocational_teacher'
+        AND u.is_active = true
+
+      GROUP BY
+        u.id, u.name, u.email, u.phone,
+        v.vt_name, v.trade, v.udise_code, v.school_name,
+        lb.opening_balance, lb.total_earned, lb.total_used,
+        lb.remaining_balance, lb.carried_forward, lb.closing_balance,
+        lb.year, lb.updated_at
+
+      ORDER BY u.name ASC
+    `, [vtpName, year]);
+
+    return result.rows;
+  }
+
   // ─── Get All VTs Without Leave Balance (for initial setup) ──────────────────
   static async getUsersWithoutBalance(year = new Date().getFullYear()) {
     const result = await pool.query(`
@@ -576,6 +634,29 @@ class LeaveBalance {
         AND r.name = 'vocational_teacher'
         AND u.is_active = true
     `, [udiseCode, year]);
+
+    return result.rows[0];
+  }
+
+  // ─── Get Leave Balance Summary for VTP Dashboard ──────────────────────────────
+  static async getBalanceSummaryByVtpName(vtpName, year = new Date().getFullYear()) {
+    const result = await pool.query(`
+      SELECT
+        COUNT(u.id)                                                              AS total_teachers,
+        COUNT(u.id) FILTER (WHERE COALESCE(lb.remaining_balance,0) >= 10)       AS healthy_balance,
+        COUNT(u.id) FILTER (WHERE COALESCE(lb.remaining_balance,0) < 5)         AS low_balance,
+        COUNT(u.id) FILTER (WHERE COALESCE(lb.remaining_balance,0) = 0)         AS zero_balance,
+        ROUND(AVG(COALESCE(lb.remaining_balance, 0)), 2)                        AS avg_balance,
+        COALESCE(SUM(lb.total_earned), 0)                                       AS total_earned_school,
+        COALESCE(SUM(lb.total_used), 0)                                         AS total_used_school
+      FROM users u
+      JOIN roles r             ON u.role_id = r.id
+      JOIN vt_staff_details v  ON v.id = u.vt_staff_id
+      LEFT JOIN leave_balance lb ON lb.user_id = u.id AND lb.year = $2
+      WHERE TRIM(v.vtp_name) = TRIM($1)
+        AND r.name = 'vocational_teacher'
+        AND u.is_active = true
+    `, [vtpName, year]);
 
     return result.rows[0];
   }

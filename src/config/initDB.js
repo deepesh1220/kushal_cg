@@ -489,10 +489,19 @@ const initDB = async () => {
     //   principal_updated_at  → set whenever vt_approval_status changes  (HM/Principal layer)
     //   vtp_updated_at        → set whenever vtp_approval_status changes  (VTP layer)
     // ─────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────
+    // ALTER leave_requests: add dual-approval layer
+    // ─────────────────────────────────────────────────────────
     await client.query(`
-      ALTER TABLE users
+      ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS vtp_status VARCHAR(20) DEFAULT 'pending';
+      ALTER TABLE leave_requests DROP CONSTRAINT IF EXISTS leave_requests_vtp_status_check;
+      ALTER TABLE leave_requests ADD CONSTRAINT leave_requests_vtp_status_check
+        CHECK (vtp_status IN ('pending','approved','rejected'));
+
+      ALTER TABLE leave_requests
         ADD COLUMN IF NOT EXISTS principal_updated_at TIMESTAMPTZ DEFAULT NULL,
-        ADD COLUMN IF NOT EXISTS vtp_updated_at       TIMESTAMPTZ DEFAULT NULL;
+        ADD COLUMN IF NOT EXISTS vtp_updated_at       TIMESTAMPTZ DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS leave_approved       BOOLEAN DEFAULT FALSE;
     `);
 
     await client.query('COMMIT');
@@ -665,6 +674,7 @@ const seedDefaults = async (client) => {
     'attendance:view_teachers',
     'attendance:report',
     'leave:view_all',
+    'leave:view_balance_all',
     'vt:approve_vtp',
   ]);
 
