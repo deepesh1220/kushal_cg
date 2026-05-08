@@ -30,6 +30,7 @@ const holidayRoutes = require('./holidayRoutes');
 
 const reportRoutes = require('./reportRoutes');
 const superAdminRoutes = require('./superAdminRoutes');
+const adminRoutes = require('./adminRoutes');
 const onDutyRoutes = require('./onDutyRoutes');
 const regularizationRoutes = require('./regularizationRoutes');
 
@@ -61,6 +62,7 @@ router.use('/holidays', holidayRoutes);
 
 router.use('/reports', reportRoutes);
 router.use('/super-admin', superAdminRoutes);
+router.use('/admin', adminRoutes);
 router.use('/od', onDutyRoutes);
 router.use('/regularization', regularizationRoutes);
 
