@@ -72,7 +72,7 @@ const getMonthlySummary = async (req, res) => {
 
 const approveMonthlyReport = async (req, res) => {
   try {
-    const { udise_code, month, year, status, remarks } = req.body;
+    const { udise_code, vtUserId, month, year, status, remarks } = req.body;
     
     // Fallback: If role_name is missing on req.user, try to determine role from role_id.
     let role_name = req.user.role_name;
@@ -83,8 +83,12 @@ const approveMonthlyReport = async (req, res) => {
       }
     }
 
-    if (!udise_code || !month || !year || !status) {
-      return res.status(400).json({ status: false, message: 'udise_code, month, year, and status are required.' });
+    if (!month || !year || !status) {
+      return res.status(400).json({ status: false, message: 'month, year, and status are required.' });
+    }
+
+    if (!udise_code && !vtUserId) {
+      return res.status(400).json({ status: false, message: 'Either udise_code or vtUserId must be provided.' });
     }
 
     if (!['approved', 'rejected', 'pending'].includes(status)) {
@@ -107,42 +111,87 @@ const approveMonthlyReport = async (req, res) => {
       return res.status(403).json({ status: false, message: `Role '${role_name}' is not authorized to approve monthly reports.` });
     }
 
-    // Check if report exists
-    const checkQuery = `
-      SELECT id FROM monthly_school_reports 
-      WHERE udise_code = $1 AND report_month = $2 AND report_year = $3
-    `;
-    const checkResult = await pool.query(checkQuery, [udise_code, month, year]);
+    let userIdsToApprove = [];
+    let queryUdiseCode = udise_code;
 
-    if (checkResult.rows.length === 0) {
-      // Create it
-      const insertQuery = `
-        INSERT INTO monthly_school_reports (
-          udise_code, report_month, report_year, ${statusCol}, ${remarksCol}
-        ) VALUES ($1, $2, $3, $4, $5)
-        RETURNING *
-      `;
-      const inserted = await pool.query(insertQuery, [udise_code, month, year, status, remarks || '']);
-      return res.status(200).json({
-        status: true,
-        message: 'Monthly report created and approved successfully.',
-        data: inserted.rows[0]
-      });
-    } else {
-      // Update it
-      const updateQuery = `
-        UPDATE monthly_school_reports
-        SET ${statusCol} = $1, ${remarksCol} = $2, updated_at = NOW()
-        WHERE udise_code = $3 AND report_month = $4 AND report_year = $5
-        RETURNING *
-      `;
-      const updated = await pool.query(updateQuery, [status, remarks || '', udise_code, month, year]);
-      return res.status(200).json({
-        status: true,
-        message: 'Monthly report approval status updated successfully.',
-        data: updated.rows[0]
-      });
+    if (vtUserId) {
+      userIdsToApprove.push(vtUserId);
+      // Ensure we have udise_code for the user
+      if (!udise_code) {
+        const userResult = await pool.query('SELECT udise_code FROM users WHERE id = $1', [vtUserId]);
+        if (userResult.rows.length > 0) {
+          queryUdiseCode = userResult.rows[0].udise_code;
+        } else {
+          return res.status(404).json({ status: false, message: 'VT user not found.' });
+        }
+      }
+    } else if (udise_code) {
+      // Get all vocational teachers for this school
+      const usersResult = await pool.query(`
+        SELECT u.id 
+        FROM users u
+        JOIN roles r ON u.role_id = r.id
+        WHERE u.udise_code = $1 AND r.name = 'vocational_teacher'
+      `, [udise_code]);
+      
+      userIdsToApprove = usersResult.rows.map(row => row.id);
+      
+      if (userIdsToApprove.length === 0) {
+        return res.status(404).json({ status: false, message: 'No vocational teachers found for this school.' });
+      }
     }
+
+    const processedUsers = [];
+    
+    // Process approvals in a transaction
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      
+      for (const uid of userIdsToApprove) {
+        // Check if report exists
+        const checkQuery = `
+          SELECT id FROM monthly_school_reports 
+          WHERE user_id = $1 AND report_month = $2 AND report_year = $3
+        `;
+        const checkResult = await client.query(checkQuery, [uid, month, year]);
+
+        if (checkResult.rows.length === 0) {
+          // Create it
+          const insertQuery = `
+            INSERT INTO monthly_school_reports (
+              udise_code, user_id, report_month, report_year, ${statusCol}, ${remarksCol}
+            ) VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING *
+          `;
+          const inserted = await client.query(insertQuery, [queryUdiseCode, uid, month, year, status, remarks || '']);
+          processedUsers.push(inserted.rows[0]);
+        } else {
+          // Update it
+          const updateQuery = `
+            UPDATE monthly_school_reports
+            SET ${statusCol} = $1, ${remarksCol} = $2, updated_at = NOW()
+            WHERE user_id = $3 AND report_month = $4 AND report_year = $5
+            RETURNING *
+          `;
+          const updated = await client.query(updateQuery, [status, remarks || '', uid, month, year]);
+          processedUsers.push(updated.rows[0]);
+        }
+      }
+      
+      await client.query('COMMIT');
+    } catch (dbError) {
+      await client.query('ROLLBACK');
+      throw dbError;
+    } finally {
+      client.release();
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: 'Monthly report(s) approved successfully.',
+      data: processedUsers
+    });
 
   } catch (error) {
     console.error('approveMonthlyReport error:', error.message);
