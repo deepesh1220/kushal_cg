@@ -409,6 +409,8 @@ const initDB = async () => {
         user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         from_date    DATE    NOT NULL,
         to_date      DATE    NOT NULL,
+        od_type      VARCHAR(20) DEFAULT 'full-day'
+                       CHECK (od_type IN ('full-day','first-half','second-half')),
         reason       TEXT,
         status       VARCHAR(20) DEFAULT 'pending'
                        CHECK (status IN ('pending','approved','rejected')),
@@ -417,6 +419,12 @@ const initDB = async () => {
         created_at   TIMESTAMPTZ DEFAULT NOW(),
         updated_at   TIMESTAMPTZ DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE od_requests ADD COLUMN IF NOT EXISTS od_type VARCHAR(20) DEFAULT 'full-day';
+      ALTER TABLE od_requests DROP CONSTRAINT IF EXISTS od_requests_od_type_check;
+      ALTER TABLE od_requests ADD CONSTRAINT od_requests_od_type_check CHECK (od_type IN ('full-day','first-half','second-half'));
     `);
 
     // ─────────────────────────────────────────────────────────
