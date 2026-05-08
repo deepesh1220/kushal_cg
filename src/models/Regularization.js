@@ -82,13 +82,8 @@ class Regularization {
   }
 
   // ─── Find all requests (admin/headmaster) ───────────────────────────────────
-  static async findAll({ udise_code, status, limit = 50, offset = 0 } = {}) {
-    let query = `
-      SELECT
-        rr.*,
-        u.name  AS user_name,
-        v.udise_code,
-        rv.name AS reviewer_name
+  static async findAll({ udise_code, user_id, status, from_date, to_date, limit = 10, offset = 0 } = {}) {
+    let baseQuery = `
       FROM regularization_requests rr
       JOIN  users            u  ON u.id  = rr.user_id
       LEFT JOIN vt_staff_details v  ON v.id  = u.vt_staff_id
@@ -99,18 +94,40 @@ class Regularization {
 
     if (udise_code) {
       params.push(udise_code);
-      query += ` AND v.udise_code = $${params.length}`;
+      baseQuery += ` AND v.udise_code = $${params.length}`;
+    }
+    if (user_id) {
+      params.push(user_id);
+      baseQuery += ` AND rr.user_id = $${params.length}`;
     }
     if (status) {
       params.push(status);
-      query += ` AND rr.status = $${params.length}`;
+      baseQuery += ` AND rr.status = $${params.length}`;
+    }
+    if (from_date) {
+      params.push(from_date);
+      baseQuery += ` AND rr.date >= $${params.length}`;
+    }
+    if (to_date) {
+      params.push(to_date);
+      baseQuery += ` AND rr.date <= $${params.length}`;
     }
 
-    params.push(limit, offset);
-    query += ` ORDER BY rr.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`;
+    const countResult = await pool.query(`SELECT COUNT(*) ${baseQuery}`, params);
+    const totalRecords = parseInt(countResult.rows[0].count, 10);
 
-    const result = await pool.query(query, params);
-    return result.rows;
+    const dataQuery = `
+      SELECT
+        rr.*,
+        u.name  AS user_name,
+        v.udise_code,
+        rv.name AS reviewer_name
+      ${baseQuery}
+      ORDER BY rr.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+    `;
+
+    const result = await pool.query(dataQuery, [...params, limit, offset]);
+    return { data: result.rows, totalRecords };
   }
 
   // ─── Update status (approve / reject) ───────────────────────────────────────
