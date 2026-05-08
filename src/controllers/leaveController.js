@@ -159,15 +159,13 @@ const getMyLeaves = async (req, res) => {
   }
 };
 
-// ─── GET /api/leaves/all ─────────────────────────────────────────────────────
-// Headmaster views leaves of their school, admin views all
+// ─── POST /api/leaves/list ───────────────────────────────────────────────────
+// Admin / Headmaster gets leaves via POST body with filters
 const getAllLeaves = async (req, res) => {
   const user = req.user;
-  const { status, limit, offset } = req.query;
+  let { udise_code, user_id, status, leave_type, from_date, to_date, limit, page } = req.body;
 
   try {
-    let udise_code = null;
-
     // If the user is a headmaster, they should only see requests for their own school
     if (!['super_admin', 'admin'].includes(user.role_name)) {
       if (!user.udise_code) {
@@ -176,14 +174,34 @@ const getAllLeaves = async (req, res) => {
       udise_code = user.udise_code;
     }
 
-    const leaves = await Leave.findAll({
+    const parsedLimit = limit ? parseInt(limit, 10) : 50;
+    const parsedPage = page ? parseInt(page, 10) : 1;
+    const parsedOffset = (parsedPage - 1) * parsedLimit;
+
+    // Use shared date parser if needed, or assume YYYY-MM-DD
+    // Assuming they are passed as YYYY-MM-DD
+
+    const leaveData = await Leave.findAll({
       udise_code,
+      user_id,
       status,
-      limit: limit ? parseInt(limit) : 50,
-      offset: offset ? parseInt(offset) : 0,
+      leave_type,
+      from_date,
+      to_date,
+      limit: parsedLimit,
+      offset: parsedOffset,
     });
 
-    return res.status(200).json({ status: true, count: leaves.length, data: leaves });
+    return res.status(200).json({ 
+      status: true, 
+      pagination: {
+        totalRecords: leaveData.totalRecords,
+        totalPages: Math.ceil(leaveData.totalRecords / parsedLimit),
+        currentPage: parsedPage,
+        limit: parsedLimit,
+      },
+      data: leaveData.data 
+    });
   } catch (error) {
     return res.status(500).json({ status: false, message: error.message });
   }

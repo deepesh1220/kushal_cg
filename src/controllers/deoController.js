@@ -30,7 +30,10 @@ const getSchoolsAndVts = async (req, res) => {
       return res.status(403).json({ status: false, message: 'DEO profile not found.' });
     }
 
-    const { udise_code, vtUserId } = req.query;
+    const { udise_code, vtUserId, month, year } = req.query;
+
+    const reportMonth = month ? parseInt(month, 10) : new Date().getMonth() + 1;
+    const reportYear = year ? parseInt(year, 10) : new Date().getFullYear();
 
     const district_cd = deo.district_cd;
 
@@ -70,11 +73,19 @@ const getSchoolsAndVts = async (req, res) => {
       vtsWhereStr += ` AND u.id = $${vtsQueryArgs.length}`;
     }
 
+    vtsQueryArgs.push(reportMonth, reportYear);
+    const monthArgIndex = vtsQueryArgs.length - 1;
+    const yearArgIndex = vtsQueryArgs.length;
+
     const vtsQuery = `
       SELECT 
-        v.id as vt_staff_id, u.id as user_id, v.vt_name, v.vt_mob, v.vt_email, v.trade, v.vtp_name, v.udise_code
+        v.id as vt_staff_id, u.id as user_id, v.vt_name, v.vt_mob, v.vt_email, v.trade, v.vtp_name, v.udise_code,
+        COALESCE(msr.hm_approval_status, 'pending') as hm_approval_status,
+        COALESCE(msr.vtp_approval_status, 'pending') as vtp_approval_status,
+        COALESCE(msr.deo_approval_status, 'pending') as deo_approval_status
       FROM vt_staff_details v
       LEFT JOIN users u ON u.vt_staff_id = v.id
+      LEFT JOIN monthly_school_reports msr ON msr.user_id = u.id AND msr.report_month = $${monthArgIndex} AND msr.report_year = $${yearArgIndex}
       ${vtsWhereStr}
     `;
     const vtsResult = await pool.query(vtsQuery, vtsQueryArgs);

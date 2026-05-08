@@ -364,6 +364,7 @@ const initDB = async () => {
       CREATE TABLE IF NOT EXISTS monthly_school_reports (
         id SERIAL PRIMARY KEY,
         udise_code BIGINT NOT NULL,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         report_month INTEGER NOT NULL,
         report_year INTEGER NOT NULL,
         hm_approval_status VARCHAR(20) DEFAULT 'pending' CHECK (hm_approval_status IN ('pending', 'approved', 'rejected')),
@@ -374,8 +375,17 @@ const initDB = async () => {
         deo_remarks TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW(),
-        UNIQUE (udise_code, report_month, report_year)
+        UNIQUE (user_id, report_month, report_year)
       );
+    `);
+
+    // Ensure user_id column exists for existing tables and update constraints
+    await client.query(`
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+      ALTER TABLE monthly_school_reports DROP CONSTRAINT IF EXISTS monthly_school_reports_udise_code_report_month_report_y_key;
+      ALTER TABLE monthly_school_reports DROP CONSTRAINT IF EXISTS monthly_school_reports_udise_code_report_month_report_year_key;
+      ALTER TABLE monthly_school_reports DROP CONSTRAINT IF EXISTS monthly_school_reports_user_id_report_month_report_year_key;
+      ALTER TABLE monthly_school_reports ADD CONSTRAINT monthly_school_reports_user_id_report_month_report_year_key UNIQUE (user_id, report_month, report_year);
     `);
 
     // ─────────────────────────────────────────────────────────
