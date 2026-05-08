@@ -695,10 +695,32 @@ const loginVT = async (req, res) => {
       return res.status(403).json({ status: false, message: 'This endpoint is for Vocational Teachers only.' });
     }
 
+    if (user.vt_approval_status === 'pending' && user.vtp_approval_status === 'pending') {
+      return res.status(403).json({
+        status: false,
+        hm_approval: user.vt_approval_status,
+        vtp_approval: user.vtp_approval_status,
+        code: 'PENDING_APPROVAL OF HM and VTP',
+        message: 'Your registration is pending approval from your school Headmaster and VTP. Please wait.',
+      });
+    }
+
+    if (user.vt_approval_status === 'rejected' && user.vtp_approval_status === 'rejected') {
+      return res.status(403).json({
+        status: false,
+        hm_approval: user.vt_approval_status,
+        vtp_approval: user.vtp_approval_status,
+        code: 'REJECTED',
+        message: 'Your registration was rejected by the Headmaster and VTP. Contact your school or administrator.',
+      });
+    }
+
     // ── VT approval gate (Principal/HM layer) ──────────────────────────────────
     if (user.vt_approval_status === 'pending') {
       return res.status(403).json({
         status: false,
+        hm_approval: user.vt_approval_status,
+        vtp_approval: user.vtp_approval_status,
         code: 'VT_PENDING_APPROVAL',
         message: 'Your registration is pending approval from your school Headmaster. Please wait.',
       });
@@ -707,6 +729,8 @@ const loginVT = async (req, res) => {
     if (user.vt_approval_status === 'rejected') {
       return res.status(403).json({
         status: false,
+        hm_approval: user.vt_approval_status,
+        vtp_approval: user.vtp_approval_status,
         code: 'VT_REJECTED',
         message: 'Your registration was rejected by the Headmaster. Contact your school or administrator.',
       });
@@ -715,6 +739,8 @@ const loginVT = async (req, res) => {
     if (user.vtp_approval_status === 'pending') {
       return res.status(403).json({
         status: false,
+        hm_approval: user.vt_approval_status,
+        vtp_approval: user.vtp_approval_status,
         code: 'VTP_PENDING_APPROVAL',
         message: 'Your registration is pending approval from your VTP. Please wait.',
       });
@@ -723,6 +749,8 @@ const loginVT = async (req, res) => {
     if (user.vtp_approval_status === 'rejected') {
       return res.status(403).json({
         status: false,
+        hm_approval: user.vt_approval_status,
+        vtp_approval: user.vtp_approval_status,
         code: 'VTP_REJECTED',
         message: 'Your registration was rejected by your VTP. Contact your VTP or administrator.',
       });

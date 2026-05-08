@@ -40,7 +40,7 @@ router.delete('/:id', authorize('leave:request'), deleteLeave);
 
 // ── Admin / Headmaster routes ───────────────────────────────────────────────
 // View all leave requests (Headmasters see only their VT's requests, Admin sees all)
-router.get('/all', authorize('leave:view_all'), getAllLeaves);
+router.post('/list', authorize('leave:view_all'), getAllLeaves);
 
 // Approve or reject a leave request
 router.patch('/:id/status', authorize('leave:approve'), approveRejectLeave);
