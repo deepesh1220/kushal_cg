@@ -317,6 +317,94 @@ class Leave {
       data: dataResult.rows,
     };
   }
+  // ─── Get all leave requests for a VTP's organization ────────────────────────
+  // Used by: GET /api/vtp/leaves
+  // Scoped to vtp_name so VTP only sees their organization's VTs.
+  static async getVtpLeaves(vtpName, {
+    status,
+    from_date,
+    to_date,
+    teacher_code,
+    page = 1,
+    limit = 20,
+  } = {}) {
+    // Clamp pagination values
+    const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const parsedPage = Math.max(parseInt(page, 10) || 1, 1);
+    const offset = (parsedPage - 1) * parsedLimit;
+
+    // ── Build dynamic filter clauses (VTP-scoped) ─────────────────────────
+    const filterParams = [vtpName]; // $1 always = vtp_name
+    let filterClauses = '';
+
+    if (status) {
+      filterParams.push(status.toLowerCase());
+      filterClauses += ` AND l.vtp_status = $${filterParams.length}`;
+    }
+    if (from_date) {
+      filterParams.push(from_date);
+      filterClauses += ` AND l.from_date >= $${filterParams.length}`;
+    }
+    if (to_date) {
+      filterParams.push(to_date);
+      filterClauses += ` AND l.to_date <= $${filterParams.length}`;
+    }
+    if (teacher_code) {
+      filterParams.push(teacher_code);
+      filterClauses += ` AND u.id = $${filterParams.length}`;
+    }
+
+    const baseWhere = `
+      FROM leave_requests l
+      JOIN  users            u ON u.id  = l.user_id
+      JOIN  vt_staff_details v ON v.id  = u.vt_staff_id
+      LEFT JOIN users        r ON r.id  = l.reviewed_by
+      WHERE v.vtp_name = $1
+      ${filterClauses}
+    `;
+
+    // ── COUNT query (pagination metadata) ───────────────────────────────────
+    const countResult = await pool.query(
+      `SELECT COUNT(*) AS total ${baseWhere}`,
+      filterParams
+    );
+    const total = parseInt(countResult.rows[0].total, 10);
+
+    // ── Data query ───────────────────────────────────────────────────────────
+    const dataParams = [...filterParams, parsedLimit, offset];
+    const dataResult = await pool.query(
+      `SELECT
+         l.id           AS leave_id,
+         u.id           AS vt_user_id,
+         u.name         AS teacher_name,
+         u.phone        AS vt_phone,
+         v.vt_aadhar    AS vt_aadhar,
+         v.udise_code   AS udise_code,
+         v.school_name  AS school_name,
+         l.leave_type,
+         l.from_date,
+         l.to_date,
+         l.status       AS principal_status,
+         l.vtp_status   AS status,
+         l.leave_approved,
+         l.reason,
+         l.created_at   AS applied_at,
+         r.name         AS reviewed_by_name,
+         l.reviewed_at
+       ${baseWhere}
+       ORDER BY l.created_at DESC
+       LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+      dataParams
+    );
+
+    return {
+      total,
+      page: parsedPage,
+      limit: parsedLimit,
+      total_pages: Math.ceil(total / parsedLimit),
+      data: dataResult.rows,
+    };
+  }
 
 
   // ─── Update leave request (before approval) ─────────────────────────────────
@@ -335,19 +423,41 @@ class Leave {
     return result.rows[0] || null;
   }
 
-  // ─── Approve or Reject a leave ──────────────────────────────────────────────
-  static async updateStatus(id, { status, reviewerId }) {
+  // ─── Update status by Principal/HM ───────────────────────────────────────────
+  static async updatePrincipalStatus(id, { status, reviewerId }) {
     const result = await pool.query(`
       UPDATE leave_requests
       SET 
         status = $1,
         reviewed_by = $2,
         reviewed_at = NOW(),
-        updated_at = NOW()
+        principal_updated_at = NOW(),
+        updated_at = NOW(),
+        leave_approved = CASE WHEN $3 = 'approved' AND vtp_status = 'approved' THEN TRUE ELSE FALSE END
+      WHERE id = $4
+      RETURNING *
+    `, [status, reviewerId, status, id]);
+    return result.rows[0] || null;
+  }
+
+  // ─── Update status by VTP ───────────────────────────────────────────────────
+  static async updateVtpStatus(id, { status, reviewerId }) {
+    const result = await pool.query(`
+      UPDATE leave_requests
+      SET 
+        vtp_status = $1,
+        vtp_updated_at = NOW(),
+        updated_at = NOW(),
+        leave_approved = CASE WHEN status = 'approved' AND $2 = 'approved' THEN TRUE ELSE FALSE END
       WHERE id = $3
       RETURNING *
-    `, [status, reviewerId, id]);
+    `, [status, status, id]);
     return result.rows[0] || null;
+  }
+
+  // ─── Legacy Update Status (for backward compatibility if needed) ────────────
+  static async updateStatus(id, { status, reviewerId }) {
+    return await this.updatePrincipalStatus(id, { status, reviewerId });
   }
 
   // ─── Delete a leave request (before approval) ───────────────────────────────
@@ -504,13 +614,19 @@ class Leave {
         };
       }
 
-      // Update leave status
+      // Update leave status (Principal Layer)
       const updatedLeave = await client.query(`
         UPDATE leave_requests
-        SET status = $1, reviewed_by = $2, reviewed_at = NOW(), updated_at = NOW()
-        WHERE id = $3
+        SET 
+          status = $1, 
+          reviewed_by = $2, 
+          reviewed_at = NOW(), 
+          principal_updated_at = NOW(),
+          updated_at = NOW(),
+          leave_approved = CASE WHEN $3 = 'approved' AND vtp_status = 'approved' THEN TRUE ELSE FALSE END
+        WHERE id = $4
         RETURNING *
-      `, [status, reviewerId, leaveId]);
+      `, [status, reviewerId, status, leaveId]);
 
       // Deduct leave balance
       const deductionResult = await LeaveBalance.deductLeave(
