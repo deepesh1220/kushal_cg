@@ -73,7 +73,7 @@ const getMonthlySummary = async (req, res) => {
 const approveMonthlyReport = async (req, res) => {
   try {
     const { udise_code, vtUserId, month, year, status, remarks } = req.body;
-    
+
     // Fallback: If role_name is missing on req.user, try to determine role from role_id.
     let role_name = req.user.role_name;
     if (!role_name && req.user.role_id) {
@@ -133,21 +133,21 @@ const approveMonthlyReport = async (req, res) => {
         JOIN roles r ON u.role_id = r.id
         WHERE u.udise_code = $1 AND r.name = 'vocational_teacher'
       `, [udise_code]);
-      
+
       userIdsToApprove = usersResult.rows.map(row => row.id);
-      
+
       if (userIdsToApprove.length === 0) {
         return res.status(404).json({ status: false, message: 'No vocational teachers found for this school.' });
       }
     }
 
     const processedUsers = [];
-    
+
     // Process approvals in a transaction
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      
+
       for (const uid of userIdsToApprove) {
         // Check if report exists
         const checkQuery = `
@@ -178,7 +178,7 @@ const approveMonthlyReport = async (req, res) => {
           processedUsers.push(updated.rows[0]);
         }
       }
-      
+
       await client.query('COMMIT');
     } catch (dbError) {
       await client.query('ROLLBACK');

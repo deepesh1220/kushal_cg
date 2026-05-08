@@ -108,18 +108,18 @@ class Report {
 
     // 2. Fetch Attendance
     const attendanceResult = await pool.query(`
-      SELECT user_id, date, status
+      SELECT user_id, date, status, check_in_time, check_out_time
       FROM attendance_records
       WHERE user_id = ANY($1)
       AND date BETWEEN $2 AND $3
     `, [userIds, startDate.format("YYYY-MM-DD"), endDate.format("YYYY-MM-DD")]);
 
-    const attendanceMap = {}; // { userId: { date: status } }
+    const attendanceMap = {}; // { userId: { date: record } }
     attendanceResult.rows.forEach(r => {
       const uId = r.user_id;
       const dateStr = dayjs(r.date).format("YYYY-MM-DD");
       if (!attendanceMap[uId]) attendanceMap[uId] = {};
-      attendanceMap[uId][dateStr] = r.status;
+      attendanceMap[uId][dateStr] = r;
     });
 
     // 3. Fetch Leaves
@@ -160,19 +160,37 @@ class Report {
         const isSunday = dateObj.day() === 0;
         const isGovHoliday = govHolidays.has(dateStr);
         const hasLeave = leaveMap[uId] && leaveMap[uId].has(dateStr);
-        const isPresent = attendanceMap[uId] && attendanceMap[uId][dateStr] === 'present';
+        const attRecord = attendanceMap[uId] && attendanceMap[uId][dateStr];
 
-        if (isSunday) {
-          monthAttendance[day] = "H";
-        } else if (isGovHoliday) {
-          monthAttendance[day] = "GH";
-        } else if (hasLeave) {
-          monthAttendance[day] = "L";
-        } else if (isPresent) {
-          monthAttendance[day] = "P";
-        } else {
-          monthAttendance[day] = "A";
+        let statusStr = "A";
+        let check_in = null;
+        let check_out = null;
+
+        if (attRecord) {
+          if (attRecord.check_in_time) check_in = dayjs(attRecord.check_in_time).format('hh:mm A');
+          if (attRecord.check_out_time) check_out = dayjs(attRecord.check_out_time).format('hh:mm A');
+
+          if (attRecord.status === 'present') statusStr = 'P';
+          else if (attRecord.status === 'absent') statusStr = 'A';
+          else if (attRecord.status === 'half_day') statusStr = 'HD';
+          else if (attRecord.status === 'late') statusStr = 'LATE';
+          else if (attRecord.status === 'od') statusStr = 'OD';
+          else statusStr = 'P';
         }
+
+        if (isSunday && (!attRecord || statusStr === 'A')) {
+          statusStr = "H";
+        } else if (isGovHoliday && (!attRecord || statusStr === 'A')) {
+          statusStr = "GH";
+        } else if (hasLeave) {
+          statusStr = "L";
+        }
+
+        monthAttendance[day] = {
+          status: statusStr,
+          check_in,
+          check_out
+        };
       }
 
       return {
