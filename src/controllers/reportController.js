@@ -115,15 +115,21 @@ const approveMonthlyReport = async (req, res) => {
     let queryUdiseCode = udise_code;
 
     if (vtUserId) {
-      userIdsToApprove.push(vtUserId);
-      // Ensure we have udise_code for the user
+      const userResult = await pool.query(`
+        SELECT id, udise_code
+        FROM users
+        WHERE id = $1 OR vt_staff_id = $1
+        LIMIT 1
+      `, [vtUserId]);
+
+      if (userResult.rows.length === 0) {
+        return res.status(404).json({ status: false, message: 'VT user not found.' });
+      }
+
+      userIdsToApprove.push(userResult.rows[0].id);
+
       if (!udise_code) {
-        const userResult = await pool.query('SELECT udise_code FROM users WHERE id = $1', [vtUserId]);
-        if (userResult.rows.length > 0) {
-          queryUdiseCode = userResult.rows[0].udise_code;
-        } else {
-          return res.status(404).json({ status: false, message: 'VT user not found.' });
-        }
+        queryUdiseCode = userResult.rows[0].udise_code;
       }
     } else if (udise_code) {
       // Get all vocational teachers for this school
