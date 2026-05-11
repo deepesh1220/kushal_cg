@@ -262,12 +262,45 @@ const approveLeaveByVtp = async (req, res) => {
       return res.status(404).json({ status: false, message: 'Leave request not found.' });
     }
 
+    let deductionInfo = null;
+    if (updated.leave_approved) {
+      try {
+        const LeaveBalance = require('../models/LeaveBalance');
+        // Lazy credit current month if not yet credited
+        await LeaveBalance.ensureCurrentMonthCredit(updated.user_id);
+        
+        // Prevent duplicate deduction: check if already deducted
+        const checkDeduction = await pool.query(`
+          SELECT 1 FROM leave_deduction_log WHERE leave_request_id = $1
+          UNION
+          SELECT 1 FROM leave_excess_records WHERE leave_request_id = $1
+        `, [parsedLeaveId]);
+        
+        if (checkDeduction.rows.length === 0) {
+          // Deduct the leave amount
+          const deduction = await LeaveBalance.deductLeave(
+            parsedLeaveId, updated.user_id, updated.leave_type, req.user.id
+          );
+          deductionInfo = deduction;
+          if (!deduction.success) {
+            console.warn(`[Leave ${parsedLeaveId}] Approved but deduction failed: ${deduction.message}`);
+          }
+        } else {
+          deductionInfo = { success: true, message: 'Already deducted' };
+        }
+      } catch (e) {
+        console.error(`[Leave ${parsedLeaveId}] Deduction error (approval still succeeded):`, e.message);
+        deductionInfo = { success: false, message: e.message };
+      }
+    }
+
     return res.status(200).json({
       status: true,
       message: updated.leave_approved
         ? 'Leave request fully approved (Principal + VTP).'
         : 'Leave request approved by VTP. Awaiting Principal approval.',
       data: updated,
+      ...(deductionInfo ? { deduction: deductionInfo } : {})
     });
   } catch (error) {
     console.error('approveLeaveByVtp error:', error.message);
