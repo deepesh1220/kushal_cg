@@ -18,7 +18,19 @@ const getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
 // VT marks their own attendance
 const checkIn = async (req, res) => {
   const userId = req.user.id;
-  const { latitude, longitude, remarks } = req.body;
+  const { latitude, longitude, remarks, isFakeGPS } = req.body;
+  if(!latitude || !longitude || !remarks || !isFakeGPS){
+    return res.status(400).json({
+      status: false,
+      message: 'latitude, longitude, remarks and isFakeGPS are required.'
+    });
+  }
+  if (isFakeGPS === true) {
+    return res.status(403).json({
+      status: false,
+      message: 'Fake GPS is not allowed. Please disable fake GPS and try again.'
+    });
+  }
 
   const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
 
@@ -141,7 +153,20 @@ const checkIn = async (req, res) => {
 // VT marks their check-out
 const checkOut = async (req, res) => {
   const userId = req.user.id;
-  const { latitude, longitude } = req.body;
+  const { latitude, longitude, isFakeGPS } = req.body;
+  if(!latitude || !longitude || !isFakeGPS){
+    return res.status(400).json({
+      status: false,
+      message: 'latitude, longitude and isFakeGPS are required.'
+    });
+  }
+  
+  if (isFakeGPS === true) {
+    return res.status(403).json({
+      status: false,
+      message: 'Fake GPS is not allowed. Please disable fake GPS and try again.'
+    });
+  }
   const today = new Date().toISOString().split('T')[0];
 
   try {

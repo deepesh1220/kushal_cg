@@ -98,12 +98,18 @@ const applyRegularization = async (req, res) => {
 // req.body: { date, reason, latitude, longitude }
 const applyRegularizationWithLocation = async (req, res) => {
   const userId = req.user.id;
-  let { date, reason, latitude, longitude } = req.body;
+  let { date, reason, latitude, longitude, isFakeGPS } = req.body;
 
-  if (!date || !reason || !latitude || !longitude) {
-    return res.status(400).json({ status: false, message: 'date, reason, latitude, and longitude are required.' });
+  if (!date || !reason || !latitude || !longitude || !isFakeGPS) {
+    return res.status(400).json({ status: false, message: 'date, reason, latitude, longitude and isFakeGPS are required.' });
   }
 
+  if (isFakeGPS === true) {
+    return res.status(403).json({
+      status: false,
+      message: 'Fake GPS is not allowed. Please disable fake GPS and try again.'
+    });
+  }
   date = parseDateStr(date);
   const parsedDate = new Date(date);
 
