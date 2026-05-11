@@ -466,24 +466,48 @@ class Leave {
     // ─────────── Build final attendance map ───────────
     const attendanceMap = {};
 
-    for (let day = 1; day <= lastDay; day++) {
-      const currentDate = dayjs(`${month}-${String(day).padStart(2, "0")}`);
-      const date = currentDate.format("YYYY-MM-DD");
+    // for (let day = 1; day <= lastDay; day++) {
+    //   const currentDate = dayjs(`${month}-${String(day).padStart(2, "0")}`);
+    //   const date = currentDate.format("YYYY-MM-DD");
 
-      const dayOfWeek = currentDate.day(); // 0 = Sunday, 6 = Saturday
+    //   const dayOfWeek = currentDate.day(); // 0 = Sunday, 6 = Saturday
 
-      if (dayOfWeek === 6) {
-        attendanceMap[day] = "SA"; // Saturday
-      } else if (dayOfWeek === 0) {
-        attendanceMap[day] = "SU"; // Sunday
-      } else if (attendanceSet.has(date)) {
-        attendanceMap[day] = "P";
-      } else if (leaveSet.has(date)) {
-        attendanceMap[day] = "L";
-      } else {
-        attendanceMap[day] = "A";
-      }
+    //   if (dayOfWeek === 6) {
+    //     attendanceMap[day] = "SA"; // Saturday
+    //   } else if (dayOfWeek === 0) {
+    //     attendanceMap[day] = "SU"; // Sunday
+    //   } else if (attendanceSet.has(date)) {
+    //     attendanceMap[day] = "P";
+    //   } else if (leaveSet.has(date)) {
+    //     attendanceMap[day] = "L";
+    //   } else {
+    //     attendanceMap[day] = "A";
+    //   }
+    // }
+
+      for (let day = 1; day <= lastDay; day++) {
+    const currentDate = dayjs(`${month}-${String(day).padStart(2, "0")}`);
+    const date        = currentDate.format("YYYY-MM-DD");
+    const dayOfWeek   = currentDate.day(); // 0 = Sunday, 6 = Saturday
+ 
+    if (dayOfWeek === 0) {
+      // Sunday → off day
+      attendanceMap[day] = "SU";
+    } else if (leaveSet.has(date)) {
+      // Approved leave (works for Mon–Sat equally)
+      attendanceMap[day] = "L";
+    } else if (attendanceSet.has(date)) {
+      // Present (Mon–Sat)
+      attendanceMap[day] = "P";
+    } else {
+      // Absent (Mon–Sat, including Saturday if not present/on leave)
+      attendanceMap[day] = "A";
     }
+   
+  }
+
+    // ─────────── Fetch leave balance for the year ───────────
+    const leaveBalance = await LeaveBalance.getBalanceByUserId(userId, year);
 
     return {
       userId,
@@ -493,6 +517,8 @@ class Leave {
       month,
       totalDays: lastDay,
       attendance: attendanceMap,
+      totalEarned: leaveBalance ? parseFloat(leaveBalance.total_earned || 0) : 0,
+      remainingBalance: leaveBalance ? parseFloat(leaveBalance.remaining_balance || 0) : 0,
     };
   }
 
