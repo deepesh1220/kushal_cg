@@ -256,6 +256,26 @@ const initDB = async () => {
       );
     `);
 
+    // ─────────────────────────────────────────────────────────
+    // TABLE: leave_excess_records
+    // Tracks excess/access leave taken when remaining_balance is insufficient
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS leave_excess_records (
+        id                                 SERIAL PRIMARY KEY,
+        user_id                            INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        leave_request_id                   INTEGER NOT NULL REFERENCES leave_requests(id) ON DELETE CASCADE,
+        month                              INTEGER NOT NULL,
+        year                               INTEGER NOT NULL,
+        approved_leave_days                DECIMAL(5,2) NOT NULL,
+        available_balance_before_deduction DECIMAL(5,2) NOT NULL,
+        deducted_from_balance              DECIMAL(5,2) NOT NULL,
+        excess_leave                       DECIMAL(5,2) NOT NULL,
+        created_at                         TIMESTAMPTZ DEFAULT NOW(),
+        updated_at                         TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
     // Indexes for leave balance tables
     await client.query(`CREATE INDEX IF NOT EXISTS idx_leave_balance_user_id ON leave_balance(user_id);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_leave_balance_year ON leave_balance(year);`);
@@ -409,6 +429,8 @@ const initDB = async () => {
         user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         from_date    DATE    NOT NULL,
         to_date      DATE    NOT NULL,
+        od_type      VARCHAR(20) DEFAULT 'full-day'
+                       CHECK (od_type IN ('full-day','first-half','second-half')),
         reason       TEXT,
         status       VARCHAR(20) DEFAULT 'pending'
                        CHECK (status IN ('pending','approved','rejected')),
@@ -417,6 +439,12 @@ const initDB = async () => {
         created_at   TIMESTAMPTZ DEFAULT NOW(),
         updated_at   TIMESTAMPTZ DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE od_requests ADD COLUMN IF NOT EXISTS od_type VARCHAR(20) DEFAULT 'full-day';
+      ALTER TABLE od_requests DROP CONSTRAINT IF EXISTS od_requests_od_type_check;
+      ALTER TABLE od_requests ADD CONSTRAINT od_requests_od_type_check CHECK (od_type IN ('full-day','first-half','second-half'));
     `);
 
     // ─────────────────────────────────────────────────────────
@@ -481,10 +509,19 @@ const initDB = async () => {
     //   principal_updated_at  → set whenever vt_approval_status changes  (HM/Principal layer)
     //   vtp_updated_at        → set whenever vtp_approval_status changes  (VTP layer)
     // ─────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────
+    // ALTER leave_requests: add dual-approval layer
+    // ─────────────────────────────────────────────────────────
     await client.query(`
-      ALTER TABLE users
+      ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS vtp_status VARCHAR(20) DEFAULT 'pending';
+      ALTER TABLE leave_requests DROP CONSTRAINT IF EXISTS leave_requests_vtp_status_check;
+      ALTER TABLE leave_requests ADD CONSTRAINT leave_requests_vtp_status_check
+        CHECK (vtp_status IN ('pending','approved','rejected'));
+
+      ALTER TABLE leave_requests
         ADD COLUMN IF NOT EXISTS principal_updated_at TIMESTAMPTZ DEFAULT NULL,
-        ADD COLUMN IF NOT EXISTS vtp_updated_at       TIMESTAMPTZ DEFAULT NULL;
+        ADD COLUMN IF NOT EXISTS vtp_updated_at       TIMESTAMPTZ DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS leave_approved       BOOLEAN DEFAULT FALSE;
     `);
 
     await client.query('COMMIT');
@@ -657,6 +694,7 @@ const seedDefaults = async (client) => {
     'attendance:view_teachers',
     'attendance:report',
     'leave:view_all',
+    'leave:view_balance_all',
     'vt:approve_vtp',
   ]);
 

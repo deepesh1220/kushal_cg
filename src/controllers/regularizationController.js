@@ -209,16 +209,31 @@ const approveRegularization = async (req, res) => {
       const timeStr = appliedTime.toTimeString().split(' ')[0]; // gets HH:MM:SS
       const checkIn = `${dateStr} ${timeStr}`;
 
+      // Fetch sch_close_time from mst_schools
+      const schoolResult = await pool.query(`
+        SELECT ms.sch_close_time 
+        FROM users u 
+        JOIN mst_schools ms ON u.udise_code = ms.udise_sch_code 
+        WHERE u.id = $1
+      `, [reg.user_id]);
+
+      let checkOut = null;
+      if (schoolResult.rows.length > 0 && schoolResult.rows[0].sch_close_time) {
+        const schCloseTime = schoolResult.rows[0].sch_close_time;
+        checkOut = `${dateStr} ${schCloseTime}`;
+      }
+
       await pool.query(`
         INSERT INTO attendance_records (user_id, date, status, check_in_time, check_out_time, remarks, marked_by)
-        VALUES ($1, $2, 'present', $4, NULL, 'Attendance Regularized by Headmaster', $3)
+        VALUES ($1, $2, 'present', $4, $5, 'Attendance Regularized by Headmaster', $3)
         ON CONFLICT (user_id, date)
         DO UPDATE SET
           status         = 'present',
           check_in_time  = COALESCE(attendance_records.check_in_time, $4),
+          check_out_time = COALESCE(attendance_records.check_out_time, $5),
           remarks        = 'Attendance Regularized by Headmaster',
           updated_at     = NOW()
-      `, [reg.user_id, dateStr, reviewer.id, checkIn]);
+      `, [reg.user_id, dateStr, reviewer.id, checkIn, checkOut]);
     }
 
     return res.status(200).json({ status: true, message: `Regularization request successfully ${status}.`, data: updated });

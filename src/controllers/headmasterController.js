@@ -94,12 +94,14 @@ const getByBlock = async (req, res, next) => {
 // ─── PATCH /api/headmaster/school-time ──────────────────────────────────────────
 const updateSchoolTime = async (req, res, next) => {
   try {
-    const { udise_code, sch_open_time, sch_close_time, graceTime } = req.body;
+    const { udise_code, sch_open_time, sch_close_time } = req.body;
+    // Accept both field names: frontend sends grace_time, Postman/legacy sends graceTime
+    const graceTime = req.body.grace_time ?? req.body.graceTime;
 
-    if (!udise_code || !sch_open_time || !sch_close_time || graceTime === undefined) {
+    if (!udise_code || !sch_open_time || !sch_close_time || graceTime === undefined || graceTime === null) {
       return res.status(400).json({
         status: 'error',
-        message: 'udise_code, sch_open_time, sch_close_time, and graceTime are required',
+        message: 'udise_code, sch_open_time, sch_close_time, and grace_time are required',
       });
     }
 
@@ -123,6 +125,64 @@ const updateSchoolTime = async (req, res, next) => {
     `, [sch_open_time, sch_close_time, udise_code]);
 
     res.json({ status: 'success', message: 'School timings updated successfully', data: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── GET /api/headmaster/school-time?udise_code=xxx ──────────────────────────
+const getSchoolTiming = async (req, res, next) => {
+  try {
+    const { udise_code } = req.query;
+
+    if (!udise_code) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'udise_code query parameter is required',
+      });
+    }
+
+    const result = await pool.query(
+      `SELECT sch_open_time, sch_close_time, grace_time
+         FROM mst_schools
+        WHERE udise_sch_code = $1
+        LIMIT 1`,
+      [udise_code]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'School not found' });
+    }
+
+    const row = result.rows[0];
+
+    // Normalise → HH:MM (24h) for <input type="time">
+    const to24h = (timeStr) => {
+      if (!timeStr) return null;
+      const str = String(timeStr).trim();
+      const hhmmss = str.match(/^(\d{2}):(\d{2})/);
+      if (hhmmss) return `${hhmmss[1]}:${hhmmss[2]}`;
+      const m12 = str.match(/(\d{1,2}):(\d{2})\s*(am|pm)/i);
+      if (!m12) return null;
+      let h = parseInt(m12[1], 10);
+      const min = m12[2];
+      const period = m12[3].toLowerCase();
+      if (period === 'pm' && h !== 12) h += 12;
+      if (period === 'am' && h === 12) h = 0;
+      return `${String(h).padStart(2, '0')}:${min}`;
+    };
+
+    return res.status(200).json({
+      status: 'success',
+      data: {
+        startTime:      to24h(row.sch_open_time),
+        endTime:        to24h(row.sch_close_time),
+        graceTime:      row.grace_time ?? null,
+        sch_open_time:  row.sch_open_time,
+        sch_close_time: row.sch_close_time,
+        grace_time:     row.grace_time,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -260,6 +320,7 @@ module.exports = {
   getByBlock,
   getSchoolLeaves,
   updateSchoolTime,
+  getSchoolTiming,
   getSchoolDetails,
   updateSchoolLatLong,
 };
