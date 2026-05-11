@@ -20,12 +20,19 @@ const VTP_ROLE_NAME = 'vocational_teacher_provider';
 
 // ─── POST /api/auth/register ──────────────────────────────────────────────────
 const register = async (req, res) => {
-  const { name, email, phone, password, role_id, latitude, longitude, school_open_time, school_close_time, image } = req.body;
+  const { name, email, phone, password, role_id, latitude, longitude, school_open_time, school_close_time, image, isFakeGPS } = req.body;
 
   if (!phone || !password) {
     return res.status(400).json({
       status: false,
       message: 'Phone number and password are required.',
+    });
+  }
+
+  if (isFakeGPS === true) {
+    return res.status(403).json({
+      status: false,
+      message: 'Fake GPS is not allowed. Please disable fake GPS and try again.'
     });
   }
 
