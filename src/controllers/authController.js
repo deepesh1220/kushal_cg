@@ -1,4 +1,5 @@
 const bcrypt = require('bcryptjs');
+const path   = require('path');
 const User = require('../models/User');
 const Role = require('../models/Role');
 const RefreshToken = require('../models/RefreshToken');
@@ -14,6 +15,8 @@ const {
   getRefreshTokenExpiry,
 } = require('../utils/jwtUtils');
 const { toIST } = require('../utils/timeUtils');
+const { extractDescriptorFromFile, encryptDescriptor } = require('../utils/faceUtils');
+const { pool } = require('../config/db');
 
 const VT_ROLE_NAME = 'vocational_teacher';
 const VTP_ROLE_NAME = 'vocational_teacher_provider';
@@ -160,6 +163,34 @@ const register = async (req, res) => {
     // ── Extract photo if uploaded ─────────────────────────────────────────────
     const profile_photo = req.file ? `/uploads/register/${req.file.filename}` : null;
 
+    // ── [FACE] Extract & validate face descriptor from photo ─────────────────
+    // Required for VT and Headmaster roles (photo is mandatory for them anyway)
+    let faceDescriptorEncrypted = null;
+    if (req.file) {
+      const absPhotoPath = path.join(__dirname, '../uploads/register', req.file.filename);
+      let descriptor;
+      try {
+        descriptor = await extractDescriptorFromFile(absPhotoPath);
+      } catch (faceErr) {
+        console.error('Face extraction error:', faceErr.message);
+        return res.status(500).json({
+          status: false,
+          message: 'Could not process the profile photo for face recognition. Please try again.',
+        });
+      }
+
+      if (!descriptor) {
+        // No face detected → block registration
+        return res.status(400).json({
+          status: false,
+          message: 'No face detected in the profile photo. Please upload a clear photo with your face visible.',
+        });
+      }
+
+      // Encrypt the 128D descriptor before storing
+      faceDescriptorEncrypted = encryptDescriptor(descriptor);
+    }
+
     // ── Create user ──────────────────────────────────────────────────────────
     const user = await User.create({
       name: finalName,
@@ -188,6 +219,14 @@ const register = async (req, res) => {
       is_active: isActiveOnRegister,
     });
 
+    // ── [FACE] Store encrypted face descriptor ────────────────────────────────
+    if (faceDescriptorEncrypted) {
+      await pool.query(
+        'UPDATE users SET face_descriptor = $1 WHERE id = $2',
+        [faceDescriptorEncrypted, user.id]
+      );
+    }
+
     return res.status(201).json({
       status: true,
       message: isVt
@@ -200,6 +239,7 @@ const register = async (req, res) => {
         phone: user.phone,
         role: roleName,
         profile_photo: user.profile_photo,
+        face_enrolled: !!faceDescriptorEncrypted,
         home_location: (user.latitude && user.longitude) ? {
           latitude: user.latitude,
           longitude: user.longitude

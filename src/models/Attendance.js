@@ -2,11 +2,11 @@ const { pool } = require('../config/db');
 
 const Attendance = {
   // ─── Mark attendance (create) ───────────────────────────────────────────────
-  async create({ user_id, date, check_in_time, status, latitude, longitude, photo_path, remarks, marked_by }) {
+  async create({ user_id, date, check_in_time, status, latitude, longitude, photo_path, remarks, marked_by, face_match_score, checkin_photo }) {
     const result = await pool.query(`
       INSERT INTO attendance_records
-        (user_id, date, check_in_time, status, latitude, longitude, photo_path, remarks, marked_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        (user_id, date, check_in_time, status, latitude, longitude, photo_path, remarks, marked_by, face_match_score, checkin_photo)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *
     `, [
       user_id,
@@ -18,23 +18,28 @@ const Attendance = {
       photo_path || null,
       remarks || null,
       marked_by || user_id,
+      face_match_score || null,
+      checkin_photo || null,
     ]);
     return result.rows[0];
   },
 
-  // ─── Check-out (update check_out_time) ─────────────────────────────────────
-  async checkOut(userId, date, latitude, longitude) {
+  // ─── Check-out (update check_out_time + face score) ────────────────────────
+  async checkOut(userId, date, latitude, longitude, checkout_photo, checkout_face_score) {
     const result = await pool.query(`
       UPDATE attendance_records
-      SET check_out_time = NOW(),
-          checkout_latitude = $3,
-          checkout_longitude = $4,
-          updated_at = NOW()
+      SET check_out_time      = NOW(),
+          checkout_latitude   = $3,
+          checkout_longitude  = $4,
+          checkout_photo      = $5,
+          checkout_face_score = $6,
+          updated_at          = NOW()
       WHERE user_id = $1 AND date = $2
       RETURNING *
-    `, [userId, date, latitude || null, longitude || null]);
+    `, [userId, date, latitude || null, longitude || null, checkout_photo || null, checkout_face_score || null]);
     return result.rows[0] || null;
   },
+
 
   // ─── Find today's record for a user ─────────────────────────────────────────
   async findByUserAndDate(userId, date) {

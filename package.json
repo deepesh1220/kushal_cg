@@ -26,6 +26,14 @@
 
   "dependencies": {
 
+    "@tensorflow/tfjs": "^4.22.0",
+
+    "@tensorflow/tfjs-backend-wasm": "^4.22.0",
+
+    "@tensorflow/tfjs-node": "npm:@tensorflow/tfjs@^4.22.0",
+
+    "@vladmandic/face-api": "^1.7.15",
+
     "axios": "^1.15.2",
 
     "bcryptjs": "^3.0.3",
@@ -48,7 +56,9 @@
 
     "pdfkit": "^0.18.0",
 
-    "pg": "^8.20.0"
+    "pg": "^8.20.0",
+
+    "sharp": "^0.34.5"
 
   },
 
