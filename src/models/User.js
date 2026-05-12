@@ -72,13 +72,13 @@ const User = {
   },
 
   // ─── Create a new user ──────────────────────────────────────────────────────
-  async create({ name, email, phone, password_hash, role_id, vt_staff_id = null, organization_name = null, udise_code = null, profile_photo = null, latitude = null, longitude = null, school_open_time = null, school_close_time = null, vt_approval_status = null, vtp_approval_status = null, is_active = true }) {
+  async create({ name, email, phone, password_hash, role_id, vt_staff_id = null, organization_name = null, udise_code = null, profile_photo = null, latitude = null, longitude = null, school_open_time = null, school_close_time = null, vt_approval_status = null, vtp_approval_status = null, is_active = true ,vtp_id=null}) {
     const result = await pool.query(`
       INSERT INTO users
-        (name, email, phone, password_hash, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, vtp_approval_status, is_active)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-      RETURNING id, name, email, phone, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, vtp_approval_status, is_active, created_at
-    `, [name, email, phone || null, password_hash, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, vtp_approval_status, is_active]);
+        (name, email, phone, password_hash, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, vtp_approval_status, is_active,vtp_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,$17)
+      RETURNING id, name, email, phone, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, vtp_approval_status, is_active, vtp_id,created_at
+    `, [name, email, phone || null, password_hash, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, vtp_approval_status, is_active,vtp_id]);
     return result.rows[0];
   },
 
