@@ -8,7 +8,7 @@ const User = {
         u.id, u.name, u.email, u.phone,
         u.password_hash, u.is_active, u.profile_photo,
         u.vt_approval_status, u.vtp_approval_status,
-        u.udise_code, u.organization_name,
+        u.udise_code, u.organization_name, u.vtp_id,
         u.latitude, u.longitude, u.school_open_time, u.school_close_time,
         r.id   AS role_id,
         r.name AS role_name
@@ -26,7 +26,7 @@ const User = {
         u.id, u.name, u.email, u.phone,
         u.password_hash, u.is_active, u.profile_photo,
         u.vt_approval_status, u.vtp_approval_status,
-        u.udise_code, u.organization_name,
+        u.udise_code, u.organization_name, u.vtp_id,
         u.latitude, u.longitude, u.school_open_time, u.school_close_time,
         r.id   AS role_id,
         r.name AS role_name
@@ -44,7 +44,7 @@ const User = {
         u.id, u.name, u.email, u.phone,
         u.is_active, u.profile_photo,
         u.vt_approval_status, u.vtp_approval_status,
-        u.udise_code, u.organization_name,
+        u.udise_code, u.organization_name, u.vtp_id,
         u.latitude, u.longitude, u.school_open_time, u.school_close_time,
         r.id   AS role_id,
         r.name AS role_name
@@ -157,7 +157,7 @@ const User = {
         u.id, u.name, u.email, u.phone,
         u.vt_approval_status, u.vtp_approval_status, u.is_active, u.created_at,
         v.district_name, v.block_name, v.school_name,
-        v.vtp_name, v.trade, v.vt_aadhar, v.udise_code
+        v.vtp_name, v.trade, v.vt_aadhar, v.udise_code, v.vtp_id
       FROM users u
       JOIN vt_staff_details v ON v.id = u.vt_staff_id
       WHERE v.udise_code = $1
@@ -174,12 +174,29 @@ const User = {
         u.id, u.name, u.email, u.phone,
         u.vt_approval_status, u.vtp_approval_status, u.is_active, u.created_at,
         v.district_name, v.block_name, v.school_name,
-        v.vtp_name, v.trade, v.vt_aadhar, v.udise_code
+        v.vtp_name, v.trade, v.vt_aadhar, v.udise_code, v.vtp_id
       FROM users u
       JOIN vt_staff_details v ON v.id = u.vt_staff_id
       WHERE v.vtp_name = $1
       ORDER BY u.created_at DESC
     `, [vtpName]);
+    return result.rows;
+  },
+
+  // ─── Get VTs assigned to a specific VTP (by vtp_id) ────────────────────────
+  // Used by VTP user to see VTs they own based on matching vtp_id
+  async findVtsByVtpId(vtpId) {
+    const result = await pool.query(`
+      SELECT
+        u.id, u.name, u.email, u.phone,
+        u.vt_approval_status, u.vtp_approval_status, u.is_active, u.created_at,
+        v.district_name, v.block_name, v.school_name,
+        v.vtp_name, v.trade, v.vt_aadhar, v.udise_code, v.vtp_id
+      FROM users u
+      JOIN vt_staff_details v ON v.id = u.vt_staff_id
+      WHERE TRIM(COALESCE(u.vtp_id, v.vtp_id)) = TRIM($1)
+      ORDER BY u.created_at DESC
+    `, [vtpId]);
     return result.rows;
   },
 
@@ -190,7 +207,7 @@ const User = {
         u.id, u.name, u.email, u.phone,
         u.vt_approval_status, u.vtp_approval_status, u.is_active, u.created_at,
         v.district_name, v.block_name, v.school_name,
-        v.vtp_name, v.trade, v.udise_code
+        v.vtp_name, v.trade, v.udise_code, v.vtp_id
       FROM users u
       JOIN vt_staff_details v ON v.id = u.vt_staff_id
       WHERE u.vt_approval_status IS NOT NULL
