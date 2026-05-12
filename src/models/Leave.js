@@ -94,15 +94,15 @@ class Leave {
   static async getUserLeaveMetrics(userId) {
     const result = await pool.query(`
       SELECT 
-        COUNT(*) AS total_leaves,
-        COUNT(*) FILTER (WHERE leave_type = 'full-day') AS full_day,
-        COUNT(*) FILTER (WHERE leave_type = 'first-half') AS first_half,
-        COUNT(*) FILTER (WHERE leave_type = 'second-half') AS second_half,
-        COUNT(*) FILTER (WHERE leave_type = 'od') AS od,
-        COUNT(*) FILTER (WHERE leave_type = 'regularization') AS regularization,
-        COUNT(*) FILTER (WHERE status = 'pending') AS pending,
-        COUNT(*) FILTER (WHERE status = 'approved') AS accepted,
-        COUNT(*) FILTER (WHERE status = 'rejected') AS rejected
+        COALESCE(SUM(to_date - from_date + 1), 0) AS total_leaves,
+        COALESCE(SUM(to_date - from_date + 1) FILTER (WHERE leave_type = 'full-day'), 0) AS full_day,
+        COALESCE(SUM(to_date - from_date + 1) FILTER (WHERE leave_type = 'first-half'), 0) AS first_half,
+        COALESCE(SUM(to_date - from_date + 1) FILTER (WHERE leave_type = 'second-half'), 0) AS second_half,
+        COALESCE(SUM(to_date - from_date + 1) FILTER (WHERE leave_type = 'od'), 0) AS od,
+        COALESCE(SUM(to_date - from_date + 1) FILTER (WHERE leave_type = 'regularization'), 0) AS regularization,
+        COALESCE(SUM(to_date - from_date + 1) FILTER (WHERE status = 'pending'), 0) AS pending,
+        COALESCE(SUM(to_date - from_date + 1) FILTER (WHERE status = 'approved'), 0) AS accepted,
+        COALESCE(SUM(to_date - from_date + 1) FILTER (WHERE status = 'rejected'), 0) AS rejected
       FROM leave_requests
       WHERE user_id = $1
     `, [userId]);
@@ -170,15 +170,15 @@ class Leave {
     const totalParams = params.slice(0, params.length - 2);
     const totalsQuery = `
       SELECT
-        COUNT(*) AS total_leaves,
-        COUNT(*) FILTER (WHERE leave_type = 'full-day') AS full_day,
-        COUNT(*) FILTER (WHERE leave_type = 'first-half') AS first_half,
-        COUNT(*) FILTER (WHERE leave_type = 'second-half') AS second_half,
-        COUNT(*) FILTER (WHERE leave_type = 'od') AS od,
-        COUNT(*) FILTER (WHERE leave_type = 'regularization') AS regularization,
-        COUNT(*) FILTER (WHERE status = 'pending') AS pending,
-        COUNT(*) FILTER (WHERE status = 'approved') AS accepted,
-        COUNT(*) FILTER (WHERE status = 'rejected') AS rejected
+        COALESCE(SUM(to_date - from_date + 1), 0) AS total_leaves,
+        COALESCE(SUM(to_date - from_date + 1) FILTER (WHERE leave_type = 'full-day'), 0) AS full_day,
+        COALESCE(SUM(to_date - from_date + 1) FILTER (WHERE leave_type = 'first-half'), 0) AS first_half,
+        COALESCE(SUM(to_date - from_date + 1) FILTER (WHERE leave_type = 'second-half'), 0) AS second_half,
+        COALESCE(SUM(to_date - from_date + 1) FILTER (WHERE leave_type = 'od'), 0) AS od,
+        COALESCE(SUM(to_date - from_date + 1) FILTER (WHERE leave_type = 'regularization'), 0) AS regularization,
+        COALESCE(SUM(to_date - from_date + 1) FILTER (WHERE status = 'pending'), 0) AS pending,
+        COALESCE(SUM(to_date - from_date + 1) FILTER (WHERE status = 'approved'), 0) AS accepted,
+        COALESCE(SUM(to_date - from_date + 1) FILTER (WHERE status = 'rejected'), 0) AS rejected
       FROM leave_requests l
       WHERE l.user_id = $1
         ${dateFilter}

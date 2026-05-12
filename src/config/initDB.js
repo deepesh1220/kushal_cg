@@ -256,6 +256,26 @@ const initDB = async () => {
       );
     `);
 
+    // ─────────────────────────────────────────────────────────
+    // TABLE: leave_excess_records
+    // Tracks excess/access leave taken when remaining_balance is insufficient
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS leave_excess_records (
+        id                                 SERIAL PRIMARY KEY,
+        user_id                            INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        leave_request_id                   INTEGER NOT NULL REFERENCES leave_requests(id) ON DELETE CASCADE,
+        month                              INTEGER NOT NULL,
+        year                               INTEGER NOT NULL,
+        approved_leave_days                DECIMAL(5,2) NOT NULL,
+        available_balance_before_deduction DECIMAL(5,2) NOT NULL,
+        deducted_from_balance              DECIMAL(5,2) NOT NULL,
+        excess_leave                       DECIMAL(5,2) NOT NULL,
+        created_at                         TIMESTAMPTZ DEFAULT NOW(),
+        updated_at                         TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
     // Indexes for leave balance tables
     await client.query(`CREATE INDEX IF NOT EXISTS idx_leave_balance_user_id ON leave_balance(user_id);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_leave_balance_year ON leave_balance(year);`);
