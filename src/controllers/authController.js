@@ -161,6 +161,7 @@ const register = async (req, res) => {
 
     // ── Extract photo if uploaded ─────────────────────────────────────────────
     const profile_photo = req.file ? `/uploads/register/${req.file.filename}` : null;
+console.log(vtStaff);
 
     // ── Create user ──────────────────────────────────────────────────────────
     const user = await User.create({
@@ -179,6 +180,7 @@ const register = async (req, res) => {
         : roleName === VTP_ROLE_NAME
           ? (name || null)
           : null,
+      vtp_id: vtStaff?.vtp_id,
       udise_code: finalUdise || null,
       profile_photo: profile_photo,
       latitude: latitude ? parseFloat(latitude) : null,
@@ -219,6 +221,7 @@ const register = async (req, res) => {
           udise_code: vtStaff.udise_code,
           trade: vtStaff.trade,
           vtp_name: vtStaff.vtp_name,
+          vtp_id: vtStaff?.vtp_id,
         } : null,
         created_at: user.created_at,
       },
@@ -417,10 +420,12 @@ const login = async (req, res) => {
     // ══════════════════════════════════════════════════════════════════════════
     if (roleName === 'vocational_teacher_provider') {
       const inputIdentifier = email;   // could be email or mobile number
-      console.log(inputIdentifier);
 
       // ── Step 1: Try users table first (returning VTP who already has a user row) ──
       let user = await User.findByEmail(inputIdentifier);
+      
+      console.log("VTP login details", user);
+
       if (!user && /^\d+$/.test(inputIdentifier)) {
         user = await User.findByPhone(inputIdentifier);
       }
