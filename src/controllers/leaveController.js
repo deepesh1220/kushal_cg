@@ -96,13 +96,14 @@ const applyLeave = async (req, res) => {
     // Lazy-credit current month EL so first-time applicants see correct balance
     await LeaveBalance.ensureCurrentMonthCredit(userId);
     const check = await LeaveBalance.checkSufficientBalance(userId, reqType);
-    if (!check.balanceOk) {
-      return res.status(400).json({
-        status: false,
-        message: `Insufficient leave balance. Required ${check.required}, available ${check.available}.`,
-        balanceCheck: check
-      });
-    }
+    // VT can now apply for leave even with insufficient balance
+    // if (!check.balanceOk) {
+    //   return res.status(400).json({
+    //     status: false,
+    //     message: `Insufficient leave balance. Required ${check.required}, available ${check.available}.`,
+    //     balanceCheck: check
+    //   });
+    // }
     if (!check.monthlyCapOk) {
       return res.status(400).json({
         status: false,
@@ -237,20 +238,33 @@ const approveRejectLeave = async (req, res) => {
     // Update leave status first (primary action — never blocks on balance issues)
     const updated = await Leave.updateStatus(leaveId, { status, reviewerId: reviewer.id });
 
-    // On approval, attempt EL deduction (non-blocking — logs failure but doesn't fail approval)
+    // On final approval, attempt EL deduction (non-blocking — logs failure but doesn't fail approval)
     let deductionInfo = null;
-    if (status === 'approved') {
+    if (status === 'approved' && updated.leave_approved) {
       try {
         const LeaveBalance = require('../models/LeaveBalance');
         // Lazy credit current month if not yet credited
         await LeaveBalance.ensureCurrentMonthCredit(leave.user_id);
-        // Deduct the leave amount
-        const deduction = await LeaveBalance.deductLeave(
-          leaveId, leave.user_id, leave.leave_type, reviewer.id
-        );
-        deductionInfo = deduction;
-        if (!deduction.success) {
-          console.warn(`[Leave ${leaveId}] Approved but deduction failed: ${deduction.message}`);
+        
+        // Prevent duplicate deduction: check if already deducted
+        const { pool } = require('../config/db');
+        const checkDeduction = await pool.query(`
+          SELECT 1 FROM leave_deduction_log WHERE leave_request_id = $1
+          UNION
+          SELECT 1 FROM leave_excess_records WHERE leave_request_id = $1
+        `, [leaveId]);
+        
+        if (checkDeduction.rows.length === 0) {
+          // Deduct the leave amount
+          const deduction = await LeaveBalance.deductLeave(
+            leaveId, leave.user_id, leave.leave_type, reviewer.id
+          );
+          deductionInfo = deduction;
+          if (!deduction.success) {
+            console.warn(`[Leave ${leaveId}] Approved but deduction failed: ${deduction.message}`);
+          }
+        } else {
+          deductionInfo = { success: true, message: 'Already deducted' };
         }
       } catch (e) {
         console.error(`[Leave ${leaveId}] Deduction error (approval still succeeded):`, e.message);

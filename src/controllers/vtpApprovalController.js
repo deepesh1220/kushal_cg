@@ -86,25 +86,29 @@ const _validateLeaveBelongsToVtp = async (leaveId, vtpUser) => {
 // ─── GET /api/vtp/vts ─────────────────────────────────────────────────────────
 // VTP views VTs assigned to their organization with status filter (?status=all|pending|accepted|rejected)
 const getVtpScopedVts = async (req, res) => {
+  
   try {
     const vtpUser = req.user;
+    console.log("vtpUser",vtpUser);
+    
     const { status } = req.query;
 
     // super_admin/admin: see all; VTP: scoped by organization_name
     let allVts;
     if (['super_admin', 'admin'].includes(vtpUser.role_name)) {
       allVts = await User.findAllVtsByStatus(null);
+      
     } else {
       if (vtpUser.role_name !== VTP_ROLE_NAME) {
         return res.status(403).json({ status: false, message: 'Only VTP users can access this resource.' });
       }
-      if (!vtpUser.organization_name) {
+      if (!vtpUser.vtp_id) {
         return res.status(400).json({
           status: false,
-          message: 'Your account is not linked to a VTP organization name. Contact administrator.',
+          message: 'Your account is not linked to a VTP ID. Contact administrator.',
         });
       }
-      allVts = await User.findVtsByVtpName(vtpUser.organization_name);
+      allVts = await User.findVtsByVtpId(vtpUser.vtp_id);
     }
 
     // Counts (across both layers) — useful for VTP UI badges
@@ -262,12 +266,45 @@ const approveLeaveByVtp = async (req, res) => {
       return res.status(404).json({ status: false, message: 'Leave request not found.' });
     }
 
+    let deductionInfo = null;
+    if (updated.leave_approved) {
+      try {
+        const LeaveBalance = require('../models/LeaveBalance');
+        // Lazy credit current month if not yet credited
+        await LeaveBalance.ensureCurrentMonthCredit(updated.user_id);
+        
+        // Prevent duplicate deduction: check if already deducted
+        const checkDeduction = await pool.query(`
+          SELECT 1 FROM leave_deduction_log WHERE leave_request_id = $1
+          UNION
+          SELECT 1 FROM leave_excess_records WHERE leave_request_id = $1
+        `, [parsedLeaveId]);
+        
+        if (checkDeduction.rows.length === 0) {
+          // Deduct the leave amount
+          const deduction = await LeaveBalance.deductLeave(
+            parsedLeaveId, updated.user_id, updated.leave_type, req.user.id
+          );
+          deductionInfo = deduction;
+          if (!deduction.success) {
+            console.warn(`[Leave ${parsedLeaveId}] Approved but deduction failed: ${deduction.message}`);
+          }
+        } else {
+          deductionInfo = { success: true, message: 'Already deducted' };
+        }
+      } catch (e) {
+        console.error(`[Leave ${parsedLeaveId}] Deduction error (approval still succeeded):`, e.message);
+        deductionInfo = { success: false, message: e.message };
+      }
+    }
+
     return res.status(200).json({
       status: true,
       message: updated.leave_approved
         ? 'Leave request fully approved (Principal + VTP).'
         : 'Leave request approved by VTP. Awaiting Principal approval.',
       data: updated,
+      ...(deductionInfo ? { deduction: deductionInfo } : {})
     });
   } catch (error) {
     console.error('approveLeaveByVtp error:', error.message);
