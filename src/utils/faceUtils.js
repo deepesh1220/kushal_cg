@@ -18,8 +18,11 @@ const MODELS_PATH = path.join(
   'model'
 );
 
-// ─── Match threshold: euclidean distance → (1 - 0.30) * 100 = 70% ────────────
-const MATCH_THRESHOLD = 0.30;
+// ─── Match threshold ────────────────────────────────────────────────────────
+// face-api dlib 128D: same person photos typically score distance 0.30 – 0.50.
+// 0.50 is the right real-world balance (strict enough to block impostors,
+// loose enough to pass the same person under different lighting/angles).
+const MATCH_THRESHOLD = 0.50;
 
 // ─── AES-256-GCM encryption key (32 bytes, derived from env var) ─────────────
 const ALGORITHM      = 'aes-256-gcm';
@@ -53,23 +56,23 @@ const loadModels = async () => {
 // Uses sharp to decode JPEG/PNG → raw RGB pixels → TF tensor
 // ─────────────────────────────────────────────────────────────────────────────
 const bufferToTensor = async (imageBuffer) => {
+  // CRITICAL: Do NOT use normalize() or sharpen() — the face-api recognition
+  // model was trained on raw pixel values. Altering them creates artificial
+  // variance between the registration photo and the check-in selfie, causing
+  // the euclidean distance to grow → lower match %.
+  //
+  // Use removeAlpha() to get 3-channel RGB directly (avoids the manual RGBA→RGB
+  // loop). Use float32 because face-api's TF backend expects float tensors.
   const { data, info } = await sharp(imageBuffer)
-    .ensureAlpha()               // convert to RGBA
+    .resize({ width: 640, withoutEnlargement: true }) // cap at 640px, no upscale
+    .removeAlpha()                                     // 3-channel RGB output
     .raw()
     .toBuffer({ resolveWithObject: true });
 
-  // face-api expects an HTMLImageElement-like object or a 3-channel tensor
-  // Build a 3D tensor [height, width, 3] from RGBA → RGB
   const { width, height } = info;
-  const rgbData = new Uint8Array(width * height * 3);
+  const rgbData = new Float32Array(data); // already RGB, cast to float32
 
-  for (let i = 0; i < width * height; i++) {
-    rgbData[i * 3]     = data[i * 4];     // R
-    rgbData[i * 3 + 1] = data[i * 4 + 1]; // G
-    rgbData[i * 3 + 2] = data[i * 4 + 2]; // B
-  }
-
-  return tf.tensor3d(rgbData, [height, width, 3], 'int32');
+  return tf.tensor3d(rgbData, [height, width, 3], 'float32');
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -80,11 +83,15 @@ const extractDescriptorFromFile = async (imagePath) => {
   const buffer = fs.readFileSync(imagePath);
   const tensor = await bufferToTensor(buffer);
 
+  // minConfidence 0.5: best detection recall while still filtering noise.
+  // Too high (0.7+) misses valid faces; too low (0.3-) picks up false detections.
+  const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
+
   try {
     const detection = await faceapi
-      .detectSingleFace(tensor)
-      .withFaceLandmarks()
-      .withFaceDescriptor();
+      .detectSingleFace(tensor, options)
+      .withFaceLandmarks()    // landmarks drive internal face-alignment
+      .withFaceDescriptor();  // 128D embedding
 
     if (!detection) return null;
     return Array.from(detection.descriptor); // plain JS array of 128 floats
@@ -105,9 +112,11 @@ const extractDescriptorFromBase64 = async (base64String) => {
   const buffer     = Buffer.from(base64Data, 'base64');
   const tensor     = await bufferToTensor(buffer);
 
+  const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
+
   try {
     const detection = await faceapi
-      .detectSingleFace(tensor)
+      .detectSingleFace(tensor, options)
       .withFaceLandmarks()
       .withFaceDescriptor();
 
@@ -184,13 +193,22 @@ const compareFaces = (storedRaw, liveArray) => {
 
   const distance    = faceapi.euclideanDistance(stored, live);
 
-  // distance 0.00 → 100%  |  distance 0.25 → 75%  |  distance 0.60+ → ~0%
-  const matchPercent = Math.max(0, Math.round((1 - distance) * 10000) / 100);
+  // Map distance → human-readable score using 0.6 as the "0%" anchor.
+  // This is the industry-standard formula for dlib/face-api 128D descriptors.
+  //
+  //   distance 0.00  →  100%  (identical)
+  //   distance 0.30  →   50%  (clearly same person)
+  //   distance 0.50  →   17%  (borderline, still isMatch: true)
+  //   distance 0.60+ →    0%  (different people)
+  //
+  // Using (1 - distance) * 100 WITHOUT the /0.6 anchor is WRONG: it makes a
+  // same-person match at 0.35 show as 65%, which looks like a failure.
+  const matchPercent = Math.max(0, Math.min(100, Math.round((1 - distance / 0.6) * 10000) / 100));
 
   return {
-    distance,
+    distance:     Math.round(distance * 10000) / 10000,
     matchPercent,
-    isMatch: distance <= MATCH_THRESHOLD, // ≤ 0.25 means ≥ 75%
+    isMatch: distance <= MATCH_THRESHOLD,
   };
 };
 
