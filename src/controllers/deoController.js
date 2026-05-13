@@ -85,7 +85,10 @@ const getSchoolsAndVts = async (req, res) => {
         COALESCE(msr.deo_approval_status, 'pending') as deo_approval_status
       FROM vt_staff_details v
       LEFT JOIN users u ON u.vt_staff_id = v.id
-      LEFT JOIN monthly_school_reports msr ON msr.user_id = u.id AND msr.report_month = $${monthArgIndex} AND msr.report_year = $${yearArgIndex}
+      LEFT JOIN monthly_school_reports msr
+        ON msr.udise_code = v.udise_code
+        AND msr.report_month = $${monthArgIndex}
+        AND msr.report_year = $${yearArgIndex}
       ${vtsWhereStr}
     `;
     const vtsResult = await pool.query(vtsQuery, vtsQueryArgs);
