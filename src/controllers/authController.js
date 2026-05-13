@@ -161,7 +161,7 @@ const register = async (req, res) => {
 
     // ── Extract photo if uploaded ─────────────────────────────────────────────
     const profile_photo = req.file ? `/uploads/register/${req.file.filename}` : null;
-console.log(vtStaff);
+    console.log(vtStaff);
 
     // ── Create user ──────────────────────────────────────────────────────────
     const user = await User.create({
@@ -423,7 +423,7 @@ const login = async (req, res) => {
 
       // ── Step 1: Try users table first (returning VTP who already has a user row) ──
       let user = await User.findByEmail(inputIdentifier);
-      
+
       console.log("VTP login details", user);
 
       if (!user && /^\d+$/.test(inputIdentifier)) {
@@ -748,11 +748,20 @@ const loginVT = async (req, res) => {
       return res.status(403).json({ status: false, message: 'This endpoint is for Vocational Teachers only.' });
     }
 
+    let vtpMobile = null;
+    if (user.vtp_id) {
+      const vtpData = await Vtp.findByVTPID(user.vtp_id);
+      if (vtpData) {
+        vtpMobile = vtpData.mobile;
+      }
+    }
+
     if (user.vt_approval_status === 'pending' && user.vtp_approval_status === 'pending') {
       return res.status(403).json({
         status: false,
         hm_approval: user.vt_approval_status,
         vtp_approval: user.vtp_approval_status,
+        vtp_mobile: vtpMobile,
         code: 'PENDING_APPROVAL OF HM and VTP',
         message: 'Your registration is pending approval from your school Headmaster and VTP. Please wait.',
       });
@@ -763,6 +772,7 @@ const loginVT = async (req, res) => {
         status: false,
         hm_approval: user.vt_approval_status,
         vtp_approval: user.vtp_approval_status,
+        vtp_mobile: vtpMobile,
         code: 'REJECTED',
         message: 'Your registration was rejected by the Headmaster and VTP. Contact your school or administrator.',
       });
@@ -774,6 +784,7 @@ const loginVT = async (req, res) => {
         status: false,
         hm_approval: user.vt_approval_status,
         vtp_approval: user.vtp_approval_status,
+        vtp_mobile: vtpMobile,
         code: 'VT_PENDING_APPROVAL',
         message: 'Your registration is pending approval from your school Headmaster. Please wait.',
       });
@@ -784,6 +795,7 @@ const loginVT = async (req, res) => {
         status: false,
         hm_approval: user.vt_approval_status,
         vtp_approval: user.vtp_approval_status,
+        vtp_mobile: vtpMobile,
         code: 'VT_REJECTED',
         message: 'Your registration was rejected by the Headmaster. Contact your school or administrator.',
       });
@@ -794,6 +806,7 @@ const loginVT = async (req, res) => {
         status: false,
         hm_approval: user.vt_approval_status,
         vtp_approval: user.vtp_approval_status,
+        vtp_mobile: vtpMobile,
         code: 'VTP_PENDING_APPROVAL',
         message: 'Your registration is pending approval from your VTP. Please wait.',
       });
@@ -804,6 +817,7 @@ const loginVT = async (req, res) => {
         status: false,
         hm_approval: user.vt_approval_status,
         vtp_approval: user.vtp_approval_status,
+        vtp_mobile: vtpMobile,
         code: 'VTP_REJECTED',
         message: 'Your registration was rejected by your VTP. Contact your VTP or administrator.',
       });
@@ -846,6 +860,8 @@ const loginVT = async (req, res) => {
           udise_code: user.udise_code,
           profile_photo: user.profile_photo,
           vt_approval_status: user.vt_approval_status,
+          vtp_approval_status: user.vtp_approval_status,
+          vtp_mobile: vtpMobile,
           permissions,
         },
         tokens: {

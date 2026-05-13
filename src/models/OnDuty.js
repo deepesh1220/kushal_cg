@@ -109,6 +109,7 @@ class OnDuty {
       SELECT
         o.*,
         u.name  AS user_name,
+        u.phone as mobile,
         v.udise_code,
         r.name  AS reviewer_name
       ${baseQuery}

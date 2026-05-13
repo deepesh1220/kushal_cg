@@ -51,6 +51,19 @@ class Vtp {
     const result = await pool.query(query, [id]);
     return result.rows[0] || null;
   }
+
+  static async findByVTPID(vtp_id) {
+    const query = `
+      SELECT id, vc_name, vtp_name, mobile,
+             email, status, created_at, updated_at
+      FROM vtp
+      WHERE vtp_id = $1
+    `;
+    const result = await pool.query(query, [vtp_id]);
+    return result.rows[0] || null;
+  }
+
 }
+
 
 module.exports = Vtp;
