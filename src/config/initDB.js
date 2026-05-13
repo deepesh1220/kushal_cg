@@ -444,8 +444,8 @@ const initDB = async () => {
       );
     `);
 
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_rpt_snapshots_report_id       ON monthly_report_snapshots(report_id);`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_rpt_snapshots_user_month_year ON monthly_report_snapshots(user_id, month, year);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_rpt_snapshots_report_id       ON monthly_report_snapshots(report_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_rpt_snapshots_user_month_year ON monthly_report_snapshots(user_id, month, year);`);
 
     // ─────────────────────────────────────────────────────────
     // ALTER CONSTRAINTS for OD feature
