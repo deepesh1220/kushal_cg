@@ -798,8 +798,6 @@ const getMonthlySummary = async (req, res) => {
   }
 };
 
-
-
 module.exports = {
   downloadMonthlyAttendance,
   getMonthlySummary,
