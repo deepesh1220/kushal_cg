@@ -29,6 +29,7 @@ const initDB = async () => {
         vt_email      VARCHAR(150),
         school_type   VARCHAR(100),
         old_or_new    VARCHAR(50),
+        vtp_id        CHAR(2),
         remarks       TEXT
       );
     `);
@@ -39,6 +40,7 @@ const initDB = async () => {
         ADD COLUMN IF NOT EXISTS dob                      DATE,
         ADD COLUMN IF NOT EXISTS educational_qualification VARCHAR(200),
         ADD COLUMN IF NOT EXISTS date_of_joining          DATE,
+        ADD COLUMN IF NOT EXISTS vtp_id                   CHAR(2),
         ADD COLUMN IF NOT EXISTS updated_at               TIMESTAMPTZ DEFAULT NOW();
     `);
 
@@ -107,6 +109,7 @@ const initDB = async () => {
                              CHECK (vt_approval_status IN ('pending','accepted','rejected')),
         vtp_approval_status VARCHAR(20) DEFAULT NULL
                              CHECK (vtp_approval_status IN ('pending','accepted','rejected')),
+        vtp_id             CHAR(2),
         is_active          BOOLEAN      DEFAULT TRUE,
         profile_photo      TEXT,
         created_at         TIMESTAMPTZ  DEFAULT NOW(),
@@ -253,6 +256,26 @@ const initDB = async () => {
         leave_type       VARCHAR(20) NOT NULL,
         deducted_at      TIMESTAMPTZ DEFAULT NOW(),
         reviewed_by      INTEGER REFERENCES users(id) ON DELETE SET NULL
+      );
+    `);
+
+    // ─────────────────────────────────────────────────────────
+    // TABLE: leave_excess_records
+    // Tracks excess/access leave taken when remaining_balance is insufficient
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS leave_excess_records (
+        id                                 SERIAL PRIMARY KEY,
+        user_id                            INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        leave_request_id                   INTEGER NOT NULL REFERENCES leave_requests(id) ON DELETE CASCADE,
+        month                              INTEGER NOT NULL,
+        year                               INTEGER NOT NULL,
+        approved_leave_days                DECIMAL(5,2) NOT NULL,
+        available_balance_before_deduction DECIMAL(5,2) NOT NULL,
+        deducted_from_balance              DECIMAL(5,2) NOT NULL,
+        excess_leave                       DECIMAL(5,2) NOT NULL,
+        created_at                         TIMESTAMPTZ DEFAULT NOW(),
+        updated_at                         TIMESTAMPTZ DEFAULT NOW()
       );
     `);
 
@@ -409,6 +432,8 @@ const initDB = async () => {
         user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         from_date    DATE    NOT NULL,
         to_date      DATE    NOT NULL,
+        od_type      VARCHAR(20) DEFAULT 'full-day'
+                       CHECK (od_type IN ('full-day','first-half','second-half')),
         reason       TEXT,
         status       VARCHAR(20) DEFAULT 'pending'
                        CHECK (status IN ('pending','approved','rejected')),
@@ -417,6 +442,12 @@ const initDB = async () => {
         created_at   TIMESTAMPTZ DEFAULT NOW(),
         updated_at   TIMESTAMPTZ DEFAULT NOW()
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE od_requests ADD COLUMN IF NOT EXISTS od_type VARCHAR(20) DEFAULT 'full-day';
+      ALTER TABLE od_requests DROP CONSTRAINT IF EXISTS od_requests_od_type_check;
+      ALTER TABLE od_requests ADD CONSTRAINT od_requests_od_type_check CHECK (od_type IN ('full-day','first-half','second-half'));
     `);
 
     // ─────────────────────────────────────────────────────────
@@ -452,6 +483,7 @@ const initDB = async () => {
         vtp_name                     VARCHAR(200) NOT NULL,
         mobile                BIGINT       UNIQUE NOT NULL,
         email                        VARCHAR(200) UNIQUE NOT NULL,
+        vtp_id                       CHAR(2),
         status                       VARCHAR(20)  DEFAULT 'active'
                                        CHECK (status IN ('active','inactive')),
         created_at                   TIMESTAMPTZ  DEFAULT NOW(),
@@ -463,6 +495,71 @@ const initDB = async () => {
     // Indexes for VTP table
     await client.query(`CREATE INDEX IF NOT EXISTS idx_vtp_email   ON vtp (email);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_vtp_mobile  ON vtp (mobile);`);
+
+    // Ensure vtp_id column exists on vtp table
+    await client.query(`
+      ALTER TABLE vtp
+        ADD COLUMN IF NOT EXISTS vtp_id CHAR(2);
+    `);
+
+    // ─────────────────────────────────────────────────────────
+    // TABLE: mst_vtp
+    // Master table for Vocational Training Providers
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS mst_vtp (
+        vtp_id   CHAR(2) PRIMARY KEY,
+        vtp_name VARCHAR(100) NOT NULL UNIQUE
+      );
+    `);
+
+    // Seed data for mst_vtp
+    await client.query(`
+      INSERT INTO mst_vtp (vtp_id, vtp_name) VALUES
+        ('21', 'Aisect'),
+        ('22', 'Gram Tarang'),
+        ('23', 'Indus'),
+        ('24', 'Laqsh'),
+        ('25', 'Learnet Skills Limited'),
+        ('26', 'Nitcon'),
+        ('27', 'Skill Tree'),
+        ('28', 'Upgrad')
+      ON CONFLICT (vtp_id) DO UPDATE 
+      SET vtp_name = EXCLUDED.vtp_name;
+    `);
+
+    // Auto-populate vtp_id in vt_staff_details and vtp by matching vtp_name
+    await client.query(`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS vtp_id CHAR(2);
+
+      UPDATE vt_staff_details
+      SET vtp_id = mst_vtp.vtp_id
+      FROM mst_vtp
+      WHERE vt_staff_details.vtp_name = mst_vtp.vtp_name
+      AND vt_staff_details.vtp_id IS DISTINCT FROM mst_vtp.vtp_id;
+
+      UPDATE vtp
+      SET vtp_id = mst_vtp.vtp_id
+      FROM mst_vtp
+      WHERE vtp.vtp_name = mst_vtp.vtp_name
+      AND vtp.vtp_id IS DISTINCT FROM mst_vtp.vtp_id;
+
+      -- Populate users table based on organization_name (for VTP/management users)
+      UPDATE users
+      SET vtp_id = mst_vtp.vtp_id
+      FROM mst_vtp
+      WHERE users.organization_name = mst_vtp.vtp_name
+      AND users.vtp_id IS DISTINCT FROM mst_vtp.vtp_id;
+
+      -- Populate users table based on vt_staff_details (for VT users)
+      UPDATE users
+      SET vtp_id = vt_staff_details.vtp_id
+      FROM vt_staff_details
+      WHERE users.vt_staff_id = vt_staff_details.id
+      AND vt_staff_details.vtp_id IS NOT NULL
+      AND users.vtp_id IS DISTINCT FROM vt_staff_details.vtp_id;
+    `);
 
     // ALTER users: add vtp_approval_status (dual-approval layer)
     // ─────────────────────────────────────────────────────────
@@ -481,10 +578,19 @@ const initDB = async () => {
     //   principal_updated_at  → set whenever vt_approval_status changes  (HM/Principal layer)
     //   vtp_updated_at        → set whenever vtp_approval_status changes  (VTP layer)
     // ─────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────
+    // ALTER leave_requests: add dual-approval layer
+    // ─────────────────────────────────────────────────────────
     await client.query(`
-      ALTER TABLE users
+      ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS vtp_status VARCHAR(20) DEFAULT 'pending';
+      ALTER TABLE leave_requests DROP CONSTRAINT IF EXISTS leave_requests_vtp_status_check;
+      ALTER TABLE leave_requests ADD CONSTRAINT leave_requests_vtp_status_check
+        CHECK (vtp_status IN ('pending','approved','rejected'));
+
+      ALTER TABLE leave_requests
         ADD COLUMN IF NOT EXISTS principal_updated_at TIMESTAMPTZ DEFAULT NULL,
-        ADD COLUMN IF NOT EXISTS vtp_updated_at       TIMESTAMPTZ DEFAULT NULL;
+        ADD COLUMN IF NOT EXISTS vtp_updated_at       TIMESTAMPTZ DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS leave_approved       BOOLEAN DEFAULT FALSE;
     `);
 
     await client.query('COMMIT');
@@ -657,6 +763,7 @@ const seedDefaults = async (client) => {
     'attendance:view_teachers',
     'attendance:report',
     'leave:view_all',
+    'leave:view_balance_all',
     'vt:approve_vtp',
   ]);
 

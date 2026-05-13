@@ -7,7 +7,7 @@ const {
   approveMonthlyReport
 } = require('../controllers/reportController');
 
-// All report routes require authentication
+// All report routes require 
 router.use(authenticate);
 
 // ── Monthly Summary ───────────────────────────────────────────────────────────

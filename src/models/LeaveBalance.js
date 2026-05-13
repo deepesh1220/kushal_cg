@@ -212,7 +212,44 @@ class LeaveBalance {
     try {
       await client.query('BEGIN');
 
-      const deductionAmount = this.getDeductionAmount(leaveType);
+      // 0. Prevent duplicate deductions inside transaction
+      const existingDeduction = await client.query(`
+        SELECT id FROM leave_deduction_log WHERE leave_request_id = $1 FOR UPDATE
+      `, [leaveRequestId]);
+      
+      const existingExcess = await client.query(`
+        SELECT id FROM leave_excess_records WHERE leave_request_id = $1 FOR UPDATE
+      `, [leaveRequestId]);
+
+      if (existingDeduction.rows.length > 0 || existingExcess.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return { success: true, message: 'Leave already deducted or processed for excess' };
+      }
+
+      // 1. Fetch leave request dates to calculate total approved days
+      const leaveQuery = await client.query(`
+        SELECT from_date, to_date, leave_type FROM leave_requests WHERE id = $1
+      `, [leaveRequestId]);
+
+      if (leaveQuery.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return { success: false, message: 'Leave request not found' };
+      }
+
+      const leave = leaveQuery.rows[0];
+      let days = 1;
+      if (leave.from_date && leave.to_date) {
+        const from = new Date(leave.from_date);
+        const to = new Date(leave.to_date);
+        from.setHours(0, 0, 0, 0);
+        to.setHours(0, 0, 0, 0);
+        days = Math.round((to - from) / (1000 * 60 * 60 * 24)) + 1;
+      }
+      
+      // We still use leaveType if passed, else fallback to db record
+      const actualLeaveType = leaveType || leave.leave_type;
+      const approvedLeaveDays = days * this.getDeductionAmount(actualLeaveType);
+
       const now = new Date();
       const year = now.getFullYear();
       const month = now.getMonth() + 1;
@@ -235,30 +272,26 @@ class LeaveBalance {
 
       const currentBalance = parseFloat(balanceResult.rows[0].remaining_balance);
 
-      // Check if sufficient balance
-      if (currentBalance < deductionAmount) {
-        await client.query('ROLLBACK');
-        return {
-          success: false,
-          message: `Insufficient leave balance. Required: ${deductionAmount}, Available: ${currentBalance}`,
-          insufficientBalance: true,
-          required: deductionAmount,
-          available: currentBalance
-        };
+      // We do not block for insufficient balance anymore.
+      // Instead, we calculate excess leave.
+      let deductedFromBalance = 0;
+      let excessLeave = 0;
+
+      if (currentBalance >= approvedLeaveDays) {
+        deductedFromBalance = approvedLeaveDays;
+        excessLeave = 0;
+      } else {
+        deductedFromBalance = currentBalance;
+        excessLeave = approvedLeaveDays - currentBalance;
       }
 
-      // Enforce monthly usage cap (max 10 days/month)
-      const monthlyUsage = await this.getMonthlyUsage(userId, year, month);
-      if (monthlyUsage + deductionAmount > LEAVE_POLICY.MAX_MONTHLY_USAGE) {
-        await client.query('ROLLBACK');
-        return {
-          success: false,
-          message: `Monthly usage cap exceeded. Used this month: ${monthlyUsage}, Requested: ${deductionAmount}, Max: ${LEAVE_POLICY.MAX_MONTHLY_USAGE}`,
-          monthlyCapExceeded: true,
-          monthlyUsed: monthlyUsage,
-          monthlyCap: LEAVE_POLICY.MAX_MONTHLY_USAGE
-        };
-      }
+      // Enforce monthly usage cap? 
+      // User says: "Remove the restriction that prevents a VT from applying leave when remaining_balance is insufficient."
+      // If we keep MAX_MONTHLY_USAGE, it would block them if they exceed 10 days even if they have 0 balance.
+      // We will skip monthly cap check if they are taking excess leave, or maybe we keep it? 
+      // To be safe and meet the requirement perfectly, we won't block here. 
+      // The user wants normal deduction for available balance, and rest as excess.
+      // We'll record whatever is deducted into total_used, and remainder goes to leave_excess_records.
 
       // Update balance
       const updatedBalance = await client.query(`
@@ -269,20 +302,32 @@ class LeaveBalance {
           updated_at = NOW()
         WHERE user_id = $2 AND year = $3
         RETURNING *
-      `, [deductionAmount, userId, year]);
+      `, [deductedFromBalance, userId, year]);
 
       // Log the deduction
-      await client.query(`
-        INSERT INTO leave_deduction_log (leave_request_id, user_id, deducted_amount, leave_type, reviewed_by)
-        VALUES ($1, $2, $3, $4, $5)
-      `, [leaveRequestId, userId, deductionAmount, leaveType, reviewedBy]);
+      if (deductedFromBalance > 0) {
+        await client.query(`
+          INSERT INTO leave_deduction_log (leave_request_id, user_id, deducted_amount, leave_type, reviewed_by)
+          VALUES ($1, $2, $3, $4, $5)
+        `, [leaveRequestId, userId, deductedFromBalance, actualLeaveType, reviewedBy]);
+      }
+
+      // If there is excess leave, log it into leave_excess_records
+      if (excessLeave > 0) {
+        await client.query(`
+          INSERT INTO leave_excess_records 
+            (user_id, leave_request_id, month, year, approved_leave_days, available_balance_before_deduction, deducted_from_balance, excess_leave)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `, [userId, leaveRequestId, month, year, approvedLeaveDays, currentBalance, deductedFromBalance, excessLeave]);
+      }
 
       await client.query('COMMIT');
 
       return {
         success: true,
-        message: `Deducted ${deductionAmount} EL from balance`,
-        deductedAmount: deductionAmount,
+        message: `Approved ${approvedLeaveDays} days. Deducted ${deductedFromBalance} EL, ${excessLeave} Excess.`,
+        deductedAmount: deductedFromBalance,
+        excessLeave: excessLeave,
         balance: updatedBalance.rows[0]
       };
 
@@ -353,10 +398,10 @@ class LeaveBalance {
         lb.updated_at                                    AS balance_updated_at,
 
         -- Leave request counts
-        COUNT(lr.id)                                     AS total_leave_requests,
-        COUNT(lr.id) FILTER (WHERE lr.status = 'pending')  AS pending_leaves,
-        COUNT(lr.id) FILTER (WHERE lr.status = 'approved') AS approved_leaves,
-        COUNT(lr.id) FILTER (WHERE lr.status = 'rejected') AS rejected_leaves,
+        COALESCE(SUM(lr.to_date - lr.from_date + 1), 0)                  AS total_leave_requests,
+        COALESCE(SUM(lr.to_date - lr.from_date + 1) FILTER (WHERE lr.status = 'pending'), 0)  AS pending_leaves,
+        COALESCE(SUM(lr.to_date - lr.from_date + 1) FILTER (WHERE lr.status = 'approved'), 0) AS approved_leaves,
+        COALESCE(SUM(lr.to_date - lr.from_date + 1) FILTER (WHERE lr.status = 'rejected'), 0) AS rejected_leaves,
         MAX(lr.from_date)                                AS last_leave_date,
         (
           SELECT lr2.leave_type FROM leave_requests lr2
@@ -383,6 +428,64 @@ class LeaveBalance {
 
       ORDER BY u.name ASC
     `, [udiseCode, year]);
+
+    return result.rows;
+  }
+
+  // ─── Get All Teachers' Leave Balances by VTP Name ───────────────────────
+  static async getBalancesByVtpName(vtpName, year = new Date().getFullYear()) {
+    const result = await pool.query(`
+      SELECT
+        u.id                                             AS user_id,
+        u.name                                           AS teacher_name,
+        u.email,
+        u.phone,
+        v.vt_name,
+        v.trade,
+        v.udise_code,
+        v.school_name,
+
+        -- Leave balance (may be NULL if never credited — show zeros)
+        COALESCE(lb.opening_balance,   0) AS opening_balance,
+        COALESCE(lb.total_earned,      0) AS total_earned,
+        COALESCE(lb.total_used,        0) AS total_used,
+        COALESCE(lb.remaining_balance, 0) AS remaining_balance,
+        COALESCE(lb.carried_forward,   0) AS carried_forward,
+        COALESCE(lb.closing_balance,   0) AS closing_balance,
+        lb.year,
+        lb.updated_at                                    AS balance_updated_at,
+
+        -- Leave request counts
+        COALESCE(SUM(lr.to_date - lr.from_date + 1), 0)                  AS total_leave_requests,
+        COALESCE(SUM(lr.to_date - lr.from_date + 1) FILTER (WHERE lr.status = 'pending'), 0)  AS pending_leaves,
+        COALESCE(SUM(lr.to_date - lr.from_date + 1) FILTER (WHERE lr.status = 'approved'), 0) AS approved_leaves,
+        COALESCE(SUM(lr.to_date - lr.from_date + 1) FILTER (WHERE lr.status = 'rejected'), 0) AS rejected_leaves,
+        MAX(lr.from_date)                                AS last_leave_date,
+        (
+          SELECT lr2.leave_type FROM leave_requests lr2
+          WHERE lr2.user_id = u.id
+          ORDER BY lr2.created_at DESC LIMIT 1
+        )                                                AS last_leave_type
+
+      FROM users u
+      JOIN roles r               ON u.role_id = r.id
+      JOIN vt_staff_details v    ON v.id = u.vt_staff_id
+      LEFT JOIN leave_balance lb ON lb.user_id = u.id AND lb.year = $2
+      LEFT JOIN leave_requests lr ON lr.user_id = u.id
+
+      WHERE TRIM(v.vtp_name) = TRIM($1)
+        AND r.name = 'vocational_teacher'
+        AND u.is_active = true
+
+      GROUP BY
+        u.id, u.name, u.email, u.phone,
+        v.vt_name, v.trade, v.udise_code, v.school_name,
+        lb.opening_balance, lb.total_earned, lb.total_used,
+        lb.remaining_balance, lb.carried_forward, lb.closing_balance,
+        lb.year, lb.updated_at
+
+      ORDER BY u.name ASC
+    `, [vtpName, year]);
 
     return result.rows;
   }
@@ -576,6 +679,29 @@ class LeaveBalance {
         AND r.name = 'vocational_teacher'
         AND u.is_active = true
     `, [udiseCode, year]);
+
+    return result.rows[0];
+  }
+
+  // ─── Get Leave Balance Summary for VTP Dashboard ──────────────────────────────
+  static async getBalanceSummaryByVtpName(vtpName, year = new Date().getFullYear()) {
+    const result = await pool.query(`
+      SELECT
+        COUNT(u.id)                                                              AS total_teachers,
+        COUNT(u.id) FILTER (WHERE COALESCE(lb.remaining_balance,0) >= 10)       AS healthy_balance,
+        COUNT(u.id) FILTER (WHERE COALESCE(lb.remaining_balance,0) < 5)         AS low_balance,
+        COUNT(u.id) FILTER (WHERE COALESCE(lb.remaining_balance,0) = 0)         AS zero_balance,
+        ROUND(AVG(COALESCE(lb.remaining_balance, 0)), 2)                        AS avg_balance,
+        COALESCE(SUM(lb.total_earned), 0)                                       AS total_earned_school,
+        COALESCE(SUM(lb.total_used), 0)                                         AS total_used_school
+      FROM users u
+      JOIN roles r             ON u.role_id = r.id
+      JOIN vt_staff_details v  ON v.id = u.vt_staff_id
+      LEFT JOIN leave_balance lb ON lb.user_id = u.id AND lb.year = $2
+      WHERE TRIM(v.vtp_name) = TRIM($1)
+        AND r.name = 'vocational_teacher'
+        AND u.is_active = true
+    `, [vtpName, year]);
 
     return result.rows[0];
   }

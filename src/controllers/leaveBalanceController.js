@@ -131,28 +131,38 @@ const getTeacherBalance = async (req, res) => {
 };
 
 // ─── GET /api/leave-balance/school ───────────────────────────────────────────
-// Get all teachers' leave balances for principal's school
+// Get all teachers' leave balances for principal's school OR VTP's organization
 const getSchoolBalances = async (req, res) => {
   try {
     const user = req.user;
     const year = req.query.year || new Date().getFullYear();
 
-    console.log('[getSchoolBalances] User:', { id: user.id, role: user.role_name, udise_code: user.udise_code });
+    console.log('[getSchoolBalances] User:', { id: user.id, role: user.role_name, udise_code: user.udise_code, org: user.organization_name });
 
-    if (!['super_admin', 'admin'].includes(user.role_name)) {
-      if (!user.udise_code) {
-        return res.status(403).json({ status: false, message: 'Your account is not linked to any school UDISE code.' });
+    let balances = [];
+    let summary = {};
+
+    if (user.role_name === 'vocational_teacher_provider') {
+      if (!user.organization_name) {
+        return res.status(403).json({ status: false, message: 'Your account is not linked to any VTP organization name.' });
       }
+      const vtpName = user.organization_name;
+      console.log('[getSchoolBalances] Fetching balances for VTP:', vtpName, 'Year:', year);
+      balances = await LeaveBalance.getBalancesByVtpName(vtpName, year);
+      summary = await LeaveBalance.getBalanceSummaryByVtpName(vtpName, year);
+    } else {
+      if (!['super_admin', 'admin'].includes(user.role_name)) {
+        if (!user.udise_code) {
+          return res.status(403).json({ status: false, message: 'Your account is not linked to any school UDISE code.' });
+        }
+      }
+      const udiseCode = user.udise_code;
+      console.log('[getSchoolBalances] Fetching balances for UDISE:', udiseCode, 'Year:', year);
+      balances = await LeaveBalance.getBalancesByUdise(udiseCode, year);
+      summary = await LeaveBalance.getBalanceSummaryByUdise(udiseCode, year);
     }
 
-    const udiseCode = user.udise_code;
-    console.log('[getSchoolBalances] Fetching balances for UDISE:', udiseCode, 'Year:', year);
-
-    const balances = await LeaveBalance.getBalancesByUdise(udiseCode, year);
     console.log('[getSchoolBalances] Balances returned:', balances.length);
-
-    // Get summary
-    const summary = await LeaveBalance.getBalanceSummaryByUdise(udiseCode, year);
     console.log('[getSchoolBalances] Summary:', summary);
 
     return res.status(200).json({

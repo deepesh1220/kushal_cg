@@ -152,6 +152,7 @@ const register = async (req, res) => {
 
     // ── Extract photo if uploaded ─────────────────────────────────────────────
     const profile_photo = req.file ? `/uploads/register/${req.file.filename}` : null;
+console.log(vtStaff);
 
     // ── Create user ──────────────────────────────────────────────────────────
     const user = await User.create({
@@ -161,8 +162,16 @@ const register = async (req, res) => {
       password_hash,
       role_id: resolvedRoleId,
       vt_staff_id: vtStaff?.id || null,
-      // For VTP: store their organization name (= vtp_name in vt_staff_details)
-      organization_name: roleName === VTP_ROLE_NAME ? (name || null) : null,
+      // organization_name:
+      //   VT  → vtStaff.vtp_name  (the VTP organisation this VT belongs to, from vt_staff_details)
+      //   VTP → name field (the provider's own org name)
+      //   others → null
+      organization_name: isVt
+        ? (vtStaff?.vtp_name || null)
+        : roleName === VTP_ROLE_NAME
+          ? (name || null)
+          : null,
+      vtp_id: vtStaff?.vtp_id,
       udise_code: finalUdise || null,
       profile_photo: profile_photo,
       latitude: latitude ? parseFloat(latitude) : null,
@@ -203,6 +212,7 @@ const register = async (req, res) => {
           udise_code: vtStaff.udise_code,
           trade: vtStaff.trade,
           vtp_name: vtStaff.vtp_name,
+          vtp_id: vtStaff?.vtp_id,
         } : null,
         created_at: user.created_at,
       },
@@ -401,10 +411,12 @@ const login = async (req, res) => {
     // ══════════════════════════════════════════════════════════════════════════
     if (roleName === 'vocational_teacher_provider') {
       const inputIdentifier = email;   // could be email or mobile number
-      console.log(inputIdentifier);
 
       // ── Step 1: Try users table first (returning VTP who already has a user row) ──
       let user = await User.findByEmail(inputIdentifier);
+      
+      console.log("VTP login details", user);
+
       if (!user && /^\d+$/.test(inputIdentifier)) {
         user = await User.findByPhone(inputIdentifier);
       }
