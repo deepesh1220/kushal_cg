@@ -18,7 +18,20 @@ const getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
 // VT marks their own attendance
 const checkIn = async (req, res) => {
   const userId = req.user.id;
-  const { latitude, longitude, remarks } = req.body;
+  const { latitude, longitude, remarks, isFakeGPS } = req.body;
+
+  if (!latitude || !longitude || isFakeGPS == null) {
+    return res.status(400).json({
+      status: false,
+      message: 'latitude, longitude and isFakeGPS are required.'
+    });
+  }
+  if (isFakeGPS === true) {
+    return res.status(403).json({
+      status: false,
+      message: 'Fake GPS is not allowed. Please disable fake GPS and try again.'
+    });
+  }
 
   const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
 
@@ -141,7 +154,20 @@ const checkIn = async (req, res) => {
 // VT marks their check-out
 const checkOut = async (req, res) => {
   const userId = req.user.id;
-  const { latitude, longitude } = req.body;
+  const { latitude, longitude, isFakeGPS } = req.body;
+  if (!latitude || !longitude || isFakeGPS == null) {
+    return res.status(400).json({
+      status: false,
+      message: 'latitude, longitude and isFakeGPS are required.'
+    });
+  }
+
+  if (isFakeGPS === true) {
+    return res.status(403).json({
+      status: false,
+      message: 'Fake GPS is not allowed. Please disable fake GPS and try again.'
+    });
+  }
   const today = new Date().toISOString().split('T')[0];
 
   try {
@@ -411,6 +437,11 @@ const getMonthlySummary = async (req, res) => {
 //   offset       - page start (default 0)
 const getDailyReport = async (req, res) => {
   const { userId, filter_type, filter_value, limit, offset } = req.body;
+  const { pool } = require('../config/db');
+  const Report = require('../models/Report');
+  const dayjs = require('dayjs');
+  const isoWeek = require('dayjs/plugin/isoWeek');
+  dayjs.extend(isoWeek);
 
   if (!userId) {
     return res.status(400).json({ status: false, message: 'userId query param is required.' });
@@ -423,26 +454,112 @@ const getDailyReport = async (req, res) => {
     const { records, totals } = await Attendance.getDailyReport(parseInt(userId), {
       filter_type: resolvedType,
       filter_value: filter_value || null,
-      limit: limit ? parseInt(limit) : 31,
-      offset: offset ? parseInt(offset) : 0,
+      limit: 1000,
+      offset: 0,
     });
 
-    // Enrich each record — label absent if no DB row exists (only matters for direct date lookup)
-    const enriched = records.map((r) => ({
-      date: r.date,
-      check_in: r.check_in_time || null,
-      check_out: r.check_out_time || null,
-      status: r.status,
-      leave_reason: r.status === 'on_leave' ? (r.leave_reason || null) : null,
-      working_hours: r.working_hours !== null ? parseFloat(r.working_hours) : null,
+    let startDate, endDate;
+    if (resolvedType === 'date' && filter_value) {
+      startDate = dayjs(filter_value);
+      endDate = dayjs(filter_value);
+    } else if (resolvedType === 'week' && filter_value) {
+      const [yearStr, weekStr] = filter_value.split('-W');
+      startDate = dayjs().year(parseInt(yearStr)).isoWeek(parseInt(weekStr)).startOf('isoWeek');
+      endDate = dayjs().year(parseInt(yearStr)).isoWeek(parseInt(weekStr)).endOf('isoWeek');
+    } else if (resolvedType === 'month' && filter_value) {
+      const [yearStr, monthStr] = filter_value.split('-');
+      startDate = dayjs(`${yearStr}-${monthStr}-01`).startOf('month');
+      endDate = dayjs(`${yearStr}-${monthStr}-01`).endOf('month');
+    } else if (resolvedType === 'date_range' && filter_value) {
+      const [from, to] = filter_value.split(',');
+      startDate = dayjs(from);
+      endDate = to ? dayjs(to) : dayjs(from);
+    } else {
+      startDate = dayjs().startOf('month');
+      endDate = dayjs().endOf('month');
+    }
+
+    const allDates = [];
+    let current = endDate;
+    while (current.isAfter(startDate) || current.isSame(startDate, 'day')) {
+      allDates.push(current.format('YYYY-MM-DD'));
+      current = current.subtract(1, 'day');
+    }
+
+    const parsedLimit = limit ? parseInt(limit) : 31;
+    const parsedOffset = offset ? parseInt(offset) : 0;
+    const paginatedDates = allDates.slice(parsedOffset, parsedOffset + parsedLimit);
+
+    const enriched = await Promise.all(paginatedDates.map(async (d) => {
+      const dbRecord = records.find(r => dayjs(r.date).format('YYYY-MM-DD') === d);
+
+      let status = 'absent';
+      let check_in = null;
+      let check_out = null;
+      let leave_reason = null;
+      let working_hours = null;
+
+      let isPresentOrOther = false;
+      if (dbRecord && dbRecord.status !== 'absent') {
+        isPresentOrOther = true;
+        status = dbRecord.status;
+        check_in = dbRecord.check_in_time || null;
+        check_out = dbRecord.check_out_time || null;
+        leave_reason = dbRecord.status === 'on_leave' ? (dbRecord.leave_reason || null) : null;
+        working_hours = dbRecord.working_hours !== null ? parseFloat(dbRecord.working_hours) : null;
+      }
+
+      if (!isPresentOrOther) {
+        // Check Leave
+        const leaveRes = await pool.query(`
+          SELECT id FROM leave_requests 
+          WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $2
+        `, [userId, d]);
+
+        if (leaveRes.rows.length > 0) {
+          status = 'leave';
+        } else {
+          // Check OD
+          const odRes = await pool.query(`
+            SELECT id FROM od_requests 
+            WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $2
+          `, [userId, d]);
+
+          if (odRes.rows.length > 0) {
+            status = 'onduty';
+          } else {
+            // Check Gov Holiday
+            const yearHol = dayjs(d).year();
+            const govHolidays = await Report._getGovHolidays(yearHol);
+            if (govHolidays.has(d)) {
+              status = 'gov holiday';
+            } else if (dayjs(d).day() === 0) {
+              status = 'holiday';
+            } else if (dbRecord && dbRecord.status === 'absent') {
+              status = 'absent';
+              check_in = dbRecord.check_in_time || null;
+              check_out = dbRecord.check_out_time || null;
+            }
+          }
+        }
+      }
+
+      return {
+        date: d,
+        check_in,
+        check_out,
+        status,
+        leave_reason,
+        working_hours,
+      };
     }));
 
     return res.status(200).json({
       status: true,
       filter: { type: resolvedType, value: filter_value || null },
       pagination: {
-        limit: limit ? parseInt(limit) : 31,
-        offset: offset ? parseInt(offset) : 0,
+        limit: parsedLimit,
+        offset: parsedOffset,
         count: enriched.length,
       },
       summary: {

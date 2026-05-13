@@ -412,6 +412,42 @@ const initDB = async () => {
     `);
 
     // ─────────────────────────────────────────────────────────
+    // ALTER monthly_school_reports: approval audit columns
+    // Added for 3-level sequential approval workflow
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS hm_approved_by  INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS hm_approved_at   TIMESTAMPTZ;
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS deo_approved_by  INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS deo_approved_at  TIMESTAMPTZ;
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS vtp_approved_by  INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS vtp_approved_at  TIMESTAMPTZ;
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS is_locked        BOOLEAN DEFAULT FALSE;
+    `);
+
+    // ─────────────────────────────────────────────────────────
+    // TABLE: monthly_report_snapshots
+    // Immutable attendance snapshot taken at report generation.
+    // PDF is always regenerated from this snapshot so the report
+    // content never changes after it is locked by approvals.
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS monthly_report_snapshots (
+        id            SERIAL PRIMARY KEY,
+        report_id     INTEGER     NOT NULL REFERENCES monthly_school_reports(id) ON DELETE CASCADE,
+        user_id       INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        month         INTEGER     NOT NULL,
+        year          INTEGER     NOT NULL,
+        snapshot_data JSONB       NOT NULL,
+        generated_at  TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (user_id, month, year)
+      );
+    `);
+
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_rpt_snapshots_report_id       ON monthly_report_snapshots(report_id);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_rpt_snapshots_user_month_year ON monthly_report_snapshots(user_id, month, year);`);
+
+    // ─────────────────────────────────────────────────────────
     // ALTER CONSTRAINTS for OD feature
     // ─────────────────────────────────────────────────────────
     await client.query(`
@@ -693,6 +729,12 @@ const seedDefaults = async (client) => {
     // ── VT Approval ─────────────────────────────────────────────────────────
     { name: 'vt:approve', module: 'vt', action: 'approve', description: 'Approve or reject Vocational Teacher registrations (Principal/HM layer)' },
     { name: 'vt:approve_vtp', module: 'vt', action: 'approve_vtp', description: 'Approve or reject Vocational Teacher registrations (VTP layer)' },
+    // ── Monthly Report Workflow ───────────────────────────────────────────────
+    { name: 'reports:generate',     module: 'reports', action: 'generate',     description: 'Generate monthly VT attendance report PDF snapshot' },
+    { name: 'reports:view_monthly', module: 'reports', action: 'view_monthly', description: 'View monthly VT attendance report list' },
+    { name: 'reports:approve_hm',   module: 'reports', action: 'approve_hm',   description: 'Principal/HM: approve monthly VT report (layer 1)' },
+    { name: 'reports:approve_deo',  module: 'reports', action: 'approve_deo',  description: 'DEO: approve monthly VT report (layer 2, requires HM approval)' },
+    { name: 'reports:approve_vtp',  module: 'reports', action: 'approve_vtp',  description: 'VTP: final approve monthly VT report (layer 3, requires HM+DEO approval)' },
   ];
 
   for (const perm of defaultPermissions) {
@@ -741,6 +783,8 @@ const seedDefaults = async (client) => {
     'attendance:create_others',
     'attendance:update',
     'leave:view_all',
+    'reports:view_monthly',
+    'reports:approve_deo',
   ]);
 
   // ── 4. headmaster → oversee school, approve VTs, approve leaves, view reports ──
@@ -752,10 +796,20 @@ const seedDefaults = async (client) => {
     'leave:approve',
     'leave:view_balance_all',
     'vt:approve',
+    'reports:generate',
+    'reports:view_monthly',
+    'reports:approve_hm',
   ]);
 
-  // ── 2. admin also gets vt:approve ────────────────────────────────────────────
-  await assignPerms('admin', ['vt:approve']);
+  // ── 2. admin also gets vt:approve and full report access ─────────────────────
+  await assignPerms('admin', [
+    'vt:approve',
+    'reports:generate',
+    'reports:view_monthly',
+    'reports:approve_hm',
+    'reports:approve_deo',
+    'reports:approve_vtp',
+  ]);
 
   // ── 5. vocational_teacher_provider → view & monitor their teachers + VTP approval ──
   await assignPerms('vocational_teacher_provider', [
@@ -765,6 +819,8 @@ const seedDefaults = async (client) => {
     'leave:view_all',
     'leave:view_balance_all',
     'vt:approve_vtp',
+    'reports:view_monthly',
+    'reports:approve_vtp',
   ]);
 
   // ── 6. vocational_teacher → mark own attendance & request leave ───────────────

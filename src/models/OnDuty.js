@@ -84,12 +84,7 @@ class OnDuty {
 
   // ─── Find all OD requests (admin/headmaster) ─────────────────────────────────
   static async findAll({ udise_code, status, limit = 50, offset = 0 } = {}) {
-    let query = `
-      SELECT
-        o.*,
-        u.name  AS user_name,
-        v.udise_code,
-        r.name  AS reviewer_name
+    let baseQuery = `
       FROM od_requests o
       JOIN  users            u ON u.id = o.user_id
       LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
@@ -100,18 +95,28 @@ class OnDuty {
 
     if (udise_code) {
       params.push(udise_code);
-      query += ` AND v.udise_code = $${params.length}`;
+      baseQuery += ` AND v.udise_code = $${params.length}`;
     }
     if (status) {
       params.push(status);
-      query += ` AND o.status = $${params.length}`;
+      baseQuery += ` AND o.status = $${params.length}`;
     }
 
-    params.push(limit, offset);
-    query += ` ORDER BY o.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`;
+    const countResult = await pool.query(`SELECT COUNT(*) ${baseQuery}`, params);
+    const totalRecords = parseInt(countResult.rows[0].count, 10);
 
-    const result = await pool.query(query, params);
-    return result.rows;
+    const dataQuery = `
+      SELECT
+        o.*,
+        u.name  AS user_name,
+        v.udise_code,
+        r.name  AS reviewer_name
+      ${baseQuery}
+      ORDER BY o.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+    `;
+
+    const result = await pool.query(dataQuery, [...params, limit, offset]);
+    return { data: result.rows, totalRecords };
   }
 
   // ─── Update OD status (approve / reject) ────────────────────────────────────

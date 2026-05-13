@@ -7,6 +7,8 @@ const Attendance = require('../models/Attendance');
 const Headmaster = require('../models/Headmaster');
 const Deo = require('../models/Deo');
 const Vtp = require('../models/Vtp');
+const Report = require('../models/Report');
+const { pool } = require('../config/db');
 const {
   generateAccessToken,
   generateRefreshToken,
@@ -20,12 +22,19 @@ const VTP_ROLE_NAME = 'vocational_teacher_provider';
 
 // ─── POST /api/auth/register ──────────────────────────────────────────────────
 const register = async (req, res) => {
-  const { name, email, phone, password, role_id, latitude, longitude, school_open_time, school_close_time, image } = req.body;
+  const { name, email, phone, password, role_id, latitude, longitude, school_open_time, school_close_time, image, isFakeGPS } = req.body;
 
   if (!phone || !password) {
     return res.status(400).json({
       status: false,
       message: 'Phone number and password are required.',
+    });
+  }
+
+  if (isFakeGPS === true) {
+    return res.status(403).json({
+      status: false,
+      message: 'Fake GPS is not allowed. Please disable fake GPS and try again.'
     });
   }
 
@@ -630,13 +639,52 @@ const getMe = async (req, res) => {
 
     const attendanceRecord = await Attendance.findByUserAndDate(userId, processedDate);
 
-
-    if (attendanceRecord) {
+    let isPresentOrOther = false;
+    if (attendanceRecord && attendanceRecord.status !== 'absent') {
+      isPresentOrOther = true;
       attendanceData = {
         check_in: toIST(attendanceRecord.check_in_time),
         check_out: toIST(attendanceRecord.check_out_time),
         status: attendanceRecord.status
       };
+    }
+
+    if (!isPresentOrOther) {
+      // Check for Leave
+      const leaveRes = await pool.query(`
+        SELECT id FROM leave_requests 
+        WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $2
+      `, [userId, processedDate]);
+
+      if (leaveRes.rows.length > 0) {
+        attendanceData.status = 'leave';
+      } else {
+        // Check for OnDuty
+        const odRes = await pool.query(`
+          SELECT id FROM od_requests 
+          WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $2
+        `, [userId, processedDate]);
+
+        if (odRes.rows.length > 0) {
+          attendanceData.status = 'onduty';
+        } else {
+          // Check for Gov Holiday
+          const [yearStr, monthStr, dayStr] = processedDate.split('-');
+          const yearHol = parseInt(yearStr, 10);
+          const dateObjForHol = new Date(yearHol, parseInt(monthStr, 10) - 1, parseInt(dayStr, 10));
+          const govHolidays = await Report._getGovHolidays(yearHol);
+
+          if (govHolidays.has(processedDate)) {
+            attendanceData.status = 'gov holiday';
+          } else if (dateObjForHol.getDay() === 0) {
+            attendanceData.status = 'holiday'; // Sunday
+          } else if (attendanceRecord) {
+            attendanceData.status = 'absent';
+            attendanceData.check_in = toIST(attendanceRecord.check_in_time);
+            attendanceData.check_out = toIST(attendanceRecord.check_out_time);
+          }
+        }
+      }
     }
 
     // ── Monthly summary for the month of the requested date ──────────────────
