@@ -211,4 +211,56 @@ const getOnDutyById = async (req, res) => {
   }
 };
 
-module.exports = { applyOnDuty, approveOnDuty, getMyOnDutyRequests, getOnDutyById };
+// ─── POST /api/od/headmaster ──────────────────────────────────────────────────
+// Headmaster views OD requests of VTs in their school
+// body: { udise_code, status, page, limit }
+const getHeadmasterOnDutyRequests = async (req, res) => {
+  const { udise_code, status, limit, page } = req.body;
+  const user = req.user;
+
+  // Security: If a headmaster is calling this, ensure they can only query their own school
+  if (user.role_name === 'headmaster') {
+    if (!user.udise_code) {
+      return res.status(400).json({ status: false, message: 'Your account is not linked to a school UDISE code.' });
+    }
+    if (udise_code && String(udise_code) !== String(user.udise_code)) {
+      return res.status(403).json({ status: false, message: 'You are not authorized to view OD requests for a different school.' });
+    }
+  }
+
+  // Use the requested udise_code or fallback to the headmaster's own udise_code
+  const targetUdiseCode = udise_code || (user.role_name === 'headmaster' ? user.udise_code : null);
+
+  if (!targetUdiseCode) {
+    return res.status(400).json({ status: false, message: 'udise_code is required.' });
+  }
+
+  try {
+    const parsedLimit = limit ? parseInt(limit, 10) : 10;
+    const parsedPage = page ? parseInt(page, 10) : 1;
+    const parsedOffset = (parsedPage - 1) * parsedLimit;
+
+    const odData = await OnDuty.findAll({
+      udise_code: targetUdiseCode,
+      status,
+      limit: parsedLimit,
+      offset: parsedOffset,
+    });
+
+    return res.status(200).json({
+      status: true,
+      pagination: {
+        totalRecords: odData.totalRecords,
+        totalPages: Math.ceil(odData.totalRecords / parsedLimit),
+        currentPage: parsedPage,
+        limit: parsedLimit,
+      },
+      data: odData.data,
+    });
+  } catch (error) {
+    console.error('getHeadmasterOnDutyRequests error:', error.message);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+};
+
+module.exports = { applyOnDuty, approveOnDuty, getMyOnDutyRequests, getOnDutyById, getHeadmasterOnDutyRequests };

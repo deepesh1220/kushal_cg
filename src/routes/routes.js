@@ -59,7 +59,6 @@ router.use('/leave-balance', leaveBalanceRoutes);
 router.use('/deo', deoRoutes);
 
 router.use('/holidays', holidayRoutes);
-
 router.use('/reports', reportRoutes);
 router.use('/super-admin', superAdminRoutes);
 router.use('/admin', adminRoutes);
