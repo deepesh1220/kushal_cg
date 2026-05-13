@@ -34,9 +34,10 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
   const vtRow = await pool.query(
     `SELECT u.id, u.name, u.email, u.phone, u.udise_code,
             v.vt_name, v.vt_mob, v.vt_email, v.trade, v.vtp_name,
-            v.school_name, v.district_name, v.block_name, v.cluster_name
+            v.school_name, v.district_name, v.block_name, s.cluster_name
      FROM users u
      LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
+     LEFT JOIN mst_schools s ON v.udise_code = s.udise_sch_code
      WHERE u.id = $1 LIMIT 1`,
     [vtUserId]
   );
