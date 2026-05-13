@@ -451,6 +451,22 @@ const initDB = async () => {
     `);
 
     // ─────────────────────────────────────────────────────────
+    // ALTER od_requests: add dual-approval layer
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      ALTER TABLE od_requests
+        ADD COLUMN IF NOT EXISTS hm_status          VARCHAR(20) DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS hm_approved_by     INTEGER     REFERENCES users(id),
+        ADD COLUMN IF NOT EXISTS hm_action_at       TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS hm_remarks         TEXT,
+        ADD COLUMN IF NOT EXISTS vtp_status         VARCHAR(20) DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS vtp_approved_by    INTEGER     REFERENCES users(id),
+        ADD COLUMN IF NOT EXISTS vtp_action_at      TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS vtp_remarks        TEXT,
+        ADD COLUMN IF NOT EXISTS od_approved        BOOLEAN     DEFAULT FALSE;
+    `);
+
+    // ─────────────────────────────────────────────────────────
     // TABLE: regularization_requests
     // Dedicated single-date attendance regularization table
     // ─────────────────────────────────────────────────────────

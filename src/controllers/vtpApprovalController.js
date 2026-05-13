@@ -86,18 +86,18 @@ const _validateLeaveBelongsToVtp = async (leaveId, vtpUser) => {
 // ─── GET /api/vtp/vts ─────────────────────────────────────────────────────────
 // VTP views VTs assigned to their organization with status filter (?status=all|pending|accepted|rejected)
 const getVtpScopedVts = async (req, res) => {
-  
+
   try {
     const vtpUser = req.user;
-    console.log("vtpUser",vtpUser);
-    
+    console.log("vtpUser", vtpUser);
+
     const { status } = req.query;
 
     // super_admin/admin: see all; VTP: scoped by organization_name
     let allVts;
     if (['super_admin', 'admin'].includes(vtpUser.role_name)) {
       allVts = await User.findAllVtsByStatus(null);
-      
+
     } else {
       if (vtpUser.role_name !== VTP_ROLE_NAME) {
         return res.status(403).json({ status: false, message: 'Only VTP users can access this resource.' });
@@ -272,14 +272,14 @@ const approveLeaveByVtp = async (req, res) => {
         const LeaveBalance = require('../models/LeaveBalance');
         // Lazy credit current month if not yet credited
         await LeaveBalance.ensureCurrentMonthCredit(updated.user_id);
-        
+
         // Prevent duplicate deduction: check if already deducted
         const checkDeduction = await pool.query(`
           SELECT 1 FROM leave_deduction_log WHERE leave_request_id = $1
           UNION
           SELECT 1 FROM leave_excess_records WHERE leave_request_id = $1
         `, [parsedLeaveId]);
-        
+
         if (checkDeduction.rows.length === 0) {
           // Deduct the leave amount
           const deduction = await LeaveBalance.deductLeave(

@@ -24,8 +24,9 @@ class OnDuty {
   // ─── Create a new OD request ─────────────────────────────────────────────────
   static async create({ user_id, from_date, to_date, od_type, reason }) {
     const result = await pool.query(`
-      INSERT INTO od_requests (user_id, from_date, to_date, od_type, reason, status)
-      VALUES ($1, $2, $3, $4, $5, 'pending')
+      INSERT INTO od_requests (user_id, from_date, to_date, od_type, reason, status,
+                               hm_status, vtp_status, od_approved)
+      VALUES ($1, $2, $3, $4, $5, 'pending', 'pending', 'pending', FALSE)
       RETURNING *
     `, [user_id, from_date, to_date, od_type, reason]);
     return result.rows[0];
@@ -36,21 +37,25 @@ class OnDuty {
     const result = await pool.query(`
       SELECT
         o.*,
-        u.name AS user_name,
-        r.name AS reviewer_name
+        u.name  AS user_name,
+        u.phone AS mobile,
+        hm.name AS hm_approved_by_name,
+        vp.name AS vtp_approved_by_name
       FROM od_requests o
-      JOIN  users u ON o.user_id      = u.id
-      LEFT JOIN users r ON o.reviewed_by = r.id
+      JOIN  users u   ON o.user_id       = u.id
+      LEFT JOIN users hm ON o.hm_approved_by  = hm.id
+      LEFT JOIN users vp ON o.vtp_approved_by = vp.id
       WHERE o.id = $1
     `, [id]);
     return result.rows[0] || null;
   }
 
-  // ─── Find OD requests for a specific user ────────────────────────────────────
+  // ─── Find OD requests for a specific user (VT's own view) ────────────────────
   static async findByUser(userId, { status, from_date, to_date, limit = 10, offset = 0 } = {}) {
     let baseQuery = `
       FROM od_requests o
-      LEFT JOIN users r ON o.reviewed_by = r.id
+      LEFT JOIN users hm ON o.hm_approved_by  = hm.id
+      LEFT JOIN users vp ON o.vtp_approved_by = vp.id
       WHERE o.user_id = $1
     `;
     const params = [userId];
@@ -74,7 +79,8 @@ class OnDuty {
     const dataQuery = `
       SELECT
         o.*,
-        r.name AS reviewer_name
+        hm.name AS hm_approved_by_name,
+        vp.name AS vtp_approved_by_name
       ${baseQuery}
       ORDER BY o.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
@@ -86,9 +92,10 @@ class OnDuty {
   static async findAll({ udise_code, status, limit = 50, offset = 0 } = {}) {
     let baseQuery = `
       FROM od_requests o
-      JOIN  users            u ON u.id = o.user_id
-      LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
-      LEFT JOIN users        r ON r.id = o.reviewed_by
+      JOIN  users            u  ON u.id  = o.user_id
+      LEFT JOIN vt_staff_details v  ON v.id  = u.vt_staff_id
+      LEFT JOIN users        hm ON hm.id = o.hm_approved_by
+      LEFT JOIN users        vp ON vp.id = o.vtp_approved_by
       WHERE 1=1
     `;
     const params = [];
@@ -109,9 +116,12 @@ class OnDuty {
       SELECT
         o.*,
         u.name  AS user_name,
-        u.phone as mobile,
+        u.phone AS mobile,
         v.udise_code,
-        r.name  AS reviewer_name
+        v.vtp_name,
+        v.trade,
+        hm.name AS hm_approved_by_name,
+        vp.name AS vtp_approved_by_name
       ${baseQuery}
       ORDER BY o.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
@@ -120,19 +130,105 @@ class OnDuty {
     return { data: result.rows, totalRecords };
   }
 
-  // ─── Update OD status (approve / reject) ────────────────────────────────────
-  static async updateStatus(id, { status, reviewerId }) {
+  // ─── Find all OD requests scoped to a VTP (by vtp_id in vt_staff_details) ───
+  static async findAllByVtpId(vtpId, { status, limit = 10, offset = 0 } = {}) {
+    let baseQuery = `
+      FROM od_requests o
+      JOIN  users            u  ON u.id  = o.user_id
+      LEFT JOIN vt_staff_details v  ON v.id  = u.vt_staff_id
+      LEFT JOIN users        hm ON hm.id = o.hm_approved_by
+      LEFT JOIN users        vp ON vp.id = o.vtp_approved_by
+      WHERE TRIM(COALESCE(u.vtp_id, v.vtp_id)) = TRIM($1)
+    `;
+    const params = [vtpId];
+
+    if (status) {
+      params.push(status);
+      baseQuery += ` AND o.status = $${params.length}`;
+    }
+
+    const countResult = await pool.query(`SELECT COUNT(*) ${baseQuery}`, params);
+    const totalRecords = parseInt(countResult.rows[0].count, 10);
+
+    const dataQuery = `
+      SELECT
+        o.*,
+        u.name  AS user_name,
+        u.phone AS mobile,
+        v.udise_code,
+        v.vtp_name,
+        v.trade,
+        hm.name AS hm_approved_by_name,
+        vp.name AS vtp_approved_by_name
+      ${baseQuery}
+      ORDER BY o.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+    `;
+
+    const result = await pool.query(dataQuery, [...params, limit, offset]);
+    return { data: result.rows, totalRecords };
+  }
+
+  // ─── Update Headmaster approval status (first layer) ────────────────────────
+  // Final status rules:
+  //   HM rejects                     → status = 'rejected'
+  //   HM approves + VTP pending      → status stays 'pending'
+  //   HM approves + VTP approves     → status = 'approved', od_approved = TRUE
+  static async updateHmStatus(id, { status, reviewerId, remarks }) {
     const result = await pool.query(`
       UPDATE od_requests
       SET
-        status      = $1,
-        reviewed_by = $2,
-        reviewed_at = NOW(),
-        updated_at  = NOW()
-      WHERE id = $3
+        hm_status       = $1,
+        hm_approved_by  = $2,
+        hm_action_at    = NOW(),
+        hm_remarks      = $3,
+        status = CASE
+          WHEN $1::varchar = 'rejected'                            THEN 'rejected'
+          WHEN $1::varchar = 'approved' AND vtp_status = 'approved' THEN 'approved'
+          ELSE 'pending'
+        END,
+        od_approved = CASE
+          WHEN $1::varchar = 'approved' AND vtp_status = 'approved' THEN TRUE
+          ELSE FALSE
+        END,
+        updated_at = NOW()
+      WHERE id = $4
       RETURNING *
-    `, [status, reviewerId, id]);
+    `, [status, reviewerId, remarks || null, id]);
     return result.rows[0] || null;
+  }
+
+  // ─── Update VTP approval status (second layer) ───────────────────────────────
+  // Final status rules:
+  //   VTP rejects                      → status = 'rejected'
+  //   VTP approves + HM pending        → status stays 'pending'
+  //   VTP approves + HM approved       → status = 'approved', od_approved = TRUE
+  static async updateVtpStatus(id, { status, reviewerId, remarks }) {
+    const result = await pool.query(`
+      UPDATE od_requests
+      SET
+        vtp_status      = $1,
+        vtp_approved_by = $2,
+        vtp_action_at   = NOW(),
+        vtp_remarks     = $3,
+        status = CASE
+          WHEN $1::varchar = 'rejected'                            THEN 'rejected'
+          WHEN $1::varchar = 'approved' AND hm_status = 'approved' THEN 'approved'
+          ELSE 'pending'
+        END,
+        od_approved = CASE
+          WHEN $1::varchar = 'approved' AND hm_status = 'approved' THEN TRUE
+          ELSE FALSE
+        END,
+        updated_at = NOW()
+      WHERE id = $4
+      RETURNING *
+    `, [status, reviewerId, remarks || null, id]);
+    return result.rows[0] || null;
+  }
+
+  // ─── Legacy alias (backward compat) — maps to HM layer ──────────────────────
+  static async updateStatus(id, { status, reviewerId, remarks }) {
+    return this.updateHmStatus(id, { status, reviewerId, remarks });
   }
 }
 
