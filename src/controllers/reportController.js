@@ -43,7 +43,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
   );
   const vtDetails = vtRow.rows[0] || {};
 
-  // Attendance data via existing Report model
+  // Attendance data via existing Report model (only processes up to today for current month)
   const reportData = await Report.getMonthlySummaryReport({
     month: monthStr,
     vtUserId,
@@ -54,52 +54,103 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
   const userData = (reportData.data || [])[0] || {};
   const attendanceRaw = userData.attendance || {};
 
+  const totalDays = new Date(year, month, 0).getDate();
+
+  // Determine if this is the current month — future days should be blank, not 'A'
+  const today = new Date();
+  const isCurrentMonth = (year === today.getFullYear() && month === today.getMonth() + 1);
+  const todayDate = today.getDate();
+
+  // Fetch ALL approved leaves for the entire month (includes future dates)
+  // so future leave days show 'L' instead of blank
+  const startOfMonth = `${year}-${String(month).padStart(2, '0')}-01`;
+  const endOfMonth   = `${year}-${String(month).padStart(2, '0')}-${String(totalDays).padStart(2, '0')}`;
+  const leaveRows = await pool.query(
+    `SELECT from_date, to_date FROM leave_requests
+     WHERE user_id = $1 AND status = 'approved'
+       AND from_date <= $2 AND to_date >= $3`,
+    [vtUserId, endOfMonth, startOfMonth]
+  );
+  const fullMonthLeaveDates = new Set();
+  leaveRows.rows.forEach(l => {
+    let cur = dayjs(l.from_date);
+    const end = dayjs(l.to_date);
+    while (!cur.isAfter(end)) {
+      fullMonthLeaveDates.add(cur.date());
+      cur = cur.add(1, 'day');
+    }
+  });
+
   // Normalise attendance map: day -> { status, check_in, check_out, remarks }
   const attendance = {};
-  const totalDays = new Date(year, month, 0).getDate();
   let totalPresent = 0, totalAbsent = 0, totalHolidays = 0, totalSundays = 0, totalLeaves = 0;
 
   for (let d = 1; d <= totalDays; d++) {
+    const isFutureDay = isCurrentMonth && d > todayDate;
     const rec = attendanceRaw[d] || {};
-    const s = rec.status || 'A';
+    let s;
+    if (isFutureDay) {
+      // Future days: blank unless VT has an approved leave on that date
+      s = fullMonthLeaveDates.has(d) ? 'L' : '';
+    } else {
+      // Past / today: use actual attendance record, default 'A' if no check-in
+      s = rec.status || 'A';
+    }
     attendance[d] = {
       status:    s,
       check_in:  rec.check_in  || null,
       check_out: rec.check_out || null,
       remarks:   rec.remarks   || null,
     };
-    if (s === 'P')  totalPresent++;
+    if (s === 'P')       totalPresent++;
     else if (s === 'A')  totalAbsent++;
     else if (s === 'GH') totalHolidays++;
     else if (s === 'H')  totalSundays++;
     else if (s === 'L')  totalLeaves++;
+    // '' (blank future days) intentionally not counted
   }
 
-  // Leave balance for leave details section
+  // Dynamic financial year label (April–March cycle)
+  const fyStartYear = month >= 4 ? year : year - 1;
+  const fyLabel = `April ${fyStartYear} to March ${fyStartYear + 1}`;
+
+  // Full leave balance for this calendar year
   const lb = await pool.query(
-    `SELECT remaining_balance, total_used FROM leave_balance WHERE user_id = $1 AND year = $2 LIMIT 1`,
+    `SELECT opening_balance, total_earned, total_used, remaining_balance, carried_forward
+     FROM leave_balance WHERE user_id = $1 AND year = $2 LIMIT 1`,
     [vtUserId, year]
   );
   const leaveBalance = lb.rows[0] || {};
 
+  // Excess leave accumulated this year
+  const excessRow = await pool.query(
+    `SELECT COALESCE(SUM(excess_leave), 0) AS total_excess
+     FROM leave_excess_records WHERE user_id = $1 AND year = $2`,
+    [vtUserId, year]
+  );
+  const excessLeave = parseFloat(excessRow.rows[0]?.total_excess || 0);
+
   return {
     vtDetails: {
-      vt_name:       vtDetails.vt_name      || vtDetails.name   || '',
-      vt_mob:        vtDetails.vt_mob       || vtDetails.phone   || '',
-      trade:         vtDetails.trade        || '',
-      vtp_name:      vtDetails.vtp_name     || '',
-      school_name:   vtDetails.school_name  || '',
+      vt_name:       vtDetails.vt_name       || vtDetails.name  || '',
+      vt_mob:        vtDetails.vt_mob        || vtDetails.phone || '',
+      trade:         vtDetails.trade         || '',
+      vtp_name:      vtDetails.vtp_name      || '',
+      school_name:   vtDetails.school_name   || '',
       district_name: vtDetails.district_name || '',
-      block_name:    vtDetails.block_name   || '',
+      block_name:    vtDetails.block_name    || '',
     },
     attendance,
     summary: { totalPresent, totalAbsent, totalHolidays, totalSundays, totalLeaves },
     leaveDetails: {
-      casualLeave:    13,
-      leavesTaken:    parseFloat(leaveBalance.total_used || 0),
-      remainingLeave: parseFloat(leaveBalance.remaining_balance || 0),
+      fyLabel,
+      annualEntitlement: 12,
+      totalEarned:       parseFloat(leaveBalance.total_earned       || 0),
+      leavesTaken:       parseFloat(leaveBalance.total_used         || 0),
+      remainingLeave:    parseFloat(leaveBalance.remaining_balance  || 0),
+      carriedForward:    parseFloat(leaveBalance.carried_forward    || 0),
+      excessLeaveTaken:  excessLeave,
     },
-    studentDetails: {},   // populated via student_details if available
     month,
     year,
   };
