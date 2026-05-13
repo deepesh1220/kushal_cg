@@ -403,13 +403,18 @@ const sendNSQFPdf = (data, res) => {
     doc.restore();
   };
 
-  // ─── WATERMARK (drawn first so all content renders on top) ──────────────────
+  // ─── WATERMARK ───────────────────────────────────────────────────────────────
+  // Draw image at full opacity, then cover with a 91%-opaque white rect so the
+  // logo appears at ~9% visibility. This technique is reliable in all PDF viewers
+  // because fillOpacity on a path operator (f) is universally supported, unlike
+  // applying ca/CA graphics-state alpha to image (Do) operators.
   if (iconExists) {
+    const wmSize = 260;
+    const wmX    = (595 - wmSize) / 2;
+    const wmY    = (842 - wmSize) / 2;
+    doc.image(VTP_ICON, wmX, wmY, { width: wmSize, height: wmSize });
     doc.save();
-    doc.opacity(0.07);
-    const wmSize = 280;
-    doc.image(VTP_ICON, (595 - wmSize) / 2, (842 - wmSize) / 2,
-              { width: wmSize, height: wmSize });
+    doc.rect(wmX, wmY, wmSize, wmSize).fillColor('#FFFFFF').fillOpacity(0.91).fill();
     doc.restore();
   }
 
@@ -586,6 +591,59 @@ const sendNSQFPdf = (data, res) => {
     cellText(val,   ML + leaveColW, y, leaveValW, 13, '#000',    7, true, 'center');
     y += 13;
   });
+
+  // ─── ATTENDANCE OVERVIEW STATS CARD ──────────────────────────────────────────
+  y += 8;
+  fillRect(ML, y, PW, 13, MED_BLUE, '#A0A0A0');
+  cellText('Attendance Overview', ML, y, PW, 13, WHITE, 8, true, 'center');
+  y += 13;
+
+  const boxW = PW / 3;
+  const boxH = 35;
+  const kpiBoxes = [
+    ['Total Working Days', totalDaysInMonth, '#D6E4F0', DARK_BLUE],
+    ['Total Present',      cntPresent,       '#E2EFDA', '#276221'],
+    ['Total Absent',       cntAbsent,        '#FCE4D6', '#C00000'],
+    ['Total Leaves',       cntLeave,         '#FFF2CC', '#7F6000'],
+    ['Govt Holidays',      cntHoliday,       '#D9D9D9', '#404040'],
+    ['Total Sundays',      cntSunday,        '#EDEDED', '#555555'],
+  ];
+  for (let ki = 0; ki < 6; ki++) {
+    const [kLabel, kVal, kBg, kFg] = kpiBoxes[ki];
+    const bx = ML + (ki % 3) * boxW;
+    const by = y + Math.floor(ki / 3) * boxH;
+    fillRect(bx, by, boxW, boxH, kBg, '#A0A0A0');
+    // Large number
+    doc.save()
+       .fillColor(kFg).font('Helvetica-Bold').fontSize(16)
+       .text(String(kVal), bx, by + 5, { width: boxW, align: 'center', lineBreak: false })
+       .restore();
+    // Small label below
+    doc.save()
+       .fillColor(kFg).font('Helvetica').fontSize(6)
+       .text(kLabel, bx + 2, by + 23, { width: boxW - 4, align: 'center', lineBreak: false })
+       .restore();
+  }
+  y += boxH * 2;
+
+  // ─── PRINCIPAL'S NOTE BOX ──────────────────────────────────────────────────
+  y += 8;
+  fillRect(ML, y, PW, 13, DARK_BLUE, '#A0A0A0');
+  cellText("Principal's Note / Remarks (If Any)", ML, y, PW, 13, WHITE, 7, true);
+  y += 13;
+
+  const noteH = 52;
+  fillRect(ML, y, PW, noteH, '#FAFAFA', '#C0C0C0');
+  const ruledLines = 3;
+  const lineSpacing = noteH / (ruledLines + 1);
+  for (let li = 1; li <= ruledLines; li++) {
+    const ly = y + li * lineSpacing;
+    doc.save()
+       .moveTo(ML + 8, ly).lineTo(ML + PW - 8, ly)
+       .strokeColor('#CCCCCC').lineWidth(0.5).stroke();
+    doc.restore();
+  }
+  y += noteH;
 
   // ─── APPROVAL / SIGNATURE SECTION — pinned to bottom of page ─────────────────
   // Signature block height: VT/Seal row (40pt) + 6 approval rows × 13pt + footer (20pt)

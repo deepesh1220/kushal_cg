@@ -87,15 +87,24 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
 
   for (let d = 1; d <= totalDays; d++) {
     const isFutureDay = isCurrentMonth && d > todayDate;
-    const rec = attendanceRaw[d] || {};
+    const isSunday    = new Date(year, month - 1, d).getDay() === 0;
+    const rec         = attendanceRaw[d] || {};
+
     let s;
     if (isFutureDay) {
-      // Future days: blank unless VT has an approved leave on that date
-      s = fullMonthLeaveDates.has(d) ? 'L' : '';
+      if (isSunday) {
+        s = 'H';                                    // future Sunday → always SUN
+      } else if (fullMonthLeaveDates.has(d)) {
+        s = 'L';                                    // future approved leave
+      } else {
+        s = '';                                     // future blank (not absent)
+      }
     } else {
-      // Past / today: use actual attendance record, default 'A' if no check-in
-      s = rec.status || 'A';
+      // Past / today: getMonthlySummaryReport already returns 'H' for Sundays,
+      // so trust its result; fall back to 'H' for any Sunday missed, else 'A'.
+      s = rec.status || (isSunday ? 'H' : 'A');
     }
+
     attendance[d] = {
       status:    s,
       check_in:  rec.check_in  || null,
@@ -107,7 +116,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
     else if (s === 'GH') totalHolidays++;
     else if (s === 'H')  totalSundays++;
     else if (s === 'L')  totalLeaves++;
-    // '' (blank future days) intentionally not counted
+    // '' (blank future non-Sunday days) intentionally not counted
   }
 
   // Dynamic financial year label (April–March cycle)
