@@ -665,7 +665,7 @@ const getMe = async (req, res) => {
     // Normalize date if it comes in DD-MM-YYYY or DD/MM/YYYY format
     if (processedDate && processedDate.match(/^\d{2}-\d{2}-\d{4}$/)) {
       const [day, month, year] = processedDate.split('-');
-      processedDate = `${year}-${month}-${day}`;
+      processedDate =`${year}-${month}-${day}`;
     } else if (processedDate && processedDate.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
       const [day, month, year] = processedDate.split('/');
       processedDate = `${year}-${month}-${day}`;
@@ -714,7 +714,7 @@ const getMe = async (req, res) => {
           const dateObjForHol = new Date(yearHol, parseInt(monthStr, 10) - 1, parseInt(dayStr, 10));
           const govHolidays = await Report._getGovHolidays(yearHol);
 
-          if (govHolidays.has(processedDate)) {
+         if (govHolidays.includes(processedDate)) {
             attendanceData.status = 'gov holiday';
           } else if (dateObjForHol.getDay() === 0) {
             attendanceData.status = 'holiday'; // Sunday
@@ -753,19 +753,19 @@ const getMe = async (req, res) => {
         date_requested: processedDate,
         monthly_summary: {
           month: `${year}-${String(month).padStart(2, '0')}`,
-          present: monthlySummary.present,
-          absent: monthlySummary.absent,
-          late: monthlySummary.late,
-          half_day: monthlySummary.half_day,
-          on_leave: monthlySummary.on_leave,
+      present: monthlySummary.present,
+      absent: monthlySummary.absent,
+      late: monthlySummary.late,
+      half_day: monthlySummary.half_day,
+      on_leave: monthlySummary.on_leave,
         },
-        vt_profile: vtProfile
-      }
+  vt_profile: vtProfile
+}
     });
   } catch (error) {
-    console.error('getMe error:', error.message);
-    return res.status(500).json({ status: false, message: 'Server error while fetching user profile and attendance.' });
-  }
+  console.error('getMe error:', error.message);
+  return res.status(500).json({ status: false, message: 'Server error while fetching user profile and attendance.' });
+}
 };
 
 // ─── POST /api/auth/login/vt ──────────────────────────────────────────────────
