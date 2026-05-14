@@ -1,9 +1,9 @@
 'use strict';
 
-const path   = require('path');
-const fs     = require('fs');
+const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
-const sharp  = require('sharp');
+const sharp = require('sharp');
 
 // ── TensorFlow WASM backend (no native build tools needed) ───────────────────
 const tf = require('@tensorflow/tfjs');
@@ -25,7 +25,7 @@ const MODELS_PATH = path.join(
 const MATCH_THRESHOLD = 0.50;
 
 // ─── AES-256-GCM encryption key (32 bytes, derived from env var) ─────────────
-const ALGORITHM      = 'aes-256-gcm';
+const ALGORITHM = 'aes-256-gcm';
 const ENCRYPTION_KEY = crypto
   .createHash('sha256')
   .update(process.env.FACE_DESCRIPTOR_SECRET || 'kushal_face_default_key_2026')
@@ -127,8 +127,8 @@ const extractDescriptorFromBase64 = async (base64String) => {
 
   // Strip "data:image/jpeg;base64," prefix if present
   const base64Data = base64String.replace(/^data:image\/\w+;base64,/, '');
-  const buffer     = Buffer.from(base64Data, 'base64');
-  const tensor     = await bufferToTensor(buffer);
+  const buffer = Buffer.from(base64Data, 'base64');
+  const tensor = await bufferToTensor(buffer);
 
   // Same 0.45 threshold as registration — keeps behaviour consistent.
   const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.45 });
@@ -151,17 +151,17 @@ const extractDescriptorFromBase64 = async (base64String) => {
 // ENCRYPT descriptor array → AES-256-GCM encrypted JSON string
 // ─────────────────────────────────────────────────────────────────────────────
 const encryptDescriptor = (descriptorArray) => {
-  const iv     = crypto.randomBytes(12); // 96-bit IV for GCM
+  const iv = crypto.randomBytes(12); // 96-bit IV for GCM
   const cipher = crypto.createCipheriv(ALGORITHM, ENCRYPTION_KEY, iv);
 
   const plaintext = JSON.stringify(descriptorArray);
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  const authTag   = cipher.getAuthTag();
+  const authTag = cipher.getAuthTag();
 
   return JSON.stringify({
-    iv:      iv.toString('hex'),
+    iv: iv.toString('hex'),
     authTag: authTag.toString('hex'),
-    data:    encrypted.toString('hex'),
+    data: encrypted.toString('hex'),
   });
 };
 
@@ -208,9 +208,9 @@ const compareFaces = (storedRaw, liveArray) => {
   }
 
   const stored = new Float32Array(storedArray);
-  const live   = new Float32Array(liveArray);
+  const live = new Float32Array(liveArray);
 
-  const distance    = faceapi.euclideanDistance(stored, live);
+  const distance = faceapi.euclideanDistance(stored, live);
 
   // Map distance → human-readable score using 0.6 as the "0%" anchor.
   // This is the industry-standard formula for dlib/face-api 128D descriptors.
@@ -225,7 +225,7 @@ const compareFaces = (storedRaw, liveArray) => {
   const matchPercent = Math.max(0, Math.min(100, Math.round((1 - distance / 0.6) * 10000) / 100));
 
   return {
-    distance:     Math.round(distance * 10000) / 10000,
+    distance: Math.round(distance * 10000) / 10000,
     matchPercent,
     isMatch: distance <= MATCH_THRESHOLD,
   };
@@ -236,7 +236,7 @@ const compareFaces = (storedRaw, liveArray) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const saveBase64Image = (base64String, filename) => {
   const base64Data = base64String.replace(/^data:image\/\w+;base64,/, '');
-  const buffer     = Buffer.from(base64Data, 'base64');
+  const buffer = Buffer.from(base64Data, 'base64');
 
   const uploadDir = path.join(__dirname, '../uploads/checkin');
   if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
