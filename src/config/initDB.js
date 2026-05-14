@@ -117,6 +117,11 @@ const initDB = async () => {
       );
     `);
 
+    // Ensure face_descriptor column exists on users (biometric — stored AES-256-GCM encrypted)
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS face_descriptor TEXT DEFAULT NULL;
+    `);
+
     // ─────────────────────────────────────────────────────────
     // TABLE: user_permissions  (override — per user grant/revoke)
     // ─────────────────────────────────────────────────────────
@@ -170,8 +175,16 @@ const initDB = async () => {
 
     // Ensure checkout location columns exist for previously created databases
     await client.query(`
-      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_latitude NUMERIC(10, 8);
-      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_longitude NUMERIC(11, 8);
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_latitude    NUMERIC(10, 8);
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_longitude   NUMERIC(11, 8);
+    `);
+
+    // ── Face recognition columns ─────────────────────────────────────────────
+    await client.query(`
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS face_match_score     NUMERIC(5,2) DEFAULT NULL;
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkin_photo        TEXT         DEFAULT NULL;
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_photo       TEXT         DEFAULT NULL;
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_face_score  NUMERIC(5,2) DEFAULT NULL;
     `);
 
     // ─────────────────────────────────────────────────────────
@@ -487,6 +500,22 @@ const initDB = async () => {
     `);
 
     // ─────────────────────────────────────────────────────────
+    // ALTER od_requests: add dual-approval layer
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      ALTER TABLE od_requests
+        ADD COLUMN IF NOT EXISTS hm_status          VARCHAR(20) DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS hm_approved_by     INTEGER     REFERENCES users(id),
+        ADD COLUMN IF NOT EXISTS hm_action_at       TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS hm_remarks         TEXT,
+        ADD COLUMN IF NOT EXISTS vtp_status         VARCHAR(20) DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS vtp_approved_by    INTEGER     REFERENCES users(id),
+        ADD COLUMN IF NOT EXISTS vtp_action_at      TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS vtp_remarks        TEXT,
+        ADD COLUMN IF NOT EXISTS od_approved        BOOLEAN     DEFAULT FALSE;
+    `);
+
+    // ─────────────────────────────────────────────────────────
     // TABLE: regularization_requests
     // Dedicated single-date attendance regularization table
     // ─────────────────────────────────────────────────────────
@@ -799,6 +828,7 @@ const seedDefaults = async (client) => {
     'reports:generate',
     'reports:view_monthly',
     'reports:approve_hm',
+    'attendance:create_others',
   ]);
 
   // ── 2. admin also gets vt:approve and full report access ─────────────────────

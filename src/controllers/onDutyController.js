@@ -1,6 +1,8 @@
 const OnDuty = require('../models/OnDuty');
 const { pool } = require('../config/db');
 
+const VTP_ROLE_NAME = 'vocational_teacher_provider';
+
 // ─── Shared date parser: DD-MM-YYYY → YYYY-MM-DD ──────────────────────────────
 const parseDateStr = (dateStr) => {
   if (!dateStr) return dateStr;
@@ -89,12 +91,12 @@ const applyOnDuty = async (req, res) => {
 };
 
 // ─── PATCH /api/od/:id/status ─────────────────────────────────────────────────
-// Headmaster / Admin approves or rejects an OD request
-// req.body: { status }
+// Headmaster / Admin approves or rejects an OD request (HM layer of dual approval)
+// req.body: { status, remarks }
 const approveOnDuty = async (req, res) => {
   const reviewer = req.user;
   const odId     = req.params.id;
-  const { status } = req.body;
+  const { status, remarks } = req.body;
 
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(400).json({ status: false, message: 'Status must be either approved or rejected.' });
@@ -106,37 +108,66 @@ const approveOnDuty = async (req, res) => {
       return res.status(404).json({ status: false, message: 'OD request not found.' });
     }
 
-    if (od.status !== 'pending') {
-      return res.status(400).json({ status: false, message: `OD request is already ${od.status}.` });
+    // Guard: HM cannot act if HM has already acted on this request
+    if (od.hm_status && od.hm_status !== 'pending') {
+      return res.status(400).json({
+        status: false,
+        message: `Headmaster has already ${od.hm_status} this OD request.`,
+      });
     }
 
     // Validate headmaster can act on this VT
     const authError = await _validateVtBelongsToHeadmaster(od.user_id, reviewer);
     if (authError) return res.status(authError.status).json(authError.body);
 
-    const updated = await OnDuty.updateStatus(odId, { status, reviewerId: reviewer.id });
+    // Update only HM layer — final status is computed inside the model
+    const updated = await OnDuty.updateHmStatus(odId, {
+      status,
+      reviewerId: reviewer.id,
+      remarks,
+    });
 
-    // On approval → upsert attendance_records as 'od' for each day in range
-    if (status === 'approved') {
+    // Upsert attendance records ONLY when both layers are approved (od_approved = true)
+    if (updated.od_approved === true) {
       const fromD = new Date(od.from_date);
       const toD   = new Date(od.to_date);
-
       for (let d = new Date(fromD); d <= toD; d.setDate(d.getDate() + 1)) {
         const dateStr = d.toISOString().split('T')[0];
-
         await pool.query(`
           INSERT INTO attendance_records (user_id, date, status, check_in_time, check_out_time, remarks, marked_by)
-          VALUES ($1, $2, 'od', NOW(), NOW(), 'OD Approved by Headmaster', $3)
+          VALUES ($1, $2, 'od', NOW(), NOW(), $3, $4)
           ON CONFLICT (user_id, date)
           DO UPDATE SET
             status     = 'od',
-            remarks    = 'OD Approved by Headmaster',
+            remarks    = $3,
             updated_at = NOW()
-        `, [od.user_id, dateStr, reviewer.id]);
+        `, [od.user_id, dateStr, remarks || 'OD Approved by Headmaster & VTP', reviewer.id]);
       }
     }
 
-    return res.status(200).json({ status: true, message: `OD request successfully ${status}.`, data: updated });
+    const finalMessage = updated.od_approved
+      ? `OD request fully approved (Headmaster + VTP). Attendance updated.`
+      : status === 'rejected'
+        ? `OD request rejected by Headmaster.`
+        : `OD request approved by Headmaster. Awaiting VTP approval.`;
+
+    return res.status(200).json({
+      status: true,
+      message: finalMessage,
+      data: {
+        ...updated,
+        headmasterApprovalStatus: updated.hm_status,
+        headmasterApprovedBy:     updated.hm_approved_by,
+        headmasterActionAt:       updated.hm_action_at,
+        headmasterRemarks:        updated.hm_remarks,
+        vtpApprovalStatus:        updated.vtp_status,
+        vtpApprovedBy:            updated.vtp_approved_by,
+        vtpActionAt:              updated.vtp_action_at,
+        vtpRemarks:               updated.vtp_remarks,
+        finalStatus:              updated.status,
+        od_approved:              updated.od_approved,
+      },
+    });
   } catch (error) {
     console.error('approveOnDuty error:', error.message);
     return res.status(500).json({ status: false, message: error.message });
@@ -263,4 +294,198 @@ const getHeadmasterOnDutyRequests = async (req, res) => {
   }
 };
 
-module.exports = { applyOnDuty, approveOnDuty, getMyOnDutyRequests, getOnDutyById, getHeadmasterOnDutyRequests };
+// ─── Internal helper for VTP OnDuty ───────────────────────────────────────────
+// Validates that the OD request belongs to a VT that is under the calling VTP.
+const _validateOnDutyBelongsToVtp = async (odId, vtpUser) => {
+  if (['super_admin', 'admin'].includes(vtpUser.role_name)) return null;
+
+  const result = await pool.query(`
+    SELECT TRIM(COALESCE(u.vtp_id, v.vtp_id)) AS vtp_id
+    FROM od_requests o
+    JOIN users u ON u.id = o.user_id
+    LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
+    WHERE o.id = $1::integer
+  `, [odId]);
+
+  if (!result.rows.length) {
+    return {
+      status: 404,
+      body: { status: false, message: 'OnDuty request not found.' },
+    };
+  }
+
+  const vtpId = vtpUser.vtp_id;
+  if (!vtpId) {
+    return {
+      status: 400,
+      body: { status: false, message: 'Your VTP account is not linked to a vtp_id. Contact administrator.' },
+    };
+  }
+
+  if (String(result.rows[0].vtp_id).trim() !== String(vtpId).trim()) {
+    return {
+      status: 403,
+      body: { status: false, message: 'You are not authorized to approve OnDuty requests for this VT.' },
+    };
+  }
+
+  return null;
+};
+
+// ─── POST /api/od/vtp ─────────────────────────────────────────────────────────
+// VTP views OnDuty requests scoped to their organization
+// body: { status, page, limit }
+const getVtpScopedOnDutyRequests = async (req, res) => {
+  try {
+    const vtpUser = req.user;
+    const { status, limit, page } = req.body;
+
+    if (!['super_admin', 'admin'].includes(vtpUser.role_name)) {
+      if (vtpUser.role_name !== VTP_ROLE_NAME) {
+        return res.status(403).json({ status: false, message: 'Only VTP users can access this resource.' });
+      }
+      if (!vtpUser.vtp_id) {
+        return res.status(400).json({
+          status: false,
+          message: 'Your account is not linked to a VTP ID. Contact administrator.',
+        });
+      }
+    }
+
+    const parsedLimit = limit ? parseInt(limit, 10) : 10;
+    const parsedPage = page ? parseInt(page, 10) : 1;
+    const parsedOffset = (parsedPage - 1) * parsedLimit;
+
+    let odData;
+    if (['super_admin', 'admin'].includes(vtpUser.role_name)) {
+      // Admin sees all (no vtp_id filter)
+      odData = await OnDuty.findAll({ status, limit: parsedLimit, offset: parsedOffset });
+    } else {
+      odData = await OnDuty.findAllByVtpId(vtpUser.vtp_id, {
+        status,
+        limit: parsedLimit,
+        offset: parsedOffset,
+      });
+    }
+
+    return res.status(200).json({
+      status: true,
+      pagination: {
+        totalRecords: odData.totalRecords,
+        totalPages: Math.ceil(odData.totalRecords / parsedLimit),
+        currentPage: parsedPage,
+        limit: parsedLimit,
+      },
+      data: odData.data,
+    });
+  } catch (error) {
+    console.error('getVtpScopedOnDutyRequests error:', error.message);
+    return res.status(500).json({ status: 'error', message: error.message });
+  }
+};
+
+// ─── PUT /api/od/vtp/:requestId/action ────────────────────────────────────────
+// VTP approves or rejects an OnDuty request of a VT under their organization
+// body: { status: 'approved'|'rejected', remarks }
+const actionOnDutyByVtp = async (req, res) => {
+  const { requestId } = req.params;
+  const parsedId = parseInt(requestId, 10);
+  const { status, remarks } = req.body;
+
+  if (!['approved', 'rejected'].includes(status)) {
+    return res.status(400).json({ status: false, message: "status must be 'approved' or 'rejected'." });
+  }
+
+  try {
+    const od = await OnDuty.findById(parsedId);
+    if (!od) {
+      return res.status(404).json({ status: false, message: 'OnDuty request not found.' });
+    }
+
+    // Guard: VTP cannot act if VTP has already acted on this request
+    if (od.vtp_status && od.vtp_status !== 'pending') {
+      return res.status(400).json({
+        status: false,
+        message: `VTP has already ${od.vtp_status} this OnDuty request.`,
+      });
+    }
+
+    // Final status must not already be rejected (e.g. HM rejected it)
+    if (od.status === 'rejected') {
+      return res.status(400).json({
+        status: false,
+        message: 'This OnDuty request has already been rejected.',
+      });
+    }
+
+    // Verify the VT belongs to this VTP
+    const validationError = await _validateOnDutyBelongsToVtp(parsedId, req.user);
+    if (validationError) return res.status(validationError.status).json(validationError.body);
+
+    // Update only VTP layer — final status is computed inside the model
+    const updated = await OnDuty.updateVtpStatus(parsedId, {
+      status,
+      reviewerId: req.user.id,
+      remarks,
+    });
+
+    if (!updated) {
+      return res.status(404).json({ status: false, message: 'OnDuty request not found.' });
+    }
+
+    // Upsert attendance records ONLY when both layers are approved (od_approved = true)
+    if (updated.od_approved === true) {
+      const fromD = new Date(od.from_date);
+      const toD   = new Date(od.to_date);
+      for (let d = new Date(fromD); d <= toD; d.setDate(d.getDate() + 1)) {
+        const dateStr = d.toISOString().split('T')[0];
+        await pool.query(`
+          INSERT INTO attendance_records (user_id, date, status, check_in_time, check_out_time, remarks, marked_by)
+          VALUES ($1, $2, 'od', NOW(), NOW(), $3, $4)
+          ON CONFLICT (user_id, date)
+          DO UPDATE SET
+            status     = 'od',
+            remarks    = $3,
+            updated_at = NOW()
+        `, [od.user_id, dateStr, remarks || 'OD Approved by Headmaster & VTP', req.user.id]);
+      }
+    }
+
+    const finalMessage = updated.od_approved
+      ? `OD request fully approved (Headmaster + VTP). Attendance updated.`
+      : status === 'rejected'
+        ? `OD request rejected by VTP.`
+        : `OD request approved by VTP. Awaiting Headmaster approval.`;
+
+    return res.status(200).json({
+      status: true,
+      message: finalMessage,
+      data: {
+        ...updated,
+        headmasterApprovalStatus: updated.hm_status,
+        headmasterApprovedBy:     updated.hm_approved_by,
+        headmasterActionAt:       updated.hm_action_at,
+        headmasterRemarks:        updated.hm_remarks,
+        vtpApprovalStatus:        updated.vtp_status,
+        vtpApprovedBy:            updated.vtp_approved_by,
+        vtpActionAt:              updated.vtp_action_at,
+        vtpRemarks:               updated.vtp_remarks,
+        finalStatus:              updated.status,
+        od_approved:              updated.od_approved,
+      },
+    });
+  } catch (error) {
+    console.error('actionOnDutyByVtp error:', error.message);
+    return res.status(500).json({ status: 'error', message: error.message });
+  }
+};
+
+module.exports = {
+  applyOnDuty,
+  approveOnDuty,
+  getMyOnDutyRequests,
+  getOnDutyById,
+  getHeadmasterOnDutyRequests,
+  getVtpScopedOnDutyRequests,
+  actionOnDutyByVtp,
+};

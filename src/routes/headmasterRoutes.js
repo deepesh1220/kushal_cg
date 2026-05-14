@@ -11,6 +11,8 @@ const {
   getSchoolTiming,
   getSchoolDetails,
   updateSchoolLatLong,
+  markVtAttendance, 
+  updateVtAttendance,
 } = require('../controllers/headmasterController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
 
@@ -25,6 +27,8 @@ router.post('/school',    /* authenticate, */ getSchoolDetails);
 // GET /api/headmaster/leaves
 // Must be defined BEFORE /:teacher_code to prevent Express treating 'leaves' as a param
 router.get('/leaves', authenticate, authorize('leave:view_all'), getSchoolLeaves);
+router.post('/mark-vt-attendance', authenticate, authorize('attendance:create_others'), markVtAttendance);
+router.patch('/update-vt-attendance/:id', authenticate, authorize('attendance:create_others'), updateVtAttendance);
 
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 router.get('/school-time',   /* authenticate, */ getSchoolTiming);

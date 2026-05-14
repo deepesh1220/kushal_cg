@@ -64,7 +64,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
   // Fetch ALL approved leaves for the entire month (includes future dates)
   // so future leave days show 'L' instead of blank
   const startOfMonth = `${year}-${String(month).padStart(2, '0')}-01`;
-  const endOfMonth   = `${year}-${String(month).padStart(2, '0')}-${String(totalDays).padStart(2, '0')}`;
+  const endOfMonth = `${year}-${String(month).padStart(2, '0')}-${String(totalDays).padStart(2, '0')}`;
   const leaveRows = await pool.query(
     `SELECT from_date, to_date FROM leave_requests
      WHERE user_id = $1 AND status = 'approved'
@@ -87,8 +87,8 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
 
   for (let d = 1; d <= totalDays; d++) {
     const isFutureDay = isCurrentMonth && d > todayDate;
-    const isSunday    = new Date(year, month - 1, d).getDay() === 0;
-    const rec         = attendanceRaw[d] || {};
+    const isSunday = new Date(year, month - 1, d).getDay() === 0;
+    const rec = attendanceRaw[d] || {};
 
     let s;
     if (isFutureDay) {
@@ -106,16 +106,16 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
     }
 
     attendance[d] = {
-      status:    s,
-      check_in:  rec.check_in  || null,
+      status: s,
+      check_in: rec.check_in || null,
       check_out: rec.check_out || null,
-      remarks:   rec.remarks   || null,
+      remarks: rec.remarks || null,
     };
-    if (s === 'P')       totalPresent++;
-    else if (s === 'A')  totalAbsent++;
+    if (s === 'P') totalPresent++;
+    else if (s === 'A') totalAbsent++;
     else if (s === 'GH') totalHolidays++;
-    else if (s === 'H')  totalSundays++;
-    else if (s === 'L')  totalLeaves++;
+    else if (s === 'H') totalSundays++;
+    else if (s === 'L') totalLeaves++;
     // '' (blank future non-Sunday days) intentionally not counted
   }
 
@@ -141,24 +141,24 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
 
   return {
     vtDetails: {
-      vt_name:       vtDetails.vt_name       || vtDetails.name  || '',
-      vt_mob:        vtDetails.vt_mob        || vtDetails.phone || '',
-      trade:         vtDetails.trade         || '',
-      vtp_name:      vtDetails.vtp_name      || '',
-      school_name:   vtDetails.school_name   || '',
+      vt_name: vtDetails.vt_name || vtDetails.name || '',
+      vt_mob: vtDetails.vt_mob || vtDetails.phone || '',
+      trade: vtDetails.trade || '',
+      vtp_name: vtDetails.vtp_name || '',
+      school_name: vtDetails.school_name || '',
       district_name: vtDetails.district_name || '',
-      block_name:    vtDetails.block_name    || '',
+      block_name: vtDetails.block_name || '',
     },
     attendance,
     summary: { totalPresent, totalAbsent, totalHolidays, totalSundays, totalLeaves },
     leaveDetails: {
       fyLabel,
       annualEntitlement: 12,
-      totalEarned:       parseFloat(leaveBalance.total_earned       || 0),
-      leavesTaken:       parseFloat(leaveBalance.total_used         || 0),
-      remainingLeave:    parseFloat(leaveBalance.remaining_balance  || 0),
-      carriedForward:    parseFloat(leaveBalance.carried_forward    || 0),
-      excessLeaveTaken:  excessLeave,
+      totalEarned: parseFloat(leaveBalance.total_earned || 0),
+      leavesTaken: parseFloat(leaveBalance.total_used || 0),
+      remainingLeave: parseFloat(leaveBalance.remaining_balance || 0),
+      carriedForward: parseFloat(leaveBalance.carried_forward || 0),
+      excessLeaveTaken: excessLeave,
     },
     month,
     year,
@@ -179,7 +179,7 @@ const generateMonthlyVtReport = async (req, res) => {
     }
 
     const monthInt = parseInt(month, 10);
-    const yearInt  = parseInt(year, 10);
+    const yearInt = parseInt(year, 10);
 
     if (monthInt < 1 || monthInt > 12) {
       return res.status(400).json({ status: false, message: 'month must be 1–12.' });
@@ -291,7 +291,7 @@ const downloadVtMonthlyReportPdf = async (req, res) => {
     }
 
     const monthInt = parseInt(month, 10);
-    const yearInt  = parseInt(year, 10);
+    const yearInt = parseInt(year, 10);
     const roleName = req.user.role_name;
 
     // Role-based access check
@@ -359,7 +359,7 @@ const downloadVtMonthlyReportPdf = async (req, res) => {
     );
     const ar = approvalRow.rows[0] || {};
     snapshotData.approvals = {
-      hm:  { status: ar.hm_approval_status  || 'pending', approvedAt: ar.hm_approved_at  || null },
+      hm: { status: ar.hm_approval_status || 'pending', approvedAt: ar.hm_approved_at || null },
       deo: { status: ar.deo_approval_status || 'pending', approvedAt: ar.deo_approved_at || null },
       vtp: { status: ar.vtp_approval_status || 'pending', approvedAt: ar.vtp_approved_at || null },
     };
@@ -385,11 +385,11 @@ const getMonthlyVtReportsList = async (req, res) => {
       page = 1, limit = 20,
     } = req.query;
 
-    const roleName  = req.user.role_name;
-    const monthInt  = month ? parseInt(month, 10)  : new Date().getMonth() + 1;
-    const yearInt   = year  ? parseInt(year, 10)   : new Date().getFullYear();
-    const pageNum   = parseInt(page, 10);
-    const limitNum  = parseInt(limit, 10);
+    const roleName = req.user.role_name;
+    const monthInt = month ? parseInt(month, 10) : new Date().getMonth() + 1;
+    const yearInt = year ? parseInt(year, 10) : new Date().getFullYear();
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
     const offsetNum = (pageNum - 1) * limitNum;
 
     let queryArgs = [monthInt, yearInt];
@@ -518,11 +518,11 @@ const getDashboardPendingCounts = async (req, res) => {
   try {
     const { month, year } = req.query;
     const monthInt = month ? parseInt(month, 10) : new Date().getMonth() + 1;
-    const yearInt  = year  ? parseInt(year, 10)  : new Date().getFullYear();
+    const yearInt = year ? parseInt(year, 10) : new Date().getFullYear();
     const roleName = req.user.role_name;
 
     let scopeWhere = '';
-    let queryArgs  = [monthInt, yearInt];
+    let queryArgs = [monthInt, yearInt];
 
     if (roleName === 'headmaster') {
       const hmUdise = req.user.udise_code;
@@ -548,16 +548,16 @@ const getDashboardPendingCounts = async (req, res) => {
     let pendingCondition, approvedCondition, rejectedCondition;
 
     if (roleName === 'deo') {
-      pendingCondition  = `COALESCE(msr.hm_approval_status,'pending') = 'approved' AND COALESCE(msr.deo_approval_status,'pending') = 'pending'`;
+      pendingCondition = `COALESCE(msr.hm_approval_status,'pending') = 'approved' AND COALESCE(msr.deo_approval_status,'pending') = 'pending'`;
       approvedCondition = `COALESCE(msr.deo_approval_status,'pending') = 'approved'`;
       rejectedCondition = `COALESCE(msr.deo_approval_status,'pending') = 'rejected'`;
     } else if (roleName === 'vocational_teacher_provider') {
-      pendingCondition  = `COALESCE(msr.hm_approval_status,'pending') = 'approved' AND COALESCE(msr.deo_approval_status,'pending') = 'approved' AND COALESCE(msr.vtp_approval_status,'pending') = 'pending'`;
+      pendingCondition = `COALESCE(msr.hm_approval_status,'pending') = 'approved' AND COALESCE(msr.deo_approval_status,'pending') = 'approved' AND COALESCE(msr.vtp_approval_status,'pending') = 'pending'`;
       approvedCondition = `COALESCE(msr.vtp_approval_status,'pending') = 'approved'`;
       rejectedCondition = `COALESCE(msr.vtp_approval_status,'pending') = 'rejected'`;
     } else {
       // headmaster / admin
-      pendingCondition  = `COALESCE(msr.hm_approval_status,'pending') = 'pending'`;
+      pendingCondition = `COALESCE(msr.hm_approval_status,'pending') = 'pending'`;
       approvedCondition = `COALESCE(msr.hm_approval_status,'pending') = 'approved'`;
       rejectedCondition = `COALESCE(msr.hm_approval_status,'pending') = 'rejected'`;
     }
@@ -572,12 +572,12 @@ const getDashboardPendingCounts = async (req, res) => {
     return res.status(200).json({
       status: true,
       data: {
-        total:             parseInt(total.rows[0].count, 10),
+        total: parseInt(total.rows[0].count, 10),
         pending_my_action: parseInt(pending.rows[0].count, 10),
-        approved:          parseInt(approved.rows[0].count, 10),
-        rejected:          parseInt(rejected.rows[0].count, 10),
+        approved: parseInt(approved.rows[0].count, 10),
+        rejected: parseInt(rejected.rows[0].count, 10),
         month: monthInt,
-        year:  yearInt,
+        year: yearInt,
       },
     });
   } catch (err) {
@@ -615,8 +615,8 @@ const approveMonthlyReport = async (req, res) => {
     // Map role → DB columns
     let statusCol, remarksCol, approvedByCol, approvedAtCol;
     if (role_name === 'headmaster') {
-      statusCol = 'hm_approval_status';  remarksCol = 'hm_remarks';
-      approvedByCol = 'hm_approved_by';  approvedAtCol = 'hm_approved_at';
+      statusCol = 'hm_approval_status'; remarksCol = 'hm_remarks';
+      approvedByCol = 'hm_approved_by'; approvedAtCol = 'hm_approved_at';
     } else if (role_name === 'vocational_teacher_provider' || role_name === 'vtp') {
       statusCol = 'vtp_approval_status'; remarksCol = 'vtp_remarks';
       approvedByCol = 'vtp_approved_by'; approvedAtCol = 'vtp_approved_at';
@@ -633,8 +633,8 @@ const approveMonthlyReport = async (req, res) => {
         statusCol = 'vtp_approval_status'; remarksCol = 'vtp_remarks';
         approvedByCol = 'vtp_approved_by'; approvedAtCol = 'vtp_approved_at';
       } else {
-        statusCol = 'hm_approval_status';  remarksCol = 'hm_remarks';
-        approvedByCol = 'hm_approved_by';  approvedAtCol = 'hm_approved_at';
+        statusCol = 'hm_approval_status'; remarksCol = 'hm_remarks';
+        approvedByCol = 'hm_approved_by'; approvedAtCol = 'hm_approved_at';
       }
     } else {
       return res.status(403).json({ status: false, message: `Role '${role_name}' is not authorized to approve monthly reports.` });
@@ -642,7 +642,7 @@ const approveMonthlyReport = async (req, res) => {
 
     // Resolve user IDs to approve
     let userIdsToApprove = [];
-    let queryUdiseCode   = udise_code;
+    let queryUdiseCode = udise_code;
 
     if (vtUserId) {
       userIdsToApprove.push(vtUserId);
@@ -714,7 +714,7 @@ const approveMonthlyReport = async (req, res) => {
           processedUsers.push(ins.rows[0]);
         } else {
           // Determine if all approvals are now done (after this update)
-          const newHm  = statusCol === 'hm_approval_status'  ? status : rec.hm_approval_status;
+          const newHm = statusCol === 'hm_approval_status' ? status : rec.hm_approval_status;
           const newDeo = statusCol === 'deo_approval_status' ? status : rec.deo_approval_status;
           const newVtp = statusCol === 'vtp_approval_status' ? status : rec.vtp_approval_status;
           const nowLocked = (newHm === 'approved' && newDeo === 'approved' && newVtp === 'approved');
@@ -771,7 +771,7 @@ const downloadMonthlyAttendance = async (req, res) => {
     const report = await Report.getAttendanceReport(userId, month);
 
     if (format === 'excel') return sendExcel(report, res);
-    if (format === 'pdf')   return sendPDF(report, res);
+    if (format === 'pdf') return sendPDF(report, res);
 
     return res.status(400).json({ success: false, message: 'Invalid format' });
   } catch (err) {
@@ -792,7 +792,7 @@ const getMonthlySummary = async (req, res) => {
       month,
       udise_code,
       vtUserId,
-      page:  page  ? parseInt(page, 10)  : 1,
+      page: page ? parseInt(page, 10) : 1,
       limit: limit ? parseInt(limit, 10) : 50,
     };
 
