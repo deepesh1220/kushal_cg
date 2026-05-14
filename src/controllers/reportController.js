@@ -379,7 +379,9 @@ const downloadVtMonthlyReportPdf = async (req, res) => {
 const getMonthlyVtReportsList = async (req, res) => {
   try {
     const {
-      month, year, udise_code, vtp_id, block_name, status,
+      month, year, udise_code, vtp_id, block_name,
+      district_cd, block_cd, cluster_cd,
+      status,
       page = 1, limit = 20,
     } = req.query;
 
@@ -423,9 +425,13 @@ const getMonthlyVtReportsList = async (req, res) => {
     // admin / super_admin: no scope restriction
 
     // Optional filters
-    if (udise_code) { queryArgs.push(udise_code); whereClauses.push(`v.udise_code = $${queryArgs.length}`); }
-    if (vtp_id) { queryArgs.push(vtp_id); whereClauses.push(`v.vtp_id = $${queryArgs.length}`); }
-    if (block_name) { queryArgs.push(`%${block_name}%`); whereClauses.push(`v.block_name ILIKE $${queryArgs.length}`); }
+    if (udise_code)  { queryArgs.push(udise_code);         whereClauses.push(`v.udise_code = $${queryArgs.length}`); }
+    if (vtp_id)      { queryArgs.push(vtp_id);             whereClauses.push(`v.vtp_id = $${queryArgs.length}`);    }
+    if (block_name)  { queryArgs.push(`%${block_name}%`); whereClauses.push(`v.block_name ILIKE $${queryArgs.length}`); }
+    // Location hierarchy filters (use mst_schools join which is already in baseQuery)
+    if (district_cd) { queryArgs.push(parseInt(district_cd, 10)); whereClauses.push(`s.district_cd = $${queryArgs.length}`); }
+    if (block_cd)    { queryArgs.push(parseInt(block_cd, 10));    whereClauses.push(`s.block_cd = $${queryArgs.length}`);    }
+    if (cluster_cd)  { queryArgs.push(parseInt(cluster_cd, 10));  whereClauses.push(`s.cluster_cd = $${queryArgs.length}`);  }
 
     // Status filter maps to role-relevant column
     let statusCol = 'hm_approval_status';
@@ -798,6 +804,53 @@ const getMonthlySummary = async (req, res) => {
   }
 };
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// GET /api/reports/location-master?type=districts|blocks|clusters&district_cd=&block_cd=
+// Cascading location dropdowns for filter panels.
+// type=districts → all districts
+// type=blocks    → blocks for a district_cd
+// type=clusters  → clusters for a district_cd + block_cd
+// ═══════════════════════════════════════════════════════════════════════════════
+const getLocationMasterData = async (req, res) => {
+  try {
+    const { type, district_cd, block_cd } = req.query;
+
+    if (type === 'districts') {
+      const r = await pool.query(
+        `SELECT district_cd, district_name FROM mst_districts ORDER BY district_name ASC`
+      );
+      return res.status(200).json({ status: true, data: r.rows });
+    }
+
+    if (type === 'blocks') {
+      if (!district_cd) {
+        return res.status(400).json({ status: false, message: 'district_cd is required for blocks.' });
+      }
+      const r = await pool.query(
+        `SELECT block_cd, block_name FROM mst_block WHERE district_cd = $1 ORDER BY block_name ASC`,
+        [parseInt(district_cd, 10)]
+      );
+      return res.status(200).json({ status: true, data: r.rows });
+    }
+
+    if (type === 'clusters') {
+      if (!district_cd || !block_cd) {
+        return res.status(400).json({ status: false, message: 'district_cd and block_cd are required for clusters.' });
+      }
+      const r = await pool.query(
+        `SELECT cluster_cd, cluster_name FROM mst_cluster WHERE district_cd = $1 AND block_cd = $2 ORDER BY cluster_name ASC`,
+        [parseInt(district_cd, 10), parseInt(block_cd, 10)]
+      );
+      return res.status(200).json({ status: true, data: r.rows });
+    }
+
+    return res.status(400).json({ status: false, message: 'type must be districts, blocks, or clusters.' });
+  } catch (err) {
+    console.error('getLocationMasterData error:', err.message);
+    return res.status(500).json({ status: false, message: err.message });
+  }
+};
+
 module.exports = {
   downloadMonthlyAttendance,
   getMonthlySummary,
@@ -806,4 +859,5 @@ module.exports = {
   downloadVtMonthlyReportPdf,
   getMonthlyVtReportsList,
   getDashboardPendingCounts,
+  getLocationMasterData,
 };
