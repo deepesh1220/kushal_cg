@@ -524,6 +524,7 @@ const login = async (req, res) => {
           role_id: vtpRole ? vtpRole.id : null,
           organization_name: vtpRecord.vtp_name,
           is_active: true,
+          vtp_id: vtpRecord.vtp_id,
         });
       } catch (dupErr) {
         // If user row already exists (race condition / duplicate), just fetch it

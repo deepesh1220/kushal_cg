@@ -30,7 +30,7 @@ class Vtp {
   // ─── Find VTP by email OR mobile (used by login) ───────────────────────────
   static async findByEmailOrMobile(identifier) {
     const query = `
-      SELECT id, vc_name, vtp_name, mobile,
+      SELECT id, vc_name, vtp_name, mobile, vtp_id,
              email, status, created_at, updated_at
       FROM vtp
       WHERE email = $1 OR mobile::TEXT = $1
