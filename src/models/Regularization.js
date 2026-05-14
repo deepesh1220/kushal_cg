@@ -120,6 +120,7 @@ class Regularization {
       SELECT
         rr.*,
         u.name  AS user_name,
+        u.phone AS mobile,
         v.udise_code,
         rv.name AS reviewer_name
       ${baseQuery}

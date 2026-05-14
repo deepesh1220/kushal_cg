@@ -1,4 +1,5 @@
 const bcrypt = require('bcryptjs');
+const path = require('path');
 const User = require('../models/User');
 const Role = require('../models/Role');
 const RefreshToken = require('../models/RefreshToken');
@@ -7,6 +8,8 @@ const Attendance = require('../models/Attendance');
 const Headmaster = require('../models/Headmaster');
 const Deo = require('../models/Deo');
 const Vtp = require('../models/Vtp');
+const Report = require('../models/Report');
+const { pool } = require('../config/db');
 const {
   generateAccessToken,
   generateRefreshToken,
@@ -14,6 +17,7 @@ const {
   getRefreshTokenExpiry,
 } = require('../utils/jwtUtils');
 const { toIST } = require('../utils/timeUtils');
+const { extractDescriptorFromFile, encryptDescriptor } = require('../utils/faceUtils');
 
 const VT_ROLE_NAME = 'vocational_teacher';
 const VTP_ROLE_NAME = 'vocational_teacher_provider';
@@ -159,6 +163,35 @@ const register = async (req, res) => {
 
     // ── Extract photo if uploaded ─────────────────────────────────────────────
     const profile_photo = req.file ? `/uploads/register/${req.file.filename}` : null;
+    console.log(vtStaff);
+
+    // ── [FACE] Extract & validate face descriptor from photo ─────────────────
+    // Required for VT and Headmaster roles (photo is mandatory for them anyway)
+    let faceDescriptorEncrypted = null;
+    if (req.file) {
+      const absPhotoPath = path.join(__dirname, '../uploads/register', req.file.filename);
+      let descriptor;
+      try {
+        descriptor = await extractDescriptorFromFile(absPhotoPath);
+      } catch (faceErr) {
+        console.error('Face extraction error:', faceErr.message);
+        return res.status(500).json({
+          status: false,
+          message: 'Could not process the profile photo for face recognition. Please try again.',
+        });
+      }
+
+      if (!descriptor) {
+        // No face detected → block registration
+        return res.status(400).json({
+          status: false,
+          message: 'No face detected in the profile photo. Please upload a clear photo with your face visible.',
+        });
+      }
+
+      // Encrypt the 128D descriptor before storing
+      faceDescriptorEncrypted = encryptDescriptor(descriptor);
+    }
 
     // ── Create user ──────────────────────────────────────────────────────────
     const user = await User.create({
@@ -177,6 +210,7 @@ const register = async (req, res) => {
         : roleName === VTP_ROLE_NAME
           ? (name || null)
           : null,
+      vtp_id: vtStaff?.vtp_id,
       udise_code: finalUdise || null,
       profile_photo: profile_photo,
       latitude: latitude ? parseFloat(latitude) : null,
@@ -187,6 +221,14 @@ const register = async (req, res) => {
       vtp_approval_status: vtpApprovalStatus,
       is_active: isActiveOnRegister,
     });
+
+    // ── [FACE] Store encrypted face descriptor ────────────────────────────────
+    if (faceDescriptorEncrypted) {
+      await pool.query(
+        'UPDATE users SET face_descriptor = $1 WHERE id = $2',
+        [faceDescriptorEncrypted, user.id]
+      );
+    }
 
     return res.status(201).json({
       status: true,
@@ -200,6 +242,7 @@ const register = async (req, res) => {
         phone: user.phone,
         role: roleName,
         profile_photo: user.profile_photo,
+        face_enrolled: !!faceDescriptorEncrypted,
         home_location: (user.latitude && user.longitude) ? {
           latitude: user.latitude,
           longitude: user.longitude
@@ -217,6 +260,7 @@ const register = async (req, res) => {
           udise_code: vtStaff.udise_code,
           trade: vtStaff.trade,
           vtp_name: vtStaff.vtp_name,
+          vtp_id: vtStaff?.vtp_id,
         } : null,
         created_at: user.created_at,
       },
@@ -415,10 +459,12 @@ const login = async (req, res) => {
     // ══════════════════════════════════════════════════════════════════════════
     if (roleName === 'vocational_teacher_provider') {
       const inputIdentifier = email;   // could be email or mobile number
-      console.log(inputIdentifier);
 
       // ── Step 1: Try users table first (returning VTP who already has a user row) ──
       let user = await User.findByEmail(inputIdentifier);
+
+      console.log("VTP login details", user);
+
       if (!user && /^\d+$/.test(inputIdentifier)) {
         user = await User.findByPhone(inputIdentifier);
       }
@@ -632,13 +678,52 @@ const getMe = async (req, res) => {
 
     const attendanceRecord = await Attendance.findByUserAndDate(userId, processedDate);
 
-
-    if (attendanceRecord) {
+    let isPresentOrOther = false;
+    if (attendanceRecord && attendanceRecord.status !== 'absent') {
+      isPresentOrOther = true;
       attendanceData = {
         check_in: toIST(attendanceRecord.check_in_time),
         check_out: toIST(attendanceRecord.check_out_time),
         status: attendanceRecord.status
       };
+    }
+
+    if (!isPresentOrOther) {
+      // Check for Leave
+      const leaveRes = await pool.query(`
+        SELECT id FROM leave_requests 
+        WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $2
+      `, [userId, processedDate]);
+
+      if (leaveRes.rows.length > 0) {
+        attendanceData.status = 'leave';
+      } else {
+        // Check for OnDuty
+        const odRes = await pool.query(`
+          SELECT id FROM od_requests 
+          WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $2
+        `, [userId, processedDate]);
+
+        if (odRes.rows.length > 0) {
+          attendanceData.status = 'onduty';
+        } else {
+          // Check for Gov Holiday
+          const [yearStr, monthStr, dayStr] = processedDate.split('-');
+          const yearHol = parseInt(yearStr, 10);
+          const dateObjForHol = new Date(yearHol, parseInt(monthStr, 10) - 1, parseInt(dayStr, 10));
+          const govHolidays = await Report._getGovHolidays(yearHol);
+
+          if (govHolidays.has(processedDate)) {
+            attendanceData.status = 'gov holiday';
+          } else if (dateObjForHol.getDay() === 0) {
+            attendanceData.status = 'holiday'; // Sunday
+          } else if (attendanceRecord) {
+            attendanceData.status = 'absent';
+            attendanceData.check_in = toIST(attendanceRecord.check_in_time);
+            attendanceData.check_out = toIST(attendanceRecord.check_out_time);
+          }
+        }
+      }
     }
 
     // ── Monthly summary for the month of the requested date ──────────────────
@@ -702,11 +787,20 @@ const loginVT = async (req, res) => {
       return res.status(403).json({ status: false, message: 'This endpoint is for Vocational Teachers only.' });
     }
 
+    let vtpMobile = null;
+    if (user.vtp_id) {
+      const vtpData = await Vtp.findByVTPID(user.vtp_id);
+      if (vtpData) {
+        vtpMobile = vtpData.mobile;
+      }
+    }
+
     if (user.vt_approval_status === 'pending' && user.vtp_approval_status === 'pending') {
       return res.status(403).json({
         status: false,
         hm_approval: user.vt_approval_status,
         vtp_approval: user.vtp_approval_status,
+        vtp_mobile: vtpMobile,
         code: 'PENDING_APPROVAL OF HM and VTP',
         message: 'Your registration is pending approval from your school Headmaster and VTP. Please wait.',
       });
@@ -717,6 +811,7 @@ const loginVT = async (req, res) => {
         status: false,
         hm_approval: user.vt_approval_status,
         vtp_approval: user.vtp_approval_status,
+        vtp_mobile: vtpMobile,
         code: 'REJECTED',
         message: 'Your registration was rejected by the Headmaster and VTP. Contact your school or administrator.',
       });
@@ -728,6 +823,7 @@ const loginVT = async (req, res) => {
         status: false,
         hm_approval: user.vt_approval_status,
         vtp_approval: user.vtp_approval_status,
+        vtp_mobile: vtpMobile,
         code: 'VT_PENDING_APPROVAL',
         message: 'Your registration is pending approval from your school Headmaster. Please wait.',
       });
@@ -738,6 +834,7 @@ const loginVT = async (req, res) => {
         status: false,
         hm_approval: user.vt_approval_status,
         vtp_approval: user.vtp_approval_status,
+        vtp_mobile: vtpMobile,
         code: 'VT_REJECTED',
         message: 'Your registration was rejected by the Headmaster. Contact your school or administrator.',
       });
@@ -748,6 +845,7 @@ const loginVT = async (req, res) => {
         status: false,
         hm_approval: user.vt_approval_status,
         vtp_approval: user.vtp_approval_status,
+        vtp_mobile: vtpMobile,
         code: 'VTP_PENDING_APPROVAL',
         message: 'Your registration is pending approval from your VTP. Please wait.',
       });
@@ -758,6 +856,7 @@ const loginVT = async (req, res) => {
         status: false,
         hm_approval: user.vt_approval_status,
         vtp_approval: user.vtp_approval_status,
+        vtp_mobile: vtpMobile,
         code: 'VTP_REJECTED',
         message: 'Your registration was rejected by your VTP. Contact your VTP or administrator.',
       });
@@ -800,6 +899,8 @@ const loginVT = async (req, res) => {
           udise_code: user.udise_code,
           profile_photo: user.profile_photo,
           vt_approval_status: user.vt_approval_status,
+          vtp_approval_status: user.vtp_approval_status,
+          vtp_mobile: vtpMobile,
           permissions,
         },
         tokens: {

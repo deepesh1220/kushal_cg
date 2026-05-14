@@ -100,7 +100,7 @@ const applyRegularizationWithLocation = async (req, res) => {
   const userId = req.user.id;
   let { date, reason, latitude, longitude, isFakeGPS } = req.body;
 
-  if (!date || !reason || !latitude || !longitude || !isFakeGPS) {
+  if (!date || !reason || !latitude || !longitude || isFakeGPS == null) {
     return res.status(400).json({ status: false, message: 'date, reason, latitude, longitude and isFakeGPS are required.' });
   }
 

@@ -1,5 +1,7 @@
 const Attendance = require('../models/Attendance');
 const { formatAttendanceRecord, toIST } = require('../utils/timeUtils');
+const { extractDescriptorFromBase64, compareFaces, saveBase64Image } = require('../utils/faceUtils');
+const { pool } = require('../config/db');
 
 // Haversine formula to calculate distance in meters
 const getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
@@ -15,7 +17,7 @@ const getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
 };
 
 // ─── POST /api/attendance/check-in ───────────────────────────────────────────
-// VT marks their own attendance
+// VT marks their own attendance (GPS + Face verification required)
 const checkIn = async (req, res) => {
   const userId = req.user.id;
   const { latitude, longitude, remarks, isFakeGPS } = req.body;
@@ -28,14 +30,14 @@ const checkIn = async (req, res) => {
   if (isFakeGPS === true) {
     return res.status(403).json({
       status: false,
-      message: 'Fake GPS is not allowed. Please disable fake GPS and try again.'
+      message: 'Fake GPS is not allowed. Please disable fake GPS and try again.',
     });
   }
 
-  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+  const today = new Date().toISOString().split('T')[0];
 
   try {
-    // Prevent duplicate check-in for today
+    // ── Prevent duplicate check-in ─────────────────────────────────────────────
     const existing = await Attendance.findByUserAndDate(userId, today);
     if (existing) {
       return res.status(409).json({
@@ -45,8 +47,7 @@ const checkIn = async (req, res) => {
       });
     }
 
-    // ── Get School Times & Location ─────────────────────────────────────
-    const { pool } = require('../config/db');
+    // ── GPS + Time Validation ──────────────────────────────────────────────────
     const vtRecord = await pool.query(`
       SELECT v.udise_code
       FROM users u
@@ -56,7 +57,6 @@ const checkIn = async (req, res) => {
     const udiseCode = vtRecord.rows[0]?.udise_code;
 
     if (udiseCode) {
-      // Fetch School Data from mst_schools
       const schoolRecord = await pool.query(`
         SELECT latitude, longitude, sch_open_time, sch_close_time, grace_time
         FROM mst_schools
@@ -65,31 +65,28 @@ const checkIn = async (req, res) => {
       `, [udiseCode]);
 
       const school = schoolRecord.rows[0];
-
       if (school) {
-        // 1. Verify Distance
+        // Distance check
         if (latitude && longitude && school.latitude && school.longitude) {
-          const distance = getDistanceInMeters(
-            parseFloat(latitude),
-            parseFloat(longitude),
-            parseFloat(school.latitude),
-            parseFloat(school.longitude)
+          const dist = getDistanceInMeters(
+            parseFloat(latitude), parseFloat(longitude),
+            parseFloat(school.latitude), parseFloat(school.longitude)
           );
-
-          if (distance > 300) {
+          if (dist > 300) {
             return res.status(403).json({
               status: false,
-              message: `Check-in restricted. You are ${Math.round(distance)} meters away from the school. You must be within 300 meters.`
+              message: `Check-in restricted. You are ${Math.round(dist)} meters away from the school. You must be within 300 meters.`,
             });
           }
         }
-
-        // 2. Verify School Timings
+        // Time window check
         if (school.sch_open_time) {
           const now = new Date();
-          const currentMins = now.getHours() * 60 + now.getMinutes();
+          const currentMins    = now.getHours() * 60 + now.getMinutes();
           const [openH, openM] = school.sch_open_time.split(':').map(Number);
-          const openTotalMins = openH * 60 + openM;
+          const openTotalMins  = openH * 60 + openM;
+          const graceMins      = school.grace_time ? parseInt(school.grace_time, 10) : 0;
+          const lateCutoffMins = openTotalMins + graceMins;
 
           let closeTotalMins = null;
           if (school.sch_close_time) {
@@ -97,51 +94,93 @@ const checkIn = async (req, res) => {
             closeTotalMins = closeH * 60 + closeM;
           }
 
-          const graceMins = school.grace_time ? parseInt(school.grace_time, 10) : 0;
-          const lateCutoffMins = openTotalMins + graceMins;
-
-          // Allow check-in up to 60 mins early
           if (currentMins < openTotalMins - 60) {
             return res.status(403).json({
               status: false,
-              message: `Too early to check in. School opens at ${school.sch_open_time}.`
+              message: `Too early to check in. School opens at ${school.sch_open_time}.`,
             });
           }
-
-          // Strict restriction: if after grace time, require regularization
           if (currentMins > lateCutoffMins) {
             return res.status(403).json({
               status: false,
-              message: `You are late. School opening time was ${school.sch_open_time} with a grace period of ${graceMins} minutes. Please apply for regularization to mark your attendance.`
+              message: `You are late. School opening time was ${school.sch_open_time} with a grace period of ${graceMins} minutes. Please apply for regularization to mark your attendance.`,
             });
           }
-
           if (closeTotalMins && currentMins > closeTotalMins) {
             return res.status(403).json({
               status: false,
-              message: `School is already closed (${school.sch_close_time}). Check-in not allowed.`
+              message: `School is already closed (${school.sch_close_time}). Check-in not allowed.`,
             });
           }
         }
       }
     }
-    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── [FACE] Verify identity ─────────────────────────────────────────────────
+    const userRow = await pool.query(
+      'SELECT face_descriptor FROM users WHERE id = $1',
+      [userId]
+    );
+    const storedDescriptor = userRow.rows[0]?.face_descriptor;
+
+    if (!storedDescriptor) {
+      return res.status(400).json({
+        status: false,
+        message: 'Face data not enrolled for your account. Please contact admin.',
+      });
+    }
+
+    // Extract face from live selfie
+    let liveDescriptor;
+    try {
+      liveDescriptor = await extractDescriptorFromBase64(checkin_photo);
+    } catch (faceErr) {
+      console.error('Face extraction (check-in):', faceErr.message);
+      return res.status(400).json({
+        status: false,
+        message: 'Unable to process the photo. Please retake a clear selfie.',
+      });
+    }
+
+    if (!liveDescriptor) {
+      return res.status(400).json({
+        status: false,
+        message: 'No face detected in the selfie. Please look directly at the camera and try again.',
+      });
+    }
+
+    const { matchPercent, isMatch } = compareFaces(storedDescriptor, liveDescriptor);
+
+    if (!isMatch) {
+      return res.status(403).json({
+        status: false,
+        message: `Face verification failed. Match: ${matchPercent}%.`,
+        data: { match_percent: matchPercent },
+      });
+    }
+    // ── ──────────────────────────────────────────────────────────────────────
 
     const record = await Attendance.create({
-      user_id: userId,
-      date: today,
-      check_in_time: new Date(),
-      status: 'present',
+      user_id:          userId,
+      date:             today,
+      check_in_time:    new Date(),
+      status:           'present',
       latitude,
       longitude,
       remarks,
-      marked_by: userId,
+      marked_by:        userId,
+      face_match_score: matchPercent,
+      checkin_photo:    null,
+      photo_path:       null,
     });
 
     return res.status(201).json({
       status: true,
       message: 'Check-in successful.',
-      data: formatAttendanceRecord(record),
+      data: {
+        ...formatAttendanceRecord(record),
+        face_verification: { match_percent: matchPercent, verified: true },
+      },
     });
   } catch (error) {
     console.error('Check-in error:', error.message);
@@ -150,35 +189,35 @@ const checkIn = async (req, res) => {
 };
 
 // ─── PATCH /api/attendance/check-out ─────────────────────────────────────────
-// VT marks their check-out
+// VT marks their check-out (GPS + Face verification required)
 const checkOut = async (req, res) => {
   const userId = req.user.id;
   const { latitude, longitude, isFakeGPS } = req.body;
   if(!latitude || !longitude || !isFakeGPS){
     return res.status(400).json({
       status: false,
-      message: 'latitude, longitude and isFakeGPS are required.'
+      message: 'checkout_photo (base64) is required for face verification.',
     });
   }
   
   if (isFakeGPS === true) {
     return res.status(403).json({
       status: false,
-      message: 'Fake GPS is not allowed. Please disable fake GPS and try again.'
+      message: 'Fake GPS is not allowed. Please disable fake GPS and try again.',
     });
   }
+
   const today = new Date().toISOString().split('T')[0];
 
   try {
+    // ── Pre-condition: must have checked in ───────────────────────────────────
     const existing = await Attendance.findByUserAndDate(userId, today);
-
     if (!existing) {
       return res.status(404).json({
         status: false,
         message: 'No check-in record found for today. Please check-in first.',
       });
     }
-
     if (existing.check_out_time) {
       return res.status(409).json({
         status: false,
@@ -187,8 +226,7 @@ const checkOut = async (req, res) => {
       });
     }
 
-    // ── Get School Times & Location ─────────────────────────────────────
-    const { pool } = require('../config/db');
+    // ── GPS + Time Validation ──────────────────────────────────────────────────
     const vtRecord = await pool.query(`
       SELECT v.udise_code
       FROM users u
@@ -198,7 +236,6 @@ const checkOut = async (req, res) => {
     const udiseCode = vtRecord.rows[0]?.udise_code;
 
     if (udiseCode) {
-      // Fetch School Data from mst_schools
       const schoolRecord = await pool.query(`
         SELECT latitude, longitude, sch_open_time
         FROM mst_schools
@@ -207,50 +244,94 @@ const checkOut = async (req, res) => {
       `, [udiseCode]);
 
       const school = schoolRecord.rows[0];
-
       if (school) {
-        // 1. Verify Distance
+        // Distance check
         if (latitude && longitude && school.latitude && school.longitude) {
-          const distance = getDistanceInMeters(
-            parseFloat(latitude),
-            parseFloat(longitude),
-            parseFloat(school.latitude),
-            parseFloat(school.longitude)
+          const dist = getDistanceInMeters(
+            parseFloat(latitude), parseFloat(longitude),
+            parseFloat(school.latitude), parseFloat(school.longitude)
           );
-
-          if (distance > 300) {
+          if (dist > 300) {
             return res.status(403).json({
               status: false,
-              message: `Check-out restricted. You are ${Math.round(distance)} meters away from the school. You must be within 300 meters.`
+              message: `Check-out restricted. You are ${Math.round(dist)} meters away from the school. You must be within 300 meters.`,
             });
           }
         }
-
-        // 2. Verify School Timings
+        // Time check
         if (school.sch_open_time) {
           const now = new Date();
-          const currentMins = now.getHours() * 60 + now.getMinutes();
+          const currentMins    = now.getHours() * 60 + now.getMinutes();
           const [openH, openM] = school.sch_open_time.split(':').map(Number);
-          const openTotalMins = openH * 60 + openM;
-
-          // Block check-out if it's before the school has even opened
+          const openTotalMins  = openH * 60 + openM;
           if (currentMins < openTotalMins) {
             return res.status(403).json({
               status: false,
-              message: `Cannot check-out before school open time (${school.sch_open_time}).`
+              message: `Cannot check-out before school open time (${school.sch_open_time}).`,
             });
           }
         }
       }
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
-    const updated = await Attendance.checkOut(userId, today, latitude, longitude);
+    // ── [FACE] Verify identity ─────────────────────────────────────────────────
+    const userRow = await pool.query(
+      'SELECT face_descriptor FROM users WHERE id = $1',
+      [userId]
+    );
+    const storedDescriptor = userRow.rows[0]?.face_descriptor;
+
+    if (!storedDescriptor) {
+      return res.status(400).json({
+        status: false,
+        message: 'Face data not enrolled for your account. Please contact admin.',
+      });
+    }
+
+    // Extract face from checkout selfie
+    let liveDescriptor;
+    try {
+      liveDescriptor = await extractDescriptorFromBase64(checkout_photo);
+    } catch (faceErr) {
+      console.error('Face extraction (check-out):', faceErr.message);
+      return res.status(400).json({
+        status: false,
+        message: 'Unable to process the photo. Please retake a clear selfie.',
+      });
+    }
+
+    if (!liveDescriptor) {
+      return res.status(400).json({
+        status: false,
+        message: 'No face detected in the selfie. Please look directly at the camera and try again.',
+      });
+    }
+
+    const { matchPercent, isMatch } = compareFaces(storedDescriptor, liveDescriptor);
+
+    if (!isMatch) {
+      return res.status(403).json({
+        status: false,
+        message: `Face verification failed. Match: ${matchPercent}%.`,
+        data: { match_percent: matchPercent },
+      });
+    }
+    // ── ──────────────────────────────────────────────────────────────────────
+
+    const updated = await Attendance.checkOut(
+      userId, today,
+      latitude, longitude,
+      null, // checkout_photo
+      matchPercent
+    );
 
     return res.status(200).json({
       status: true,
       message: 'Check-out successful.',
-      data: formatAttendanceRecord(updated),
+      data: {
+        ...formatAttendanceRecord(updated),
+        face_verification: { match_percent: matchPercent, verified: true },
+      },
     });
   } catch (error) {
     console.error('Check-out error:', error.message);
@@ -436,6 +517,11 @@ const getMonthlySummary = async (req, res) => {
 //   offset       - page start (default 0)
 const getDailyReport = async (req, res) => {
   const { userId, filter_type, filter_value, limit, offset } = req.body;
+  const { pool } = require('../config/db');
+  const Report = require('../models/Report');
+  const dayjs = require('dayjs');
+  const isoWeek = require('dayjs/plugin/isoWeek');
+  dayjs.extend(isoWeek);
 
   if (!userId) {
     return res.status(400).json({ status: false, message: 'userId query param is required.' });
@@ -448,26 +534,112 @@ const getDailyReport = async (req, res) => {
     const { records, totals } = await Attendance.getDailyReport(parseInt(userId), {
       filter_type: resolvedType,
       filter_value: filter_value || null,
-      limit: limit ? parseInt(limit) : 31,
-      offset: offset ? parseInt(offset) : 0,
+      limit: 1000,
+      offset: 0,
     });
 
-    // Enrich each record — label absent if no DB row exists (only matters for direct date lookup)
-    const enriched = records.map((r) => ({
-      date: r.date,
-      check_in: r.check_in_time || null,
-      check_out: r.check_out_time || null,
-      status: r.status,
-      leave_reason: r.status === 'on_leave' ? (r.leave_reason || null) : null,
-      working_hours: r.working_hours !== null ? parseFloat(r.working_hours) : null,
+    let startDate, endDate;
+    if (resolvedType === 'date' && filter_value) {
+      startDate = dayjs(filter_value);
+      endDate = dayjs(filter_value);
+    } else if (resolvedType === 'week' && filter_value) {
+      const [yearStr, weekStr] = filter_value.split('-W');
+      startDate = dayjs().year(parseInt(yearStr)).isoWeek(parseInt(weekStr)).startOf('isoWeek');
+      endDate = dayjs().year(parseInt(yearStr)).isoWeek(parseInt(weekStr)).endOf('isoWeek');
+    } else if (resolvedType === 'month' && filter_value) {
+      const [yearStr, monthStr] = filter_value.split('-');
+      startDate = dayjs(`${yearStr}-${monthStr}-01`).startOf('month');
+      endDate = dayjs(`${yearStr}-${monthStr}-01`).endOf('month');
+    } else if (resolvedType === 'date_range' && filter_value) {
+      const [from, to] = filter_value.split(',');
+      startDate = dayjs(from);
+      endDate = to ? dayjs(to) : dayjs(from);
+    } else {
+      startDate = dayjs().startOf('month');
+      endDate = dayjs().endOf('month');
+    }
+
+    const allDates = [];
+    let current = endDate;
+    while (current.isAfter(startDate) || current.isSame(startDate, 'day')) {
+      allDates.push(current.format('YYYY-MM-DD'));
+      current = current.subtract(1, 'day');
+    }
+
+    const parsedLimit = limit ? parseInt(limit) : 31;
+    const parsedOffset = offset ? parseInt(offset) : 0;
+    const paginatedDates = allDates.slice(parsedOffset, parsedOffset + parsedLimit);
+
+    const enriched = await Promise.all(paginatedDates.map(async (d) => {
+      const dbRecord = records.find(r => dayjs(r.date).format('YYYY-MM-DD') === d);
+
+      let status = 'absent';
+      let check_in = null;
+      let check_out = null;
+      let leave_reason = null;
+      let working_hours = null;
+
+      let isPresentOrOther = false;
+      if (dbRecord && dbRecord.status !== 'absent') {
+        isPresentOrOther = true;
+        status = dbRecord.status;
+        check_in = dbRecord.check_in_time || null;
+        check_out = dbRecord.check_out_time || null;
+        leave_reason = dbRecord.status === 'on_leave' ? (dbRecord.leave_reason || null) : null;
+        working_hours = dbRecord.working_hours !== null ? parseFloat(dbRecord.working_hours) : null;
+      }
+
+      if (!isPresentOrOther) {
+        // Check Leave
+        const leaveRes = await pool.query(`
+          SELECT id FROM leave_requests 
+          WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $2
+        `, [userId, d]);
+
+        if (leaveRes.rows.length > 0) {
+          status = 'leave';
+        } else {
+          // Check OD
+          const odRes = await pool.query(`
+            SELECT id FROM od_requests 
+            WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $2
+          `, [userId, d]);
+
+          if (odRes.rows.length > 0) {
+            status = 'onduty';
+          } else {
+            // Check Gov Holiday
+            const yearHol = dayjs(d).year();
+            const govHolidays = await Report._getGovHolidays(yearHol);
+            if (govHolidays.has(d)) {
+              status = 'gov holiday';
+            } else if (dayjs(d).day() === 0) {
+              status = 'holiday';
+            } else if (dbRecord && dbRecord.status === 'absent') {
+              status = 'absent';
+              check_in = dbRecord.check_in_time || null;
+              check_out = dbRecord.check_out_time || null;
+            }
+          }
+        }
+      }
+
+      return {
+        date: d,
+        check_in,
+        check_out,
+        status,
+        leave_reason,
+        working_hours,
+      };
     }));
 
     return res.status(200).json({
       status: true,
       filter: { type: resolvedType, value: filter_value || null },
       pagination: {
-        limit: limit ? parseInt(limit) : 31,
-        offset: offset ? parseInt(offset) : 0,
+        limit: parsedLimit,
+        offset: parsedOffset,
         count: enriched.length,
       },
       summary: {

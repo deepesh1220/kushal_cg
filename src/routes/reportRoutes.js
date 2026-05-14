@@ -4,30 +4,39 @@ const { authenticate, authorize } = require('../middleware/authMiddleware');
 const {
   downloadMonthlyAttendance,
   getMonthlySummary,
-  approveMonthlyReport
+  approveMonthlyReport,
+  generateMonthlyVtReport,
+  downloadVtMonthlyReportPdf,
+  getMonthlyVtReportsList,
+  getDashboardPendingCounts,
+  getLocationMasterData,
 } = require('../controllers/reportController');
 
-// All report routes require authentication
+// All report routes require 
 router.use(authenticate);
 
-// ── Monthly Summary ───────────────────────────────────────────────────────────
-router.get(
-  '/monthly-summary',
-  // authorize('leave:view_all'), // Or any specific permission for this report
-  getMonthlySummary
-);
+// ── Existing: Monthly Summary ─────────────────────────────────────────────────
+router.get('/monthly-summary', getMonthlySummary);
 
-// ── Attendance Download ───────────────────────────────────────────────
-router.get(
-  '/attendance/download',
-  authorize('leave:view_own'), // Requires 'leave:view_own' or specific report permission
-  downloadMonthlyAttendance
-);
+// ── Existing: Personal Attendance Download ────────────────────────────────────
+router.get('/attendance/download', authorize('leave:view_own'), downloadMonthlyAttendance);
 
-// ── Approve Monthly Report ────────────────────────────────────────────
-router.post(
-  '/approve',
-  approveMonthlyReport
-);
+// ── Existing: Approve Monthly Report (enhanced with sequential enforcement) ───
+router.post('/approve', approveMonthlyReport);
+
+// ── New: Generate Monthly VT Report (creates attendance snapshot) ─────────────
+router.post('/generate-monthly-vt-report', generateMonthlyVtReport);
+
+// ── New: Download NSQF PDF for a VT ──────────────────────────────────────────
+router.get('/download-vt-pdf', downloadVtMonthlyReportPdf);
+
+// ── New: List monthly VT reports (role-scoped) ────────────────────────────────
+router.get('/monthly-vt-reports', getMonthlyVtReportsList);
+
+// ── New: Dashboard pending-action counts ─────────────────────────────────────
+router.get('/dashboard-pending-counts', getDashboardPendingCounts);
+
+// ── New: Cascading location master data (districts / blocks / clusters) ───────
+router.get('/location-master', getLocationMasterData);
 
 module.exports = router;

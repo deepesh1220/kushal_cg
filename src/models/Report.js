@@ -69,7 +69,7 @@ class Report {
     }
     if (vtUserId) {
       queryArgs.push(vtUserId);
-      whereClauses.push(`u.id = $${queryArgs.length}`);
+      whereClauses.push(`(u.id = $${queryArgs.length} OR u.vt_staff_id = $${queryArgs.length})`);
     }
 
     const whereStr = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';

@@ -9,7 +9,7 @@ const VtStaffDetail = {
         id, vt_name, vt_email, vt_mob,
         district_name, block_name, school_name,
         udise_code, vtp_name, trade,
-        vtp_pan, vt_aadhar, school_type, old_or_new, remarks
+        vtp_pan, vt_aadhar, school_type, old_or_new, remarks, vtp_id
       FROM vt_staff_details
       WHERE vt_mob = $1
     `, [mobile]);

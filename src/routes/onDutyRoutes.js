@@ -6,6 +6,9 @@ const {
   approveOnDuty,
   getMyOnDutyRequests,
   getOnDutyById,
+  getHeadmasterOnDutyRequests,
+  getVtpScopedOnDutyRequests,
+  actionOnDutyByVtp,
 } = require('../controllers/onDutyController');
 
 // All OD routes require authentication
@@ -24,6 +27,19 @@ router.get('/my', authorize('leave:view_own'), getMyOnDutyRequests);
 // Approve or reject an OD request
 // PATCH /api/od/:id/status   body: { status }
 router.patch('/:id/status', authorize('leave:approve'), approveOnDuty);
+
+// Get all OD requests for headmaster
+// POST /api/od/headmaster   body: { udise_code, status, page, limit }
+router.post('/headmaster', authorize('leave:approve'), getHeadmasterOnDutyRequests);
+
+// ── VTP routes ────────────────────────────────────────────────────────────────
+// Get all OD requests for VTP
+// POST /api/od/vtp   body: { status, page, limit }
+router.post('/vtp', authorize('vt:approve_vtp'), getVtpScopedOnDutyRequests);
+
+// Approve or reject an OD request (VTP)
+// PATCH /api/od/vtp/:requestId/status   body: { status, remarks }
+router.patch('/vtp/:requestId/status', authorize('vt:approve_vtp'), actionOnDutyByVtp);
 
 // Get specific OD request by ID
 // GET /api/od/:id

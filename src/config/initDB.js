@@ -29,6 +29,7 @@ const initDB = async () => {
         vt_email      VARCHAR(150),
         school_type   VARCHAR(100),
         old_or_new    VARCHAR(50),
+        vtp_id        CHAR(2),
         remarks       TEXT
       );
     `);
@@ -39,6 +40,7 @@ const initDB = async () => {
         ADD COLUMN IF NOT EXISTS dob                      DATE,
         ADD COLUMN IF NOT EXISTS educational_qualification VARCHAR(200),
         ADD COLUMN IF NOT EXISTS date_of_joining          DATE,
+        ADD COLUMN IF NOT EXISTS vtp_id                   CHAR(2),
         ADD COLUMN IF NOT EXISTS updated_at               TIMESTAMPTZ DEFAULT NOW();
     `);
 
@@ -107,11 +109,17 @@ const initDB = async () => {
                              CHECK (vt_approval_status IN ('pending','accepted','rejected')),
         vtp_approval_status VARCHAR(20) DEFAULT NULL
                              CHECK (vtp_approval_status IN ('pending','accepted','rejected')),
+        vtp_id             CHAR(2),
         is_active          BOOLEAN      DEFAULT TRUE,
         profile_photo      TEXT,
         created_at         TIMESTAMPTZ  DEFAULT NOW(),
         updated_at         TIMESTAMPTZ  DEFAULT NOW()
       );
+    `);
+
+    // Ensure face_descriptor column exists on users (biometric — stored AES-256-GCM encrypted)
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS face_descriptor TEXT DEFAULT NULL;
     `);
 
     // ─────────────────────────────────────────────────────────
@@ -167,8 +175,16 @@ const initDB = async () => {
 
     // Ensure checkout location columns exist for previously created databases
     await client.query(`
-      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_latitude NUMERIC(10, 8);
-      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_longitude NUMERIC(11, 8);
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_latitude    NUMERIC(10, 8);
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_longitude   NUMERIC(11, 8);
+    `);
+
+    // ── Face recognition columns ─────────────────────────────────────────────
+    await client.query(`
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS face_match_score     NUMERIC(5,2) DEFAULT NULL;
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkin_photo        TEXT         DEFAULT NULL;
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_photo       TEXT         DEFAULT NULL;
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_face_score  NUMERIC(5,2) DEFAULT NULL;
     `);
 
     // ─────────────────────────────────────────────────────────
@@ -409,6 +425,42 @@ const initDB = async () => {
     `);
 
     // ─────────────────────────────────────────────────────────
+    // ALTER monthly_school_reports: approval audit columns
+    // Added for 3-level sequential approval workflow
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS hm_approved_by  INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS hm_approved_at   TIMESTAMPTZ;
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS deo_approved_by  INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS deo_approved_at  TIMESTAMPTZ;
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS vtp_approved_by  INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS vtp_approved_at  TIMESTAMPTZ;
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS is_locked        BOOLEAN DEFAULT FALSE;
+    `);
+
+    // ─────────────────────────────────────────────────────────
+    // TABLE: monthly_report_snapshots
+    // Immutable attendance snapshot taken at report generation.
+    // PDF is always regenerated from this snapshot so the report
+    // content never changes after it is locked by approvals.
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS monthly_report_snapshots (
+        id            SERIAL PRIMARY KEY,
+        report_id     INTEGER     NOT NULL REFERENCES monthly_school_reports(id) ON DELETE CASCADE,
+        user_id       INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        month         INTEGER     NOT NULL,
+        year          INTEGER     NOT NULL,
+        snapshot_data JSONB       NOT NULL,
+        generated_at  TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (user_id, month, year)
+      );
+    `);
+
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_rpt_snapshots_report_id       ON monthly_report_snapshots(report_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_rpt_snapshots_user_month_year ON monthly_report_snapshots(user_id, month, year);`);
+
+    // ─────────────────────────────────────────────────────────
     // ALTER CONSTRAINTS for OD feature
     // ─────────────────────────────────────────────────────────
     await client.query(`
@@ -448,6 +500,22 @@ const initDB = async () => {
     `);
 
     // ─────────────────────────────────────────────────────────
+    // ALTER od_requests: add dual-approval layer
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      ALTER TABLE od_requests
+        ADD COLUMN IF NOT EXISTS hm_status          VARCHAR(20) DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS hm_approved_by     INTEGER     REFERENCES users(id),
+        ADD COLUMN IF NOT EXISTS hm_action_at       TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS hm_remarks         TEXT,
+        ADD COLUMN IF NOT EXISTS vtp_status         VARCHAR(20) DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS vtp_approved_by    INTEGER     REFERENCES users(id),
+        ADD COLUMN IF NOT EXISTS vtp_action_at      TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS vtp_remarks        TEXT,
+        ADD COLUMN IF NOT EXISTS od_approved        BOOLEAN     DEFAULT FALSE;
+    `);
+
+    // ─────────────────────────────────────────────────────────
     // TABLE: regularization_requests
     // Dedicated single-date attendance regularization table
     // ─────────────────────────────────────────────────────────
@@ -480,6 +548,7 @@ const initDB = async () => {
         vtp_name                     VARCHAR(200) NOT NULL,
         mobile                BIGINT       UNIQUE NOT NULL,
         email                        VARCHAR(200) UNIQUE NOT NULL,
+        vtp_id                       CHAR(2),
         status                       VARCHAR(20)  DEFAULT 'active'
                                        CHECK (status IN ('active','inactive')),
         created_at                   TIMESTAMPTZ  DEFAULT NOW(),
@@ -491,6 +560,71 @@ const initDB = async () => {
     // Indexes for VTP table
     await client.query(`CREATE INDEX IF NOT EXISTS idx_vtp_email   ON vtp (email);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_vtp_mobile  ON vtp (mobile);`);
+
+    // Ensure vtp_id column exists on vtp table
+    await client.query(`
+      ALTER TABLE vtp
+        ADD COLUMN IF NOT EXISTS vtp_id CHAR(2);
+    `);
+
+    // ─────────────────────────────────────────────────────────
+    // TABLE: mst_vtp
+    // Master table for Vocational Training Providers
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS mst_vtp (
+        vtp_id   CHAR(2) PRIMARY KEY,
+        vtp_name VARCHAR(100) NOT NULL UNIQUE
+      );
+    `);
+
+    // Seed data for mst_vtp
+    await client.query(`
+      INSERT INTO mst_vtp (vtp_id, vtp_name) VALUES
+        ('21', 'Aisect'),
+        ('22', 'Gram Tarang'),
+        ('23', 'Indus'),
+        ('24', 'Laqsh'),
+        ('25', 'Learnet Skills Limited'),
+        ('26', 'Nitcon'),
+        ('27', 'Skill Tree'),
+        ('28', 'Upgrad')
+      ON CONFLICT (vtp_id) DO UPDATE 
+      SET vtp_name = EXCLUDED.vtp_name;
+    `);
+
+    // Auto-populate vtp_id in vt_staff_details and vtp by matching vtp_name
+    await client.query(`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS vtp_id CHAR(2);
+
+      UPDATE vt_staff_details
+      SET vtp_id = mst_vtp.vtp_id
+      FROM mst_vtp
+      WHERE vt_staff_details.vtp_name = mst_vtp.vtp_name
+      AND vt_staff_details.vtp_id IS DISTINCT FROM mst_vtp.vtp_id;
+
+      UPDATE vtp
+      SET vtp_id = mst_vtp.vtp_id
+      FROM mst_vtp
+      WHERE vtp.vtp_name = mst_vtp.vtp_name
+      AND vtp.vtp_id IS DISTINCT FROM mst_vtp.vtp_id;
+
+      -- Populate users table based on organization_name (for VTP/management users)
+      UPDATE users
+      SET vtp_id = mst_vtp.vtp_id
+      FROM mst_vtp
+      WHERE users.organization_name = mst_vtp.vtp_name
+      AND users.vtp_id IS DISTINCT FROM mst_vtp.vtp_id;
+
+      -- Populate users table based on vt_staff_details (for VT users)
+      UPDATE users
+      SET vtp_id = vt_staff_details.vtp_id
+      FROM vt_staff_details
+      WHERE users.vt_staff_id = vt_staff_details.id
+      AND vt_staff_details.vtp_id IS NOT NULL
+      AND users.vtp_id IS DISTINCT FROM vt_staff_details.vtp_id;
+    `);
 
     // ALTER users: add vtp_approval_status (dual-approval layer)
     // ─────────────────────────────────────────────────────────
@@ -624,6 +758,12 @@ const seedDefaults = async (client) => {
     // ── VT Approval ─────────────────────────────────────────────────────────
     { name: 'vt:approve', module: 'vt', action: 'approve', description: 'Approve or reject Vocational Teacher registrations (Principal/HM layer)' },
     { name: 'vt:approve_vtp', module: 'vt', action: 'approve_vtp', description: 'Approve or reject Vocational Teacher registrations (VTP layer)' },
+    // ── Monthly Report Workflow ───────────────────────────────────────────────
+    { name: 'reports:generate',     module: 'reports', action: 'generate',     description: 'Generate monthly VT attendance report PDF snapshot' },
+    { name: 'reports:view_monthly', module: 'reports', action: 'view_monthly', description: 'View monthly VT attendance report list' },
+    { name: 'reports:approve_hm',   module: 'reports', action: 'approve_hm',   description: 'Principal/HM: approve monthly VT report (layer 1)' },
+    { name: 'reports:approve_deo',  module: 'reports', action: 'approve_deo',  description: 'DEO: approve monthly VT report (layer 2, requires HM approval)' },
+    { name: 'reports:approve_vtp',  module: 'reports', action: 'approve_vtp',  description: 'VTP: final approve monthly VT report (layer 3, requires HM+DEO approval)' },
   ];
 
   for (const perm of defaultPermissions) {
@@ -672,6 +812,8 @@ const seedDefaults = async (client) => {
     'attendance:create_others',
     'attendance:update',
     'leave:view_all',
+    'reports:view_monthly',
+    'reports:approve_deo',
   ]);
 
   // ── 4. headmaster → oversee school, approve VTs, approve leaves, view reports ──
@@ -683,10 +825,21 @@ const seedDefaults = async (client) => {
     'leave:approve',
     'leave:view_balance_all',
     'vt:approve',
+    'reports:generate',
+    'reports:view_monthly',
+    'reports:approve_hm',
+    'attendance:create_others',
   ]);
 
-  // ── 2. admin also gets vt:approve ────────────────────────────────────────────
-  await assignPerms('admin', ['vt:approve']);
+  // ── 2. admin also gets vt:approve and full report access ─────────────────────
+  await assignPerms('admin', [
+    'vt:approve',
+    'reports:generate',
+    'reports:view_monthly',
+    'reports:approve_hm',
+    'reports:approve_deo',
+    'reports:approve_vtp',
+  ]);
 
   // ── 5. vocational_teacher_provider → view & monitor their teachers + VTP approval ──
   await assignPerms('vocational_teacher_provider', [
@@ -696,6 +849,8 @@ const seedDefaults = async (client) => {
     'leave:view_all',
     'leave:view_balance_all',
     'vt:approve_vtp',
+    'reports:view_monthly',
+    'reports:approve_vtp',
   ]);
 
   // ── 6. vocational_teacher → mark own attendance & request leave ───────────────
