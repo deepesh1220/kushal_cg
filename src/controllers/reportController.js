@@ -817,7 +817,7 @@ const getLocationMasterData = async (req, res) => {
 
     if (type === 'districts') {
       const r = await pool.query(
-        `SELECT district_cd, district_name FROM mst_districts ORDER BY district_name ASC`
+        `SELECT district_cd, district_name FROM mst_district ORDER BY district_name ASC`
       );
       return res.status(200).json({ status: true, data: r.rows });
     }
