@@ -12,5 +12,7 @@ router.use(authenticate);
 router.get('/schools-vts', authorize('attendance:view_all'), deoController.getSchoolsAndVts);
 router.get('/dashboard-counts', authorize('attendance:view_all'), deoController.getDeoDashboardCounts);
 router.get('/school-reports', authorize('attendance:view_all'), deoController.getSchoolReports);
+router.get('/vtps', authorize('attendance:view_all'), deoController.getDistrictVtpList);
+router.get('/vt-teachers', authorize('attendance:view_all'), deoController.getDistrictVtTeachers);
 
 module.exports = router;

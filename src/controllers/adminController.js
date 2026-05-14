@@ -64,6 +64,9 @@ const getAttendanceTracking = async (req, res) => {
     const reportYear = parseInt(req.query.year, 10) || currentDate.getFullYear();
     const status = normalizeReportStatus(req.query.status);
     const search = req.query.search?.trim();
+    const districtCd = parseInt(req.query.district_cd, 10);
+    const blockCd = parseInt(req.query.block_cd, 10);
+    const clusterCd = parseInt(req.query.cluster_cd, 10);
 
     const params = [reportMonth, reportYear];
     const conditions = ['r.report_month = $1', 'r.report_year = $2'];
@@ -85,6 +88,21 @@ const getAttendanceTracking = async (req, res) => {
         OR COALESCE(r.vtp_approval_status, 'pending') = $${params.length}
         OR COALESCE(r.deo_approval_status, 'pending') = $${params.length}
       )`);
+    }
+
+    if (!Number.isNaN(districtCd)) {
+      params.push(districtCd);
+      conditions.push(`s.district_cd = $${params.length}`);
+    }
+
+    if (!Number.isNaN(blockCd)) {
+      params.push(blockCd);
+      conditions.push(`s.block_cd = $${params.length}`);
+    }
+
+    if (!Number.isNaN(clusterCd)) {
+      params.push(clusterCd);
+      conditions.push(`s.cluster_cd = $${params.length}`);
     }
 
     const whereClause = `WHERE ${conditions.join(' AND ')}`;
@@ -177,6 +195,9 @@ const getSchools = async (req, res) => {
   try {
     const { page, limit, offset } = getPaginationParams(req.query);
     const { search } = req.query;
+    const districtCd = parseInt(req.query.district_cd, 10);
+    const blockCd = parseInt(req.query.block_cd, 10);
+    const clusterCd = parseInt(req.query.cluster_cd, 10);
     const params = [];
     const conditions = ['vtp = 1'];
 
@@ -189,6 +210,21 @@ const getSchools = async (req, res) => {
         OR block_name ILIKE $${params.length}
         OR cluster_name ILIKE $${params.length}
       )`);
+    }
+
+    if (!Number.isNaN(districtCd)) {
+      params.push(districtCd);
+      conditions.push(`district_cd = $${params.length}`);
+    }
+
+    if (!Number.isNaN(blockCd)) {
+      params.push(blockCd);
+      conditions.push(`block_cd = $${params.length}`);
+    }
+
+    if (!Number.isNaN(clusterCd)) {
+      params.push(clusterCd);
+      conditions.push(`cluster_cd = $${params.length}`);
     }
 
     const whereClause = `WHERE ${conditions.join(' AND ')}`;
@@ -234,6 +270,9 @@ const getVtpList = async (req, res) => {
   try {
     const { page, limit, offset } = getPaginationParams(req.query);
     const { search } = req.query;
+    const districtCd = parseInt(req.query.district_cd, 10);
+    const blockCd = parseInt(req.query.block_cd, 10);
+    const clusterCd = parseInt(req.query.cluster_cd, 10);
     const params = [];
     const conditions = [];
 
@@ -247,8 +286,53 @@ const getVtpList = async (req, res) => {
       )`);
     }
 
+    if (!Number.isNaN(districtCd)) {
+      params.push(districtCd);
+      conditions.push(`EXISTS (
+        SELECT 1
+        FROM vt_staff_details vs
+        JOIN mst_schools ms ON ms.udise_sch_code = vs.udise_code
+        WHERE (
+          (vs.vtp_id IS NOT NULL AND v.vtp_id IS NOT NULL AND vs.vtp_id = v.vtp_id)
+          OR (vs.vtp_id IS NULL AND vs.vtp_name = v.vtp_name)
+        )
+        AND ms.vtp = 1
+        AND ms.district_cd = $${params.length}
+      )`);
+    }
+
+    if (!Number.isNaN(blockCd)) {
+      params.push(blockCd);
+      conditions.push(`EXISTS (
+        SELECT 1
+        FROM vt_staff_details vs
+        JOIN mst_schools ms ON ms.udise_sch_code = vs.udise_code
+        WHERE (
+          (vs.vtp_id IS NOT NULL AND v.vtp_id IS NOT NULL AND vs.vtp_id = v.vtp_id)
+          OR (vs.vtp_id IS NULL AND vs.vtp_name = v.vtp_name)
+        )
+        AND ms.vtp = 1
+        AND ms.block_cd = $${params.length}
+      )`);
+    }
+
+    if (!Number.isNaN(clusterCd)) {
+      params.push(clusterCd);
+      conditions.push(`EXISTS (
+        SELECT 1
+        FROM vt_staff_details vs
+        JOIN mst_schools ms ON ms.udise_sch_code = vs.udise_code
+        WHERE (
+          (vs.vtp_id IS NOT NULL AND v.vtp_id IS NOT NULL AND vs.vtp_id = v.vtp_id)
+          OR (vs.vtp_id IS NULL AND vs.vtp_name = v.vtp_name)
+        )
+        AND ms.vtp = 1
+        AND ms.cluster_cd = $${params.length}
+      )`);
+    }
+
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const countResult = await pool.query(`SELECT COUNT(*) AS count FROM vtp ${whereClause}`, params);
+    const countResult = await pool.query(`SELECT COUNT(*) AS count FROM vtp v ${whereClause}`, params);
     const total = parseInt(countResult.rows[0].count, 10);
 
     params.push(limit, offset);
@@ -262,7 +346,7 @@ const getVtpList = async (req, res) => {
         status,
         created_at,
         updated_at
-      FROM vtp
+      FROM vtp v
       ${whereClause}
       ORDER BY vtp_name ASC
       LIMIT $${params.length - 1} OFFSET $${params.length}
@@ -280,6 +364,9 @@ const getDeoList = async (req, res) => {
   try {
     const { page, limit, offset } = getPaginationParams(req.query);
     const { search } = req.query;
+    const districtCd = parseInt(req.query.district_cd, 10);
+    const blockCd = parseInt(req.query.block_cd, 10);
+    const clusterCd = parseInt(req.query.cluster_cd, 10);
     const params = [];
     const conditions = [];
 
@@ -294,8 +381,33 @@ const getDeoList = async (req, res) => {
       )`);
     }
 
+    if (!Number.isNaN(districtCd)) {
+      params.push(districtCd);
+      conditions.push(`district_cd = $${params.length}`);
+    }
+
+    if (!Number.isNaN(blockCd)) {
+      params.push(blockCd);
+      conditions.push(`EXISTS (
+        SELECT 1 FROM mst_schools s
+        WHERE s.vtp = 1
+          AND s.district_cd = d.district_cd
+          AND s.block_cd = $${params.length}
+      )`);
+    }
+
+    if (!Number.isNaN(clusterCd)) {
+      params.push(clusterCd);
+      conditions.push(`EXISTS (
+        SELECT 1 FROM mst_schools s
+        WHERE s.vtp = 1
+          AND s.district_cd = d.district_cd
+          AND s.cluster_cd = $${params.length}
+      )`);
+    }
+
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const countResult = await pool.query(`SELECT COUNT(*) AS count FROM mst_deo ${whereClause}`, params);
+    const countResult = await pool.query(`SELECT COUNT(*) AS count FROM mst_deo d ${whereClause}`, params);
     const total = parseInt(countResult.rows[0].count, 10);
 
     params.push(limit, offset);
@@ -309,7 +421,7 @@ const getDeoList = async (req, res) => {
         alternate_mobile,
         designation,
         email
-      FROM mst_deo
+      FROM mst_deo d
       ${whereClause}
       ORDER BY district_name ASC, deo_name ASC
       LIMIT $${params.length - 1} OFFSET $${params.length}
