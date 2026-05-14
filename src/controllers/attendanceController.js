@@ -19,9 +19,12 @@ const getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
 // ─── POST /api/attendance/check-in ───────────────────────────────────────────
 // VT marks their own attendance (GPS + Face verification required)
 const checkIn = async (req, res) => {
+  
   const userId = req.user.id;
-  const { latitude, longitude, remarks, isFakeGPS } = req.body;
-  if(!latitude || !longitude || !remarks || !isFakeGPS){
+  const { latitude, longitude, remarks, isFakeGPS, checkin_photo } = req.body;
+   console.log(`${latitude,longitude, remarks }`)
+  // ── Field validation ────────────────────────────────────────────────────────
+  if (!latitude || !longitude  || isFakeGPS === undefined) {
     return res.status(400).json({
       status: false,
       message: 'latitude, longitude, remarks and isFakeGPS are required.'
@@ -192,8 +195,8 @@ const checkIn = async (req, res) => {
 // VT marks their check-out (GPS + Face verification required)
 const checkOut = async (req, res) => {
   const userId = req.user.id;
-  const { latitude, longitude, isFakeGPS } = req.body;
-  if(!latitude || !longitude || !isFakeGPS){
+  const { latitude, longitude, isFakeGPS , checkout_photo} = req.body;
+  if(!latitude || !longitude  || isFakeGPS === undefined){
     return res.status(400).json({
       status: false,
       message: 'checkout_photo (base64) is required for face verification.',
