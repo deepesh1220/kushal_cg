@@ -756,6 +756,182 @@ const approveMonthlyReport = async (req, res) => {
 
 // ─── Existing functions (unchanged) ──────────────────────────────────────────
 
+const approveMonthlyReportBulk = async (req, res) => {
+  try {
+    const { udise_codes, month, year, status, remarks } = req.body;
+
+    let role_name = req.user.role_name;
+    if (!role_name && req.user.role_id) {
+      const roleResult = await pool.query('SELECT name FROM roles WHERE id = $1', [req.user.role_id]);
+      if (roleResult.rows.length > 0) role_name = roleResult.rows[0].name;
+    }
+
+    if (!month || !year || !status) {
+      return res.status(400).json({ status: false, message: 'month, year, and status are required.' });
+    }
+    if (!Array.isArray(udise_codes) || udise_codes.length === 0) {
+      return res.status(400).json({ status: false, message: 'udise_codes array is required.' });
+    }
+    if (!['approved', 'rejected', 'pending'].includes(status)) {
+      return res.status(400).json({ status: false, message: 'Invalid status. Must be approved, rejected, or pending.' });
+    }
+
+    let statusCol; let remarksCol; let approvedByCol; let approvedAtCol;
+    if (role_name === 'headmaster') {
+      statusCol = 'hm_approval_status'; remarksCol = 'hm_remarks';
+      approvedByCol = 'hm_approved_by'; approvedAtCol = 'hm_approved_at';
+    } else if (role_name === 'vocational_teacher_provider' || role_name === 'vtp') {
+      statusCol = 'vtp_approval_status'; remarksCol = 'vtp_remarks';
+      approvedByCol = 'vtp_approved_by'; approvedAtCol = 'vtp_approved_at';
+    } else if (role_name === 'deo') {
+      statusCol = 'deo_approval_status'; remarksCol = 'deo_remarks';
+      approvedByCol = 'deo_approved_by'; approvedAtCol = 'deo_approved_at';
+    } else if (['admin', 'super_admin'].includes(role_name)) {
+      const layer = req.body.layer || 'hm';
+      if (layer === 'deo') {
+        statusCol = 'deo_approval_status'; remarksCol = 'deo_remarks';
+        approvedByCol = 'deo_approved_by'; approvedAtCol = 'deo_approved_at';
+      } else if (layer === 'vtp') {
+        statusCol = 'vtp_approval_status'; remarksCol = 'vtp_remarks';
+        approvedByCol = 'vtp_approved_by'; approvedAtCol = 'vtp_approved_at';
+      } else {
+        statusCol = 'hm_approval_status'; remarksCol = 'hm_remarks';
+        approvedByCol = 'hm_approved_by'; approvedAtCol = 'hm_approved_at';
+      }
+    } else {
+      return res.status(403).json({ status: false, message: `Role '${role_name}' is not authorized to approve monthly reports.` });
+    }
+
+    const normalizedUdiseCodes = [...new Set(
+      udise_codes.map((code) => String(code || '').trim()).filter(Boolean)
+    )];
+    if (!normalizedUdiseCodes.length) {
+      return res.status(400).json({ status: false, message: 'No valid UDISE codes provided.' });
+    }
+
+    let query = `
+      SELECT DISTINCT u.id AS user_id, v.udise_code
+      FROM users u
+      JOIN roles r ON u.role_id = r.id AND r.name = 'vocational_teacher'
+      JOIN vt_staff_details v ON v.id = u.vt_staff_id
+      LEFT JOIN mst_schools s ON s.udise_sch_code = v.udise_code
+      WHERE v.udise_code = ANY($1::text[])
+    `;
+    const params = [normalizedUdiseCodes];
+
+    if (role_name === 'headmaster') {
+      if (!req.user.udise_code) {
+        return res.status(400).json({ status: false, message: 'Account not linked with school UDISE.' });
+      }
+      params.push(String(req.user.udise_code));
+      query += ` AND v.udise_code = $${params.length}`;
+    } else if (role_name === 'deo') {
+      const deo = await _getDeoProfile(req.user);
+      if (!deo) return res.status(403).json({ status: false, message: 'DEO profile not found.' });
+      params.push(parseInt(deo.district_cd, 10));
+      query += ` AND s.district_cd = $${params.length}`;
+    } else if (role_name === 'vocational_teacher_provider' || role_name === 'vtp') {
+      if (req.user.vtp_id) {
+        params.push(parseInt(req.user.vtp_id, 10));
+        query += ` AND v.vtp_id = $${params.length}`;
+      } else if (req.user.organization_name) {
+        params.push(req.user.organization_name);
+        query += ` AND v.vtp_name = $${params.length}`;
+      }
+    }
+
+    const vtRows = await pool.query(query, params);
+    if (!vtRows.rows.length) {
+      return res.status(404).json({ status: false, message: 'No VT records found for selected schools.' });
+    }
+
+    const client = await pool.connect();
+    const processedUsers = [];
+    try {
+      await client.query('BEGIN');
+
+      for (const vt of vtRows.rows) {
+        const uid = vt.user_id;
+        const udiseCode = vt.udise_code;
+
+        const existing = await client.query(
+          `SELECT hm_approval_status, deo_approval_status, vtp_approval_status, is_locked
+           FROM monthly_school_reports WHERE user_id = $1 AND report_month = $2 AND report_year = $3`,
+          [uid, month, year]
+        );
+        const rec = existing.rows[0];
+
+        if (rec?.is_locked && status === 'approved') {
+          processedUsers.push({ user_id: uid, skipped: true, reason: 'Report already fully approved and locked.' });
+          continue;
+        }
+
+        if (role_name === 'deo' && rec?.hm_approval_status !== 'approved') {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ status: false, message: `School ${udiseCode} has VT report pending HM approval.` });
+        }
+
+        if ((role_name === 'vocational_teacher_provider' || role_name === 'vtp')) {
+          if (rec?.hm_approval_status !== 'approved') {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ status: false, message: `School ${udiseCode} is pending HM approval.` });
+          }
+          if (rec?.deo_approval_status !== 'approved') {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ status: false, message: `School ${udiseCode} is pending DEO approval.` });
+          }
+        }
+
+        if (!rec) {
+          const ins = await client.query(
+            `INSERT INTO monthly_school_reports
+              (udise_code, user_id, report_month, report_year,
+               ${statusCol}, ${remarksCol}, ${approvedByCol}, ${approvedAtCol}, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW()) RETURNING *`,
+            [udiseCode, uid, month, year, status, remarks || '', req.user.id]
+          );
+          processedUsers.push(ins.rows[0]);
+        } else {
+          const newHm = statusCol === 'hm_approval_status' ? status : rec.hm_approval_status;
+          const newDeo = statusCol === 'deo_approval_status' ? status : rec.deo_approval_status;
+          const newVtp = statusCol === 'vtp_approval_status' ? status : rec.vtp_approval_status;
+          const nowLocked = (newHm === 'approved' && newDeo === 'approved' && newVtp === 'approved');
+
+          const upd = await client.query(
+            `UPDATE monthly_school_reports
+             SET ${statusCol} = $1,
+                 ${remarksCol} = $2,
+                 ${approvedByCol} = $3,
+                 ${approvedAtCol} = NOW(),
+                 is_locked = $4,
+                 updated_at = NOW()
+             WHERE user_id = $5 AND report_month = $6 AND report_year = $7
+             RETURNING *`,
+            [status, remarks || '', req.user.id, nowLocked, uid, month, year]
+          );
+          processedUsers.push(upd.rows[0]);
+        }
+      }
+
+      await client.query('COMMIT');
+    } catch (dbErr) {
+      await client.query('ROLLBACK');
+      throw dbErr;
+    } finally {
+      client.release();
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: `Bulk ${status} completed successfully.`,
+      data: processedUsers,
+    });
+  } catch (error) {
+    console.error('approveMonthlyReportBulk error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error updating bulk report approval.' });
+  }
+};
+
 const downloadMonthlyAttendance = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -855,6 +1031,7 @@ module.exports = {
   downloadMonthlyAttendance,
   getMonthlySummary,
   approveMonthlyReport,
+  approveMonthlyReportBulk,
   generateMonthlyVtReport,
   downloadVtMonthlyReportPdf,
   getMonthlyVtReportsList,
