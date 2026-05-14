@@ -9,6 +9,7 @@ const {
   downloadVtMonthlyReportPdf,
   getMonthlyVtReportsList,
   getDashboardPendingCounts,
+  getLocationMasterData,
 } = require('../controllers/reportController');
 
 // All report routes require 
@@ -34,5 +35,8 @@ router.get('/monthly-vt-reports', getMonthlyVtReportsList);
 
 // ── New: Dashboard pending-action counts ─────────────────────────────────────
 router.get('/dashboard-pending-counts', getDashboardPendingCounts);
+
+// ── New: Cascading location master data (districts / blocks / clusters) ───────
+router.get('/location-master', getLocationMasterData);
 
 module.exports = router;
