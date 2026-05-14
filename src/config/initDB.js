@@ -117,6 +117,11 @@ const initDB = async () => {
       );
     `);
 
+    // Ensure face_descriptor column exists on users (biometric — stored AES-256-GCM encrypted)
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS face_descriptor TEXT DEFAULT NULL;
+    `);
+
     // ─────────────────────────────────────────────────────────
     // TABLE: user_permissions  (override — per user grant/revoke)
     // ─────────────────────────────────────────────────────────
@@ -170,8 +175,16 @@ const initDB = async () => {
 
     // Ensure checkout location columns exist for previously created databases
     await client.query(`
-      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_latitude NUMERIC(10, 8);
-      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_longitude NUMERIC(11, 8);
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_latitude    NUMERIC(10, 8);
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_longitude   NUMERIC(11, 8);
+    `);
+
+    // ── Face recognition columns ─────────────────────────────────────────────
+    await client.query(`
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS face_match_score     NUMERIC(5,2) DEFAULT NULL;
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkin_photo        TEXT         DEFAULT NULL;
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_photo       TEXT         DEFAULT NULL;
+      ALTER TABLE attendance_records ADD COLUMN IF NOT EXISTS checkout_face_score  NUMERIC(5,2) DEFAULT NULL;
     `);
 
     // ─────────────────────────────────────────────────────────

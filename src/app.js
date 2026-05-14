@@ -12,14 +12,15 @@ const { initYearEndCarryForwardCronJob } = require('./jobs/yearEndCarryForwardJo
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 const apiRoutes = require('./routes/routes.js');
+const { loadModels } = require('./utils/faceUtils');
 
 const app = express();
 
 // ─── Core Middleware ──────────────────────────────────────────────────────────
 app.use(cors());
 app.use(morgan('dev'));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ─── Static Files ─────────────────────────────────────────────────────────────
 app.use('/uploads', express.static('src/uploads'));
@@ -50,6 +51,7 @@ const startServer = async () => {
   try {
     await createDatabaseIfNotExists(); // Step 1: Ensure DB exists
     await initDB();                    // Step 2: Create tables + seed roles/permissions
+    await loadModels();                // Step 3: Preload face recognition models
     app.listen(PORT, () => {
       console.log(`\n🚀 Server running on http://localhost:${PORT}`);
       console.log(`📋 Health check: http://localhost:${PORT}/api/health\n`);
