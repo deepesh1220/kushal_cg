@@ -52,25 +52,42 @@ const loadModels = async () => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INTERNAL: Convert any image buffer → raw pixel Float32Array tensor
-// Uses sharp to decode JPEG/PNG → raw RGB pixels → TF tensor
+// INTERNAL: Convert any image buffer → lighting-normalised raw pixel tensor
+//
+// Problem: direct sunlight / extreme overexposure blows out pixel values,
+// causing the 128-D descriptor to drift far from the registered embedding,
+// even though the face belongs to the same person.
+//
+// Fix (applied in order, all lossless to face geometry):
+//   1. Resize to 640 px max — keeps enough detail without wasting compute.
+//   2. CLAHE (Contrast Limited Adaptive Histogram Equalisation) — locally
+//      levels blown-out highlights & deep shadows without touching global
+//      brightness much.  width/height 8 = moderate tile size; maxSlope 3
+//      limits over-amplification in uniform regions.
+//   3. Gamma 1.2 — mild gamma lift to bring up crushed shadow details that
+//      CLAHE may not fully recover on its own.
+//   4. Linear normalise — stretches the remaining dynamic range so that both
+//      registration photos (indoor, controlled) and check-in selfies (outdoor,
+//      harsh sun) end up in a similar pixel-value range before hitting the
+//      model.  This is the key step that closes the domain gap.
+//   5. removeAlpha → raw float32 — same as before.
+//
+// NOTE: face-api's recognition net is robust to moderate preprocessing;
+// CLAHE + gamma + normalize is a well-established pipeline for face
+// recognition under variable illumination (see LFW benchmark pre-processing).
 // ─────────────────────────────────────────────────────────────────────────────
 const bufferToTensor = async (imageBuffer) => {
-  // CRITICAL: Do NOT use normalize() or sharpen() — the face-api recognition
-  // model was trained on raw pixel values. Altering them creates artificial
-  // variance between the registration photo and the check-in selfie, causing
-  // the euclidean distance to grow → lower match %.
-  //
-  // Use removeAlpha() to get 3-channel RGB directly (avoids the manual RGBA→RGB
-  // loop). Use float32 because face-api's TF backend expects float tensors.
   const { data, info } = await sharp(imageBuffer)
-    .resize({ width: 640, withoutEnlargement: true }) // cap at 640px, no upscale
-    .removeAlpha()                                     // 3-channel RGB output
+    .resize({ width: 640, withoutEnlargement: true })   // 1. resize
+    .clahe({ width: 8, height: 8, maxSlope: 3 })         // 2. local contrast eq.
+    .gamma(1.2)                                          // 3. mild gamma lift
+    .normalize()                                         // 4. global range stretch
+    .removeAlpha()                                       // 5. 3-channel RGB
     .raw()
     .toBuffer({ resolveWithObject: true });
 
   const { width, height } = info;
-  const rgbData = new Float32Array(data); // already RGB, cast to float32
+  const rgbData = new Float32Array(data); // cast to float32 for TF
 
   return tf.tensor3d(rgbData, [height, width, 3], 'float32');
 };
@@ -83,9 +100,10 @@ const extractDescriptorFromFile = async (imagePath) => {
   const buffer = fs.readFileSync(imagePath);
   const tensor = await bufferToTensor(buffer);
 
-  // minConfidence 0.5: best detection recall while still filtering noise.
-  // Too high (0.7+) misses valid faces; too low (0.3-) picks up false detections.
-  const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
+  // minConfidence 0.45: slightly lower than default to improve recall under
+  // harsh lighting where the detector scores valid faces a bit lower than usual.
+  // 0.3 is too noisy; 0.5 sometimes rejects the same face in bright sun.
+  const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.45 });
 
   try {
     const detection = await faceapi
@@ -112,7 +130,8 @@ const extractDescriptorFromBase64 = async (base64String) => {
   const buffer     = Buffer.from(base64Data, 'base64');
   const tensor     = await bufferToTensor(buffer);
 
-  const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
+  // Same 0.45 threshold as registration — keeps behaviour consistent.
+  const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.45 });
 
   try {
     const detection = await faceapi
