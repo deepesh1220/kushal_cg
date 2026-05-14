@@ -1,5 +1,5 @@
 const bcrypt = require('bcryptjs');
-const path   = require('path');
+const path = require('path');
 const User = require('../models/User');
 const Role = require('../models/Role');
 const RefreshToken = require('../models/RefreshToken');
@@ -18,7 +18,6 @@ const {
 } = require('../utils/jwtUtils');
 const { toIST } = require('../utils/timeUtils');
 const { extractDescriptorFromFile, encryptDescriptor } = require('../utils/faceUtils');
-const { pool } = require('../config/db');
 
 const VT_ROLE_NAME = 'vocational_teacher';
 const VTP_ROLE_NAME = 'vocational_teacher_provider';
