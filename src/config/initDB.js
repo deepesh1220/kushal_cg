@@ -815,6 +815,7 @@ const seedDefaults = async (client) => {
     'reports:generate',
     'reports:view_monthly',
     'reports:approve_hm',
+    'attendance:create_others',
   ]);
 
   // ── 2. admin also gets vt:approve and full report access ─────────────────────

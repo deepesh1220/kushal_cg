@@ -175,12 +175,12 @@ const getSchoolTiming = async (req, res, next) => {
     return res.status(200).json({
       status: 'success',
       data: {
-        startTime:      to24h(row.sch_open_time),
-        endTime:        to24h(row.sch_close_time),
-        graceTime:      row.grace_time ?? null,
-        sch_open_time:  row.sch_open_time,
+        startTime: to24h(row.sch_open_time),
+        endTime: to24h(row.sch_close_time),
+        graceTime: row.grace_time ?? null,
+        sch_open_time: row.sch_open_time,
         sch_close_time: row.sch_close_time,
-        grace_time:     row.grace_time,
+        grace_time: row.grace_time,
       },
     });
   } catch (err) {
@@ -311,7 +311,224 @@ const updateSchoolLatLong = async (req, res, next) => {
   }
 };
 
+// ─── POST /api/headmaster/mark-vt-attendance ──────────────────────────────
+// Allows headmaster to mark attendance for VTs in their school.
+const markVtAttendance = async (req, res, next) => {
+  try {
+    const { user_id, date, status, check_in_time, check_out_time, remarks } = req.body;
+    const headmasterId = req.user.id;
+    const udiseCode = req.user.udise_code;
+
+    if (!udiseCode) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Your account is not linked to a school UDISE code.',
+      });
+    }
+
+    if (!user_id || !date || !status) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'user_id, date, and status are required.',
+      });
+    }
+
+    // ── 1. Map status to DB values ──────────────────────────────────────────
+    const statusMap = {
+      'present': 'present',
+      'absent': 'absent',
+      'leave': 'on_leave',
+      'onduty': 'od',
+      'half-day': 'half_day',
+    };
+    const dbStatus = statusMap[status.toLowerCase()] || status;
+
+    // ── 2. Verify VT belongs to this Headmaster's school ─────────────────────
+    const vtCheck = await pool.query('SELECT udise_code FROM users WHERE id = $1', [user_id]);
+    if (vtCheck.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'VT user not found' });
+    }
+
+    // Use loose equality for udise_code (could be string vs bigint)
+    if (vtCheck.rows[0].udise_code != udiseCode) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Unauthorized: You can only mark attendance for VTs in your own school.',
+      });
+    }
+
+    // ── 3. Prepare timestamps ───────────────────────────────────────────────
+    // If times are provided as "HH:MM", combine them with the date
+    const formatTime = (t) => {
+      if (!t) return null;
+      if (t.includes('T')) return t; // Already ISO or has date
+      return `${date} ${t}`;
+    };
+
+    const finalCheckIn = formatTime(check_in_time);
+    const finalCheckOut = formatTime(check_out_time);
+
+    // ── 4. Upsert attendance record ─────────────────────────────────────────
+    const query = `
+      INSERT INTO attendance_records (user_id, date, check_in_time, check_out_time, status, remarks, marked_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (user_id, date) DO UPDATE SET
+        check_in_time  = COALESCE(EXCLUDED.check_in_time, attendance_records.check_in_time),
+        check_out_time = COALESCE(EXCLUDED.check_out_time, attendance_records.check_out_time),
+        status         = EXCLUDED.status,
+        remarks        = EXCLUDED.remarks,
+        marked_by       = EXCLUDED.marked_by,
+        updated_at     = NOW()
+      RETURNING *;
+    `;
+
+    const result = await pool.query(query, [
+      user_id,
+      date,
+      finalCheckIn,
+      finalCheckOut,
+      dbStatus,
+      remarks || null,
+      headmasterId,
+    ]);
+
+    const record = result.rows[0];
+
+    // ── 5. Calculate working hours for response ──────────────────────────────
+    let workingHours = null;
+    if (record.check_in_time && record.check_out_time) {
+      const start = new Date(record.check_in_time);
+      const end = new Date(record.check_out_time);
+      if (!isNaN(start) && !isNaN(end)) {
+        const diffMs = end - start;
+        workingHours = diffMs > 0 ? parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2)) : 0;
+      }
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: `Attendance marked as ${status} successfully.`,
+      data: {
+        ...record,
+        total_working_hour: workingHours,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── PATCH /api/headmaster/update-vt-attendance/:id ─────────────────────────
+const updateVtAttendance = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { status, check_in_time, check_out_time, remarks } = req.body;
+    const headmasterId = req.user.id;
+    const udiseCode = req.user.udise_code;
+
+    if (!udiseCode) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Your account is not linked to a school UDISE code.',
+      });
+    }
+
+    // ── 1. Find existing record and verify ownership ────────────────────────
+    const existingResult = await pool.query(`
+      SELECT ar.*, u.udise_code
+      FROM attendance_records ar
+      JOIN users u ON u.id = ar.user_id
+      WHERE ar.id = $1
+    `, [id]);
+
+    if (existingResult.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Attendance record not found.' });
+    }
+
+    const existing = existingResult.rows[0];
+
+    // Use loose equality for udise_code
+    if (existing.udise_code != udiseCode) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Unauthorized: This record belongs to a VT from another school.',
+      });
+    }
+
+    // ── 2. Prepare updates ──────────────────────────────────────────────────
+    let dbStatus = existing.status;
+    if (status) {
+      const statusMap = {
+        'present': 'present',
+        'absent': 'absent',
+        'leave': 'on_leave',
+        'onduty': 'od',
+        'half-day': 'half_day',
+      };
+      dbStatus = statusMap[status.toLowerCase()] || status;
+    }
+
+    const formatTime = (t, date) => {
+      if (!t) return null;
+      if (t.includes('T')) return t;
+      return `${date} ${t}`;
+    };
+
+    const recordDate = new Date(existing.date).toISOString().split('T')[0];
+    const finalCheckIn = check_in_time !== undefined ? formatTime(check_in_time, recordDate) : existing.check_in_time;
+    const finalCheckOut = check_out_time !== undefined ? formatTime(check_out_time, recordDate) : existing.check_out_time;
+
+    // ── 3. Execute Update ───────────────────────────────────────────────────
+    const updateQuery = `
+      UPDATE attendance_records
+      SET
+        status         = $1,
+        check_in_time  = $2,
+        check_out_time = $3,
+        remarks        = $4,
+        marked_by      = $5,
+        updated_at     = NOW()
+      WHERE id = $6
+      RETURNING *;
+    `;
+
+    const result = await pool.query(updateQuery, [
+      dbStatus,
+      finalCheckIn,
+      finalCheckOut,
+      remarks !== undefined ? remarks : existing.remarks,
+      headmasterId,
+      id
+    ]);
+
+    const record = result.rows[0];
+
+    // ── 4. Calculate working hours ──────────────────────────────────────────
+    let workingHours = null;
+    if (record.check_in_time && record.check_out_time) {
+      const start = new Date(record.check_in_time);
+      const end = new Date(record.check_out_time);
+      if (!isNaN(start) && !isNaN(end)) {
+        const diffMs = end - start;
+        workingHours = diffMs > 0 ? parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2)) : 0;
+      }
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Attendance record updated successfully',
+      data: {
+        ...record,
+        total_working_hour: workingHours,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
+
   getHeadmaster,
   createHeadmaster,
   updateHeadmaster,
@@ -323,4 +540,6 @@ module.exports = {
   getSchoolTiming,
   getSchoolDetails,
   updateSchoolLatLong,
+  markVtAttendance,
+  updateVtAttendance,
 };
