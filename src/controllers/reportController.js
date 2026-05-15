@@ -67,7 +67,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
   const endOfMonth = `${year}-${String(month).padStart(2, '0')}-${String(totalDays).padStart(2, '0')}`;
   const leaveRows = await pool.query(
     `SELECT from_date, to_date FROM leave_requests
-     WHERE user_id = $1 AND status = 'approved'
+     WHERE user_id = $1 AND leave_approved = TRUE
        AND from_date <= $2 AND to_date >= $3`,
     [vtUserId, endOfMonth, startOfMonth]
   );
@@ -146,6 +146,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
       trade: vtDetails.trade || '',
       vtp_name: vtDetails.vtp_name || '',
       school_name: vtDetails.school_name || '',
+      udise_code: vtDetails.udise_code || '',
       district_name: vtDetails.district_name || '',
       block_name: vtDetails.block_name || '',
     },
@@ -333,24 +334,9 @@ const downloadVtMonthlyReportPdf = async (req, res) => {
       }
     }
 
-    // Try to use stored snapshot first
-    const snapRow = await pool.query(
-      `SELECT snapshot_data FROM monthly_report_snapshots
-       WHERE user_id = $1 AND month = $2 AND year = $3 LIMIT 1`,
-      [user_id, monthInt, yearInt]
-    );
-
-    let snapshotData;
-    if (snapRow.rows.length) {
-      snapshotData = snapRow.rows[0].snapshot_data;
-    } else {
-      // Generate on-the-fly from live data
-      snapshotData = await _buildSnapshotData(user_id, monthInt, yearInt);
-    }
-
-    // Enrich with approval data
+    // Get approval and lock status
     const approvalRow = await pool.query(
-      `SELECT hm_approval_status, hm_approved_at,
+      `SELECT is_locked, hm_approval_status, hm_approved_at,
               deo_approval_status, deo_approved_at,
               vtp_approval_status, vtp_approved_at
        FROM monthly_school_reports
@@ -358,6 +344,26 @@ const downloadVtMonthlyReportPdf = async (req, res) => {
       [user_id, monthInt, yearInt]
     );
     const ar = approvalRow.rows[0] || {};
+    const isLocked = ar.is_locked || false;
+
+    let snapshotData;
+    if (isLocked) {
+      // Use stored snapshot if report is locked
+      const snapRow = await pool.query(
+        `SELECT snapshot_data FROM monthly_report_snapshots
+         WHERE user_id = $1 AND month = $2 AND year = $3 LIMIT 1`,
+        [user_id, monthInt, yearInt]
+      );
+      if (snapRow.rows.length) {
+        snapshotData = snapRow.rows[0].snapshot_data;
+      } else {
+        snapshotData = await _buildSnapshotData(user_id, monthInt, yearInt);
+      }
+    } else {
+      // Generate on-the-fly from live data if not locked
+      snapshotData = await _buildSnapshotData(user_id, monthInt, yearInt);
+    }
+
     snapshotData.approvals = {
       hm: { status: ar.hm_approval_status || 'pending', approvedAt: ar.hm_approved_at || null },
       deo: { status: ar.deo_approval_status || 'pending', approvedAt: ar.deo_approved_at || null },
