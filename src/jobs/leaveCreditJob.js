@@ -1,68 +1,50 @@
 /**
- * Monthly Leave Credit Cron Job
- * Automatically credits 1.5 EL (Earned Leave) to all Vocational Teachers every month
- * Runs on the 1st day of each month at 00:01 AM
+ * Annual Leave Credit Cron Job
+ * Automatically credits 13 EL (Earned Leave) to all Vocational Teachers
+ * on April 1 — the start of the Indian financial year.
+ * Can also be triggered manually via POST /api/leave-balance/credit-monthly
  */
 
 const { pool } = require('../config/db');
 const LeaveBalance = require('../models/LeaveBalance');
 
-// Flag to track if job is running (prevent overlapping executions)
+// Flag to prevent overlapping executions
 let isJobRunning = false;
 
 /**
- * Credit monthly leave to a single teacher
- * @param {number} userId - Teacher's user ID
- * @param {number} year - Year
- * @param {number} month - Month (1-12)
- * @returns {Promise<Object>} Credit result
+ * Credit annual leave to a single teacher for a given financial year
  */
-const creditTeacherLeave = async (userId, year, month) => {
+const creditTeacherLeave = async (userId, financialYear) => {
   try {
-    const result = await LeaveBalance.creditMonthlyLeave(userId, year, month, 1.5);
-    return {
-      userId,
-      ...result
-    };
+    const result = await LeaveBalance.creditAnnualLeave(userId, financialYear);
+    return { userId, ...result };
   } catch (error) {
-    return {
-      userId,
-      success: false,
-      message: error.message,
-      error: error.message
-    };
+    return { userId, success: false, message: error.message, error: error.message };
   }
 };
 
 /**
- * Main job function - Credits leave to all eligible VTs
- * Called by cron scheduler or can be triggered manually
+ * Main job function — Credits 13 EL to all eligible VTs for the given financial year.
+ * Called by the April 1 cron scheduler or triggered manually.
+ * financialYear: the starting calendar year of the FY (e.g. 2026 = FY 2026-27)
  */
-const runMonthlyLeaveCreditJob = async (manualYear = null, manualMonth = null) => {
-  // Prevent overlapping executions
+const runAnnualLeaveCreditJob = async (manualFinancialYear = null) => {
   if (isJobRunning) {
-    console.log('[LeaveCreditJob] Job already running, skipping...');
-    return {
-      success: false,
-      message: 'Job already running',
-      skipped: true
-    };
+    console.log('[AnnualLeaveCreditJob] Job already running, skipping...');
+    return { success: false, message: 'Job already running', skipped: true };
   }
 
   isJobRunning = true;
-  console.log('[LeaveCreditJob] Starting monthly leave credit job...');
+  console.log('[AnnualLeaveCreditJob] Starting annual leave credit job...');
 
   const startTime = new Date();
 
   try {
-    // Determine year and month to process
-    const now = new Date();
-    const year = manualYear || now.getFullYear();
-    const month = manualMonth || (now.getMonth() + 1); // JS months are 0-indexed
+    const financialYear = manualFinancialYear || LeaveBalance.getCurrentFinancialYear();
+    console.log(`[AnnualLeaveCreditJob] Processing credits for FY ${financialYear}-${financialYear + 1}`);
 
-    console.log(`[LeaveCreditJob] Processing credits for ${year}-${month.toString().padStart(2, '0')}`);
-
-    // Get all vocational teachers who don't have credit for this month
+    // Get all active vocational teachers who don't have the annual credit yet
+    // Annual credit is identified by month=4 in the credit log
     const result = await pool.query(`
       SELECT u.id, u.name, u.email, u.vt_staff_id, v.udise_code, v.school_name
       FROM users u
@@ -71,64 +53,45 @@ const runMonthlyLeaveCreditJob = async (manualYear = null, manualMonth = null) =
       LEFT JOIN monthly_leave_credit_log mcl
         ON u.id = mcl.user_id
         AND mcl.year = $1
-        AND mcl.month = $2
+        AND mcl.month = 4
         AND mcl.status = 'success'
       WHERE r.name = 'vocational_teacher'
         AND u.is_active = true
         AND mcl.id IS NULL
-    `, [year, month]);
+    `, [financialYear]);
 
     const teachers = result.rows;
-    console.log(`[LeaveCreditJob] Found ${teachers.length} teachers to credit`);
+    console.log(`[AnnualLeaveCreditJob] Found ${teachers.length} teachers to credit`);
 
     if (teachers.length === 0) {
       isJobRunning = false;
       return {
         success: true,
-        message: 'No teachers need credit for this month',
+        message: `All teachers already credited for FY ${financialYear}-${financialYear + 1}`,
         processed: 0,
         successful: 0,
         failed: 0,
-        year,
-        month
+        financialYear
       };
     }
 
-    // Process each teacher
-    const results = {
-      successful: [],
-      failed: [],
-      alreadyCredited: []
-    };
+    const results = { successful: [], failed: [], alreadyCredited: [] };
 
     for (const teacher of teachers) {
-      const creditResult = await creditTeacherLeave(teacher.id, year, month);
+      const creditResult = await creditTeacherLeave(teacher.id, financialYear);
 
       if (creditResult.success) {
-        results.successful.push({
-          userId: teacher.id,
-          name: teacher.name,
-          udiseCode: teacher.udise_code
-        });
+        results.successful.push({ userId: teacher.id, name: teacher.name, udiseCode: teacher.udise_code });
       } else if (creditResult.alreadyCredited) {
-        results.alreadyCredited.push({
-          userId: teacher.id,
-          name: teacher.name
-        });
+        results.alreadyCredited.push({ userId: teacher.id, name: teacher.name });
       } else {
-        results.failed.push({
-          userId: teacher.id,
-          name: teacher.name,
-          error: creditResult.message
-        });
+        results.failed.push({ userId: teacher.id, name: teacher.name, error: creditResult.message });
       }
     }
 
-    const endTime = new Date();
-    const duration = (endTime - startTime) / 1000;
-
-    console.log(`[LeaveCreditJob] Completed in ${duration}s`);
-    console.log(`[LeaveCreditJob] Successful: ${results.successful.length}, Failed: ${results.failed.length}`);
+    const duration = ((new Date() - startTime) / 1000).toFixed(2);
+    console.log(`[AnnualLeaveCreditJob] Completed in ${duration}s`);
+    console.log(`[AnnualLeaveCreditJob] Successful: ${results.successful.length}, Failed: ${results.failed.length}`);
 
     isJobRunning = false;
 
@@ -139,79 +102,67 @@ const runMonthlyLeaveCreditJob = async (manualYear = null, manualMonth = null) =
       successful: results.successful.length,
       failed: results.failed.length,
       alreadyCredited: results.alreadyCredited.length,
-      year,
-      month,
+      financialYear,
       duration: `${duration}s`,
       details: results
     };
 
   } catch (error) {
     isJobRunning = false;
-    console.error('[LeaveCreditJob] Job failed:', error.message);
-
-    return {
-      success: false,
-      message: error.message,
-      error: error.message,
-      processed: 0,
-      successful: 0,
-      failed: 0
-    };
+    console.error('[AnnualLeaveCreditJob] Job failed:', error.message);
+    return { success: false, message: error.message, error: error.message, processed: 0, successful: 0, failed: 0 };
   }
 };
 
 /**
- * Initialize the cron job
- * Call this from app.js to start the scheduled job
+ * Initialize the cron job.
+ * Call from app.js to start the scheduled job.
+ * Runs at 00:01 on April 1 every year (Indian financial year start).
  */
 const initLeaveCreditCronJob = () => {
-  // Use dynamic import for node-cron to handle cases where it might not be installed
   let cron;
   try {
     cron = require('node-cron');
   } catch (err) {
-    console.warn('[LeaveCreditJob] node-cron not installed. Cron job will not run automatically.');
-    console.warn('[LeaveCreditJob] Install with: npm install node-cron');
-    console.warn('[LeaveCreditJob] Manual API endpoint available at POST /api/leave-balance/credit-monthly');
+    console.warn('[AnnualLeaveCreditJob] node-cron not installed. Cron job will not run automatically.');
+    console.warn('[AnnualLeaveCreditJob] Install with: npm install node-cron');
+    console.warn('[AnnualLeaveCreditJob] Manual API endpoint available at POST /api/leave-balance/credit-monthly');
     return null;
   }
 
-  // Schedule: At 00:01 on the 1st of every month
-  // Cron format: minute hour day month day-of-week
-  const job = cron.schedule('1 0 1 * *', async () => {
-    console.log('[LeaveCreditJob] Cron triggered - running monthly leave credit...');
-    const result = await runMonthlyLeaveCreditJob();
-    console.log('[LeaveCreditJob] Cron result:', result.message);
+  // April 1 at 00:01 IST — start of Indian financial year
+  const job = cron.schedule('1 0 1 4 *', async () => {
+    console.log('[AnnualLeaveCreditJob] Cron triggered — running annual leave credit...');
+    const result = await runAnnualLeaveCreditJob();
+    console.log('[AnnualLeaveCreditJob] Cron result:', result.message);
   }, {
     scheduled: true,
-    timezone: 'Asia/Kolkata' // Use India timezone
+    timezone: 'Asia/Kolkata'
   });
 
-  console.log('[LeaveCreditJob] Monthly leave credit cron job initialized');
-  console.log('[LeaveCreditJob] Scheduled to run at 00:01 on 1st of every month (IST)');
+  console.log('[AnnualLeaveCreditJob] Annual leave credit cron job initialized');
+  console.log('[AnnualLeaveCreditJob] Scheduled to run at 00:01 on April 1 every year (IST)');
 
   return job;
 };
 
 /**
- * Get job status and last run info
+ * Get job status and last run info for the current financial year
  */
 const getJobStatus = async () => {
   try {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth() + 1;
+    const fy = LeaveBalance.getCurrentFinancialYear();
 
-    // Get last credit log entry
+    // Annual credit log entry is identified by month=4
     const lastRunResult = await pool.query(`
       SELECT MAX(credited_at) as last_run,
              COUNT(*) FILTER (WHERE status = 'success') as successful_count,
              COUNT(*) FILTER (WHERE status = 'failed') as failed_count
       FROM monthly_leave_credit_log
-      WHERE year = $1 AND month = $2
-    `, [year, month]);
+      WHERE year = $1 AND month = 4
+    `, [fy]);
 
-    // Get pending teachers count
+    // Teachers pending annual credit for this FY
     const pendingResult = await pool.query(`
       SELECT COUNT(*) as pending_count
       FROM users u
@@ -219,31 +170,31 @@ const getJobStatus = async () => {
       LEFT JOIN monthly_leave_credit_log mcl
         ON u.id = mcl.user_id
         AND mcl.year = $1
-        AND mcl.month = $2
+        AND mcl.month = 4
         AND mcl.status = 'success'
       WHERE r.name = 'vocational_teacher'
         AND u.is_active = true
         AND mcl.id IS NULL
-    `, [year, month]);
+    `, [fy]);
 
     return {
       isRunning: isJobRunning,
-      currentMonth: `${year}-${month.toString().padStart(2, '0')}`,
+      currentFinancialYear: `${fy}-${fy + 1}`,
       lastRun: lastRunResult.rows[0]?.last_run,
-      successfulThisMonth: parseInt(lastRunResult.rows[0]?.successful_count || 0),
-      failedThisMonth: parseInt(lastRunResult.rows[0]?.failed_count || 0),
+      successfulThisFY: parseInt(lastRunResult.rows[0]?.successful_count || 0),
+      failedThisFY: parseInt(lastRunResult.rows[0]?.failed_count || 0),
       pendingTeachers: parseInt(pendingResult.rows[0]?.pending_count || 0),
-      nextScheduledRun: '1st of next month at 00:01 AM IST'
+      nextScheduledRun: 'April 1 at 00:01 AM IST'
     };
   } catch (error) {
-    return {
-      error: error.message
-    };
+    return { error: error.message };
   }
 };
 
 module.exports = {
-  runMonthlyLeaveCreditJob,
+  runAnnualLeaveCreditJob,
+  // Alias kept for backward compatibility with any callers using the old name
+  runMonthlyLeaveCreditJob: runAnnualLeaveCreditJob,
   initLeaveCreditCronJob,
   getJobStatus,
   creditTeacherLeave

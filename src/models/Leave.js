@@ -661,25 +661,8 @@ class Leave {
         return { success: false, message: `Leave is already ${leave.status}` };
       }
 
-      // Auto-credit current month's EL if not already credited (lazy accrual)
-      await LeaveBalance.ensureCurrentMonthCredit(leave.user_id);
-
-      // Check balance before approval
-      const balanceCheck = await LeaveBalance.checkSufficientBalance(
-        leave.user_id,
-        leave.leave_type
-      );
-
-      if (!balanceCheck.sufficient) {
-        await client.query('ROLLBACK');
-        return {
-          success: false,
-          message: `Insufficient leave balance. Required: ${balanceCheck.required}, Available: ${balanceCheck.available}`,
-          insufficientBalance: true,
-          required: balanceCheck.required,
-          available: balanceCheck.available
-        };
-      }
+      // Lazy-credit annual EL if not yet credited this FY
+      await LeaveBalance.ensureAnnualCredit(leave.user_id);
 
       // Update leave status (Principal Layer)
       const updatedLeave = await client.query(`

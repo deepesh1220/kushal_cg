@@ -90,27 +90,13 @@ const applyLeave = async (req, res) => {
       return res.status(400).json({ status: false, message: 'You already have a pending or approved leave request during this period.' });
     }
 
-    // Pre-validate balance & monthly cap so VT is warned up-front
+    // Pre-validate balance so VT is warned up-front
     const LeaveBalance = require('../models/LeaveBalance');
     const reqType = leave_type || 'full-day';
-    // Lazy-credit current month EL so first-time applicants see correct balance
-    await LeaveBalance.ensureCurrentMonthCredit(userId);
+    // Lazy-credit annual EL so first-time applicants see correct balance
+    await LeaveBalance.ensureAnnualCredit(userId);
     const check = await LeaveBalance.checkSufficientBalance(userId, reqType);
-    // VT can now apply for leave even with insufficient balance
-    // if (!check.balanceOk) {
-    //   return res.status(400).json({
-    //     status: false,
-    //     message: `Insufficient leave balance. Required ${check.required}, available ${check.available}.`,
-    //     balanceCheck: check
-    //   });
-    // }
-    if (!check.monthlyCapOk) {
-      return res.status(400).json({
-        status: false,
-        message: `Monthly usage cap exceeded. Used ${check.monthlyUsed}/${check.monthlyCap} this month.`,
-        balanceCheck: check
-      });
-    }
+    // VT can apply for leave even with insufficient balance; excess is tracked separately
 
     const leave = await Leave.create({ user_id: userId, from_date, to_date, reason, leave_type });
     return res.status(201).json({ status: true, message: 'Leave request submitted successfully.', data: leave });
@@ -243,8 +229,8 @@ const approveRejectLeave = async (req, res) => {
     if (status === 'approved' && updated.leave_approved) {
       try {
         const LeaveBalance = require('../models/LeaveBalance');
-        // Lazy credit current month if not yet credited
-        await LeaveBalance.ensureCurrentMonthCredit(leave.user_id);
+        // Lazy-credit annual EL if not yet credited this FY
+        await LeaveBalance.ensureAnnualCredit(leave.user_id);
         
         // Prevent duplicate deduction: check if already deducted
         const { pool } = require('../config/db');

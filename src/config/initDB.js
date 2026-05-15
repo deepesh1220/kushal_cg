@@ -222,7 +222,7 @@ const initDB = async () => {
         id                SERIAL PRIMARY KEY,
         user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         opening_balance   DECIMAL(5,2) DEFAULT 0.00,    -- Opening balance at year start (= previous year closing capped)
-        total_earned      DECIMAL(5,2) DEFAULT 0.00,    -- Total EL credited this year (capped 18)
+        total_earned      DECIMAL(5,2) DEFAULT 0.00,    -- Total EL credited this financial year (capped 13)
         total_used        DECIMAL(5,2) DEFAULT 0.00,    -- Total EL used this year
         remaining_balance DECIMAL(5,2) DEFAULT 0.00,    -- Current available balance
         carried_forward   DECIMAL(5,2) DEFAULT 0.00,    -- Leave carried from previous year
@@ -240,20 +240,26 @@ const initDB = async () => {
 
     // ─────────────────────────────────────────────────────────
     // TABLE: monthly_leave_credit_log
-    // Audit log for monthly 1.5 EL credit cron job
+    // Audit log for annual EL credit (April 1 = Indian FY start).
+    // month=4 marks the annual credit; month=0 marks manual adjustments.
     // ─────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS monthly_leave_credit_log (
         id             SERIAL PRIMARY KEY,
         user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         year           INTEGER NOT NULL,
-        month          INTEGER NOT NULL,  -- 1-12
-        credited_leave DECIMAL(3,1) DEFAULT 1.5,
+        month          INTEGER NOT NULL,  -- 4 = annual FY credit marker; 0 = manual adjustment
+        credited_leave DECIMAL(5,2) DEFAULT 13.0,
         credited_at    TIMESTAMPTZ DEFAULT NOW(),
         status         VARCHAR(20) DEFAULT 'success' CHECK (status IN ('success', 'failed', 'skipped')),
         error_message  TEXT,
         UNIQUE (user_id, year, month)
       );
+    `);
+
+    // Update default for existing databases migrating from monthly (1.5) to annual (13.0) credit
+    await client.query(`
+      ALTER TABLE monthly_leave_credit_log ALTER COLUMN credited_leave SET DEFAULT 13.0;
     `);
 
     // ─────────────────────────────────────────────────────────

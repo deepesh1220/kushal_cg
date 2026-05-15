@@ -1,8 +1,9 @@
 /**
- * Year-End Carry Forward Job
- * Runs at 00:05 on January 1 to:
- *  1. Carry forward unused EL (capped at MAX_CARRY_FORWARD = 10)
- *  2. Reset yearly counters by creating fresh leave_balance rows for new year
+ * Financial Year-End Carry Forward Job
+ * Runs at 23:55 on March 31 (last day of the Indian financial year) to:
+ *  1. Record closing_balance for the ending FY
+ *  2. Carry forward unused EL (capped at MAX_CARRY_FORWARD = 10) into the new FY row
+ * The April 1 annual credit job runs immediately after and adds 13 EL to the new FY balance.
  */
 
 const { pool } = require('../config/db');
@@ -17,13 +18,14 @@ const runYearEndCarryForwardJob = async (manualFromYear = null, manualToYear = n
   isJobRunning = true;
 
   try {
-    const now = new Date();
-    const toYear = manualToYear || now.getFullYear();
-    const fromYear = manualFromYear || (toYear - 1);
+    // fromYear = ending FY start year (e.g. 2025 = FY 2025-26)
+    // toYear   = new FY start year    (e.g. 2026 = FY 2026-27)
+    const fromYear = manualFromYear || LeaveBalance.getCurrentFinancialYear();
+    const toYear   = manualToYear   || (fromYear + 1);
 
-    console.log(`[YearEndJob] Carrying forward leave: ${fromYear} → ${toYear}`);
+    console.log(`[YearEndJob] Carrying forward leave: FY ${fromYear}-${fromYear + 1} → FY ${toYear}-${toYear + 1}`);
 
-    // Get all VTs with a balance in the previous year
+    // Get all VTs with a balance row in the ending FY
     const result = await pool.query(`
       SELECT u.id, u.name
       FROM users u
@@ -33,7 +35,7 @@ const runYearEndCarryForwardJob = async (manualFromYear = null, manualToYear = n
     `, [fromYear]);
 
     const teachers = result.rows;
-    const summary = { successful: 0, failed: 0, skipped: 0, errors: [] };
+    const summary = { successful: 0, failed: 0, errors: [] };
 
     for (const t of teachers) {
       const r = await LeaveBalance.carryForwardLeave(t.id, fromYear, toYear);
@@ -49,7 +51,7 @@ const runYearEndCarryForwardJob = async (manualFromYear = null, manualToYear = n
 
     return {
       success: true,
-      message: `Year-end carry forward completed (${fromYear} → ${toYear})`,
+      message: `Year-end carry forward completed (FY ${fromYear}-${fromYear + 1} → FY ${toYear}-${toYear + 1})`,
       processed: teachers.length,
       ...summary,
       fromYear,
@@ -71,13 +73,14 @@ const initYearEndCarryForwardCronJob = () => {
     return null;
   }
 
-  // At 00:05 on January 1st every year (IST)
-  const job = cron.schedule('5 0 1 1 *', async () => {
-    console.log('[YearEndJob] Cron triggered');
+  // March 31 at 23:55 IST — last day of the Indian financial year
+  // Runs ~6 minutes before the April 1 annual credit job
+  const job = cron.schedule('55 23 31 3 *', async () => {
+    console.log('[YearEndJob] Cron triggered — running FY-end carry forward...');
     await runYearEndCarryForwardJob();
   }, { scheduled: true, timezone: 'Asia/Kolkata' });
 
-  console.log('[YearEndJob] Scheduled for Jan 1 at 00:05 IST');
+  console.log('[YearEndJob] Scheduled for March 31 at 23:55 IST');
   return job;
 };
 
