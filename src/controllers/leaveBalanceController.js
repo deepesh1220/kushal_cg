@@ -1,12 +1,12 @@
 /**
  * Leave Balance Controller
- * Handles APIs for leave balance management, monthly credits, and principal views
+ * Handles APIs for leave balance management, annual credits, and principal views
  */
 
 const LeaveBalance = require('../models/LeaveBalance');
 const Leave = require('../models/Leave');
 const { pool } = require('../config/db');
-const { runMonthlyLeaveCreditJob, getJobStatus } = require('../jobs/leaveCreditJob');
+const { runAnnualLeaveCreditJob, getJobStatus } = require('../jobs/leaveCreditJob');
 const { runYearEndCarryForwardJob } = require('../jobs/yearEndCarryForwardJob');
 
 // ─── GET /api/leave-balance/my ───────────────────────────────────────────────
@@ -14,21 +14,21 @@ const { runYearEndCarryForwardJob } = require('../jobs/yearEndCarryForwardJob');
 const getMyBalance = async (req, res) => {
   try {
     const userId = req.user.id;
-    const year = req.query.year || new Date().getFullYear();
+    const fy = req.query.year ? parseInt(req.query.year) : LeaveBalance.getCurrentFinancialYear();
 
-    // Ensure balance row exists, then lazy-credit current month
-    await LeaveBalance.getOrCreateBalance(userId, year);
-    if (parseInt(year) === new Date().getFullYear()) {
-      await LeaveBalance.ensureCurrentMonthCredit(userId);
+    // Ensure balance row exists, then lazy-credit annual EL for current FY
+    await LeaveBalance.getOrCreateBalance(userId, fy);
+    if (fy === LeaveBalance.getCurrentFinancialYear()) {
+      await LeaveBalance.ensureAnnualCredit(userId);
     }
 
-    const balance = await LeaveBalance.getBalanceByUserId(userId, year);
+    const balance = await LeaveBalance.getBalanceByUserId(userId, fy);
 
-    // Get monthly credit history
-    const creditHistory = await LeaveBalance.getMonthlyCreditHistory(userId, year);
+    // Get annual credit history
+    const creditHistory = await LeaveBalance.getAnnualCreditHistory(userId, fy);
 
     // Get deduction history
-    const deductionHistory = await LeaveBalance.getDeductionHistory(userId, year);
+    const deductionHistory = await LeaveBalance.getDeductionHistory(userId, fy);
 
     return res.status(200).json({
       status: true,
@@ -40,11 +40,11 @@ const getMyBalance = async (req, res) => {
           remainingBalance: parseFloat(balance.remaining_balance),
           carriedForward: parseFloat(balance.carried_forward),
           closingBalance: parseFloat(balance.closing_balance || 0),
+          financialYear: `${balance.year}-${balance.year + 1}`,
           year: balance.year,
           updatedAt: balance.updated_at
         },
         creditHistory: creditHistory.map(ch => ({
-          month: ch.month,
           creditedLeave: parseFloat(ch.credited_leave),
           status: ch.status,
           creditedAt: ch.credited_at
@@ -73,7 +73,7 @@ const getMyBalance = async (req, res) => {
 const getTeacherBalance = async (req, res) => {
   try {
     const teacherId = req.params.teacherId;
-    const year = req.query.year || new Date().getFullYear();
+    const fy = req.query.year ? parseInt(req.query.year) : LeaveBalance.getCurrentFinancialYear();
 
     // Validate teacher belongs to principal's UDISE
     const user = req.user;
@@ -99,7 +99,7 @@ const getTeacherBalance = async (req, res) => {
       }
     }
 
-    const balance = await LeaveBalance.getBalanceByUserId(teacherId, year);
+    const balance = await LeaveBalance.getBalanceByUserId(teacherId, fy);
 
     if (!balance) {
       return res.status(404).json({ status: false, message: 'No leave balance found for this teacher.' });
@@ -118,6 +118,7 @@ const getTeacherBalance = async (req, res) => {
           totalUsed: parseFloat(balance.total_used),
           remainingBalance: parseFloat(balance.remaining_balance),
           carriedForward: parseFloat(balance.carried_forward),
+          financialYear: `${balance.year}-${balance.year + 1}`,
           year: balance.year,
           updatedAt: balance.updated_at
         }
@@ -135,7 +136,7 @@ const getTeacherBalance = async (req, res) => {
 const getSchoolBalances = async (req, res) => {
   try {
     const user = req.user;
-    const year = req.query.year || new Date().getFullYear();
+    const fy = req.query.year ? parseInt(req.query.year) : LeaveBalance.getCurrentFinancialYear();
 
     console.log('[getSchoolBalances] User:', { id: user.id, role: user.role_name, udise_code: user.udise_code, org: user.organization_name });
 
@@ -147,9 +148,9 @@ const getSchoolBalances = async (req, res) => {
         return res.status(403).json({ status: false, message: 'Your account is not linked to any VTP organization name.' });
       }
       const vtpName = user.organization_name;
-      console.log('[getSchoolBalances] Fetching balances for VTP:', vtpName, 'Year:', year);
-      balances = await LeaveBalance.getBalancesByVtpName(vtpName, year);
-      summary = await LeaveBalance.getBalanceSummaryByVtpName(vtpName, year);
+      console.log('[getSchoolBalances] Fetching balances for VTP:', vtpName, 'FY:', fy);
+      balances = await LeaveBalance.getBalancesByVtpName(vtpName, fy);
+      summary = await LeaveBalance.getBalanceSummaryByVtpName(vtpName, fy);
     } else {
       if (!['super_admin', 'admin'].includes(user.role_name)) {
         if (!user.udise_code) {
@@ -157,9 +158,9 @@ const getSchoolBalances = async (req, res) => {
         }
       }
       const udiseCode = user.udise_code;
-      console.log('[getSchoolBalances] Fetching balances for UDISE:', udiseCode, 'Year:', year);
-      balances = await LeaveBalance.getBalancesByUdise(udiseCode, year);
-      summary = await LeaveBalance.getBalanceSummaryByUdise(udiseCode, year);
+      console.log('[getSchoolBalances] Fetching balances for UDISE:', udiseCode, 'FY:', fy);
+      balances = await LeaveBalance.getBalancesByUdise(udiseCode, fy);
+      summary = await LeaveBalance.getBalanceSummaryByUdise(udiseCode, fy);
     }
 
     console.log('[getSchoolBalances] Balances returned:', balances.length);
@@ -213,19 +214,21 @@ const getSchoolBalances = async (req, res) => {
 };
 
 // ─── POST /api/leave-balance/credit-monthly ──────────────────────────────────
-// Trigger monthly leave credit job (admin only)
+// Trigger annual leave credit job (admin only).
+// financialYear in body: starting year of the FY (e.g. 2026 = FY 2026-27). Defaults to current FY.
 const triggerMonthlyCredit = async (req, res) => {
   try {
-    const { year, month, userId } = req.body;
+    const { financialYear, userId } = req.body;
+    const fy = financialYear ? parseInt(financialYear) : LeaveBalance.getCurrentFinancialYear();
 
     let result;
 
     if (userId) {
-      // Credit specific user
-      result = await LeaveBalance.creditMonthlyLeave(userId, year || new Date().getFullYear(), month || (new Date().getMonth() + 1), 1.5);
+      // Credit specific user for the given FY
+      result = await LeaveBalance.creditAnnualLeave(userId, fy);
     } else {
-      // Run full job
-      result = await runMonthlyLeaveCreditJob(year, month);
+      // Run full annual credit job for all eligible VTs
+      result = await runAnnualLeaveCreditJob(fy);
     }
 
     return res.status(result.success ? 200 : 400).json({
@@ -235,7 +238,7 @@ const triggerMonthlyCredit = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Trigger monthly credit error:', error.message);
+    console.error('Trigger annual credit error:', error.message);
     return res.status(500).json({ status: false, message: error.message });
   }
 };
@@ -261,9 +264,9 @@ const getCronStatus = async (req, res) => {
 // Initialize leave balances for all VTs
 const initializeBalances = async (req, res) => {
   try {
-    const year = req.body.year || new Date().getFullYear();
+    const fy = req.body.year ? parseInt(req.body.year) : LeaveBalance.getCurrentFinancialYear();
 
-    const result = await LeaveBalance.initializeBalancesForAllVTs(year);
+    const result = await LeaveBalance.initializeBalancesForAllVTs(fy);
 
     return res.status(200).json({
       status: true,
@@ -288,7 +291,8 @@ const adjustBalance = async (req, res) => {
       return res.status(400).json({ status: false, message: 'userId, amount, and reason are required.' });
     }
 
-    const result = await LeaveBalance.manualAdjustment(userId, year || new Date().getFullYear(), amount, reason, adjustedBy);
+    const fy = year ? parseInt(year) : LeaveBalance.getCurrentFinancialYear();
+    const result = await LeaveBalance.manualAdjustment(userId, fy, amount, reason, adjustedBy);
 
     return res.status(result.success ? 200 : 400).json({
       status: result.success,
@@ -429,7 +433,7 @@ const triggerYearEnd = async (req, res) => {
 };
 
 // ─── GET /api/leave-balance/policy ─────────────────────────────────────────
-// Expose leave policy constants (monthly credit, yearly cap, carry forward, monthly cap)
+// Expose leave policy constants (annual credit, yearly cap, carry forward)
 const getPolicy = async (_req, res) => {
   return res.status(200).json({ status: true, data: LeaveBalance.POLICY });
 };

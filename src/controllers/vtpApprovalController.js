@@ -270,8 +270,8 @@ const approveLeaveByVtp = async (req, res) => {
     if (updated.leave_approved) {
       try {
         const LeaveBalance = require('../models/LeaveBalance');
-        // Lazy credit current month if not yet credited
-        await LeaveBalance.ensureCurrentMonthCredit(updated.user_id);
+        // Lazy-credit annual EL if not yet credited this FY
+        await LeaveBalance.ensureAnnualCredit(updated.user_id);
 
         // Prevent duplicate deduction: check if already deducted
         const checkDeduction = await pool.query(`
