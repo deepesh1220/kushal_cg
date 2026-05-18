@@ -584,7 +584,7 @@ const getDailyReport = async (req, res) => {
     const endStr = endDate.format('YYYY-MM-DD');
 
     const leaveRes = await pool.query(`
-      SELECT from_date, to_date FROM leave_requests 
+      SELECT from_date, to_date, reason FROM leave_requests 
       WHERE user_id = $1 AND leave_approved = TRUE AND from_date <= $2 AND to_date >= $3
     `, [userId, endStr, startStr]);
     const leaves = leaveRes.rows;
@@ -623,14 +623,15 @@ const getDailyReport = async (req, res) => {
 
       if (!isPresentOrOther) {
         // Check Leave in memory
-        const isLeave = leaves.some(l => {
+        const foundLeave = leaves.find(l => {
           const lFrom = dayjs(l.from_date).format('YYYY-MM-DD');
           const lTo = dayjs(l.to_date).format('YYYY-MM-DD');
           return d >= lFrom && d <= lTo;
         });
 
-        if (isLeave) {
+        if (foundLeave) {
           status = 'leave';
+          leave_reason = foundLeave.reason || null;
         } else {
           // Check OD in memory
           const isOd = ods.some(o => {
