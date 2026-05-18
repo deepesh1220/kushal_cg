@@ -19,12 +19,12 @@ const getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
 // ─── POST /api/attendance/check-in ───────────────────────────────────────────
 // VT marks their own attendance (GPS + Face verification required)
 const checkIn = async (req, res) => {
-  
+
   const userId = req.user.id;
   const { latitude, longitude, remarks, isFakeGPS, checkin_photo } = req.body;
-   console.log(`${latitude,longitude, remarks }`)
+  console.log(`${latitude, longitude, remarks}`)
   // ── Field validation ────────────────────────────────────────────────────────
-  if (!latitude || !longitude  || isFakeGPS === undefined) {
+  if (!latitude || !longitude || isFakeGPS === undefined) {
     return res.status(400).json({
       status: false,
       message: 'latitude, longitude, remarks and isFakeGPS are required.'
@@ -85,10 +85,10 @@ const checkIn = async (req, res) => {
         // Time window check
         if (school.sch_open_time) {
           const now = new Date();
-          const currentMins    = now.getHours() * 60 + now.getMinutes();
+          const currentMins = now.getHours() * 60 + now.getMinutes();
           const [openH, openM] = school.sch_open_time.split(':').map(Number);
-          const openTotalMins  = openH * 60 + openM;
-          const graceMins      = school.grace_time ? parseInt(school.grace_time, 10) : 0;
+          const openTotalMins = openH * 60 + openM;
+          const graceMins = school.grace_time ? parseInt(school.grace_time, 10) : 0;
           const lateCutoffMins = openTotalMins + graceMins;
 
           let closeTotalMins = null;
@@ -164,17 +164,17 @@ const checkIn = async (req, res) => {
     // ── ──────────────────────────────────────────────────────────────────────
 
     const record = await Attendance.create({
-      user_id:          userId,
-      date:             today,
-      check_in_time:    new Date(),
-      status:           'present',
+      user_id: userId,
+      date: today,
+      check_in_time: new Date(),
+      status: 'present',
       latitude,
       longitude,
       remarks,
-      marked_by:        userId,
+      marked_by: userId,
       face_match_score: matchPercent,
-      checkin_photo:    null,
-      photo_path:       null,
+      checkin_photo: null,
+      photo_path: null,
     });
 
     return res.status(201).json({
@@ -195,14 +195,14 @@ const checkIn = async (req, res) => {
 // VT marks their check-out (GPS + Face verification required)
 const checkOut = async (req, res) => {
   const userId = req.user.id;
-  const { latitude, longitude, isFakeGPS , checkout_photo} = req.body;
-  if(!latitude || !longitude  || isFakeGPS === undefined){
+  const { latitude, longitude, isFakeGPS, checkout_photo } = req.body;
+  if (!latitude || !longitude || isFakeGPS === undefined) {
     return res.status(400).json({
       status: false,
       message: 'checkout_photo (base64) is required for face verification.',
     });
   }
-  
+
   if (isFakeGPS === true) {
     return res.status(403).json({
       status: false,
@@ -264,9 +264,9 @@ const checkOut = async (req, res) => {
         // Time check
         if (school.sch_open_time) {
           const now = new Date();
-          const currentMins    = now.getHours() * 60 + now.getMinutes();
+          const currentMins = now.getHours() * 60 + now.getMinutes();
           const [openH, openM] = school.sch_open_time.split(':').map(Number);
-          const openTotalMins  = openH * 60 + openM;
+          const openTotalMins = openH * 60 + openM;
           if (currentMins < openTotalMins) {
             return res.status(403).json({
               status: false,
@@ -531,35 +531,41 @@ const getDailyReport = async (req, res) => {
   }
 
   const validTypes = ['date', 'week', 'month', 'date_range'];
-  const resolvedType = validTypes.includes(filter_type) ? filter_type : 'month';
+  let resolvedType = validTypes.includes(filter_type) ? filter_type : 'month';
+  let resolvedValue = filter_value || null;
+
+  if (!resolvedValue) {
+    resolvedType = 'date_range';
+    resolvedValue = `${dayjs().startOf('month').format('YYYY-MM-DD')},${dayjs().format('YYYY-MM-DD')}`;
+  }
 
   try {
     const { records, totals } = await Attendance.getDailyReport(parseInt(userId), {
       filter_type: resolvedType,
-      filter_value: filter_value || null,
+      filter_value: resolvedValue,
       limit: 1000,
       offset: 0,
     });
 
     let startDate, endDate;
-    if (resolvedType === 'date' && filter_value) {
-      startDate = dayjs(filter_value);
-      endDate = dayjs(filter_value);
-    } else if (resolvedType === 'week' && filter_value) {
-      const [yearStr, weekStr] = filter_value.split('-W');
+    if (resolvedType === 'date' && resolvedValue) {
+      startDate = dayjs(resolvedValue);
+      endDate = dayjs(resolvedValue);
+    } else if (resolvedType === 'week' && resolvedValue) {
+      const [yearStr, weekStr] = resolvedValue.split('-W');
       startDate = dayjs().year(parseInt(yearStr)).isoWeek(parseInt(weekStr)).startOf('isoWeek');
       endDate = dayjs().year(parseInt(yearStr)).isoWeek(parseInt(weekStr)).endOf('isoWeek');
-    } else if (resolvedType === 'month' && filter_value) {
-      const [yearStr, monthStr] = filter_value.split('-');
+    } else if (resolvedType === 'month' && resolvedValue) {
+      const [yearStr, monthStr] = resolvedValue.split('-');
       startDate = dayjs(`${yearStr}-${monthStr}-01`).startOf('month');
       endDate = dayjs(`${yearStr}-${monthStr}-01`).endOf('month');
-    } else if (resolvedType === 'date_range' && filter_value) {
-      const [from, to] = filter_value.split(',');
+    } else if (resolvedType === 'date_range' && resolvedValue) {
+      const [from, to] = resolvedValue.split(',');
       startDate = dayjs(from);
       endDate = to ? dayjs(to) : dayjs(from);
     } else {
       startDate = dayjs().startOf('month');
-      endDate = dayjs().endOf('month');
+      endDate = dayjs();
     }
 
     const allDates = [];
@@ -573,7 +579,30 @@ const getDailyReport = async (req, res) => {
     const parsedOffset = offset ? parseInt(offset) : 0;
     const paginatedDates = allDates.slice(parsedOffset, parsedOffset + parsedLimit);
 
-    const enriched = await Promise.all(paginatedDates.map(async (d) => {
+    // Fetch Leaves and ODs overlapping the range for fast memory processing
+    const startStr = startDate.format('YYYY-MM-DD');
+    const endStr = endDate.format('YYYY-MM-DD');
+
+    const leaveRes = await pool.query(`
+      SELECT from_date, to_date FROM leave_requests 
+      WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $3
+    `, [userId, endStr, startStr]);
+    const leaves = leaveRes.rows;
+
+    const odRes = await pool.query(`
+      SELECT from_date, to_date FROM od_requests 
+      WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $3
+    `, [userId, endStr, startStr]);
+    const ods = odRes.rows;
+
+    const years = [...new Set(allDates.map(d => dayjs(d).year()))];
+    const govHolidaysByYear = {};
+    for (const y of years) {
+      const hols = await Report._getGovHolidays(y);
+      govHolidaysByYear[y] = hols instanceof Set ? hols : (Array.isArray(hols) ? new Set(hols) : new Set());
+    }
+
+    const allEnriched = allDates.map((d) => {
       const dbRecord = records.find(r => dayjs(r.date).format('YYYY-MM-DD') === d);
 
       let status = 'absent';
@@ -593,28 +622,31 @@ const getDailyReport = async (req, res) => {
       }
 
       if (!isPresentOrOther) {
-        // Check Leave
-        const leaveRes = await pool.query(`
-          SELECT id FROM leave_requests 
-          WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $2
-        `, [userId, d]);
+        // Check Leave in memory
+        const isLeave = leaves.some(l => {
+          const lFrom = dayjs(l.from_date).format('YYYY-MM-DD');
+          const lTo = dayjs(l.to_date).format('YYYY-MM-DD');
+          return d >= lFrom && d <= lTo;
+        });
 
-        if (leaveRes.rows.length > 0) {
+        if (isLeave) {
           status = 'leave';
         } else {
-          // Check OD
-          const odRes = await pool.query(`
-            SELECT id FROM od_requests 
-            WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $2
-          `, [userId, d]);
+          // Check OD in memory
+          const isOd = ods.some(o => {
+            const oFrom = dayjs(o.from_date).format('YYYY-MM-DD');
+            const oTo = dayjs(o.to_date).format('YYYY-MM-DD');
+            return d >= oFrom && d <= oTo;
+          });
 
-          if (odRes.rows.length > 0) {
+          if (isOd) {
             status = 'onduty';
           } else {
-            // Check Gov Holiday
+            // Check Gov Holiday in memory
             const yearHol = dayjs(d).year();
-            const govHolidays = await Report._getGovHolidays(yearHol);
-            if (govHolidays.has(d)) {
+            const isGovHoliday = govHolidaysByYear[yearHol] && govHolidaysByYear[yearHol].has(d);
+
+            if (isGovHoliday) {
               status = 'gov holiday';
             } else if (dayjs(d).day() === 0) {
               status = 'holiday';
@@ -635,24 +667,45 @@ const getDailyReport = async (req, res) => {
         leave_reason,
         working_hours,
       };
-    }));
+    });
+
+    // Calculate dynamic summary from allEnriched
+    const dynamicSummary = {
+      total_present: 0,
+      total_absent: 0,
+      total_leave: 0,
+      total_onduty: 0,
+      total_late: 0,
+      total_half_day: 0,
+      total_working_hours: 0,
+    };
+
+    allEnriched.forEach(r => {
+      if (r.status === 'present') dynamicSummary.total_present++;
+      else if (r.status === 'absent') dynamicSummary.total_absent++;
+      else if (r.status === 'leave' || r.status === 'on_leave') dynamicSummary.total_leave++;
+      else if (r.status === 'onduty') dynamicSummary.total_onduty++;
+      else if (r.status === 'late') dynamicSummary.total_late++;
+      else if (r.status === 'half_day') dynamicSummary.total_half_day++;
+
+      if (r.working_hours) {
+        dynamicSummary.total_working_hours += r.working_hours;
+      }
+    });
+
+    dynamicSummary.total_working_hours = parseFloat(dynamicSummary.total_working_hours.toFixed(2));
+
+    const enriched = allEnriched.slice(parsedOffset, parsedOffset + parsedLimit);
 
     return res.status(200).json({
       status: true,
-      filter: { type: resolvedType, value: filter_value || null },
+      filter: { type: resolvedType, value: resolvedValue },
       pagination: {
         limit: parsedLimit,
         offset: parsedOffset,
         count: enriched.length,
       },
-      summary: {
-        total_present: parseInt(totals.total_present),
-        total_absent: parseInt(totals.total_absent),
-        total_leave: parseInt(totals.total_leave),
-        total_late: parseInt(totals.total_late),
-        total_half_day: parseInt(totals.total_half_day),
-        total_working_hours: parseFloat(totals.total_working_hours),
-      },
+      summary: dynamicSummary,
       data: enriched,
     });
   } catch (error) {
