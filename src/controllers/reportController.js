@@ -154,7 +154,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
     summary: { totalPresent, totalAbsent, totalHolidays, totalSundays, totalLeaves },
     leaveDetails: {
       fyLabel,
-      annualEntitlement: 12,
+      annualEntitlement: 13,
       totalEarned: parseFloat(leaveBalance.total_earned || 0),
       leavesTaken: parseFloat(leaveBalance.total_used || 0),
       remainingLeave: parseFloat(leaveBalance.remaining_balance || 0),
@@ -431,13 +431,13 @@ const getMonthlyVtReportsList = async (req, res) => {
     // admin / super_admin: no scope restriction
 
     // Optional filters
-    if (udise_code)  { queryArgs.push(udise_code);         whereClauses.push(`v.udise_code = $${queryArgs.length}`); }
-    if (vtp_id)      { queryArgs.push(vtp_id);             whereClauses.push(`v.vtp_id = $${queryArgs.length}`);    }
-    if (block_name)  { queryArgs.push(`%${block_name}%`); whereClauses.push(`v.block_name ILIKE $${queryArgs.length}`); }
+    if (udise_code) { queryArgs.push(udise_code); whereClauses.push(`v.udise_code = $${queryArgs.length}`); }
+    if (vtp_id) { queryArgs.push(vtp_id); whereClauses.push(`v.vtp_id = $${queryArgs.length}`); }
+    if (block_name) { queryArgs.push(`%${block_name}%`); whereClauses.push(`v.block_name ILIKE $${queryArgs.length}`); }
     // Location hierarchy filters (use mst_schools join which is already in baseQuery)
     if (district_cd) { queryArgs.push(parseInt(district_cd, 10)); whereClauses.push(`s.district_cd = $${queryArgs.length}`); }
-    if (block_cd)    { queryArgs.push(parseInt(block_cd, 10));    whereClauses.push(`s.block_cd = $${queryArgs.length}`);    }
-    if (cluster_cd)  { queryArgs.push(parseInt(cluster_cd, 10));  whereClauses.push(`s.cluster_cd = $${queryArgs.length}`);  }
+    if (block_cd) { queryArgs.push(parseInt(block_cd, 10)); whereClauses.push(`s.block_cd = $${queryArgs.length}`); }
+    if (cluster_cd) { queryArgs.push(parseInt(cluster_cd, 10)); whereClauses.push(`s.cluster_cd = $${queryArgs.length}`); }
 
     // Status filter maps to role-relevant column
     let statusCol = 'hm_approval_status';

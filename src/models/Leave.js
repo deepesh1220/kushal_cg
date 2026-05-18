@@ -295,6 +295,7 @@ class Leave {
       JOIN  users            u ON u.id  = l.user_id
       JOIN  vt_staff_details v ON v.id  = u.vt_staff_id
       LEFT JOIN users        r ON r.id  = l.reviewed_by
+      LEFT JOIN leave_excess_records ler ON ler.leave_request_id = l.id
       WHERE v.udise_code = $1
       ${filterClauses}
     `;
@@ -322,7 +323,9 @@ class Leave {
          l.reason,
          l.created_at   AS applied_at,
          r.name         AS reviewed_by_name,
-         l.reviewed_at
+         l.reviewed_at,
+         ler.approved_leave_days,
+         ler.excess_leave
        ${baseWhere}
        ORDER BY l.created_at DESC
        LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
@@ -379,6 +382,7 @@ class Leave {
       JOIN  users            u ON u.id  = l.user_id
       JOIN  vt_staff_details v ON v.id  = u.vt_staff_id
       LEFT JOIN users        r ON r.id  = l.reviewed_by
+      LEFT JOIN leave_excess_records ler ON ler.leave_request_id = l.id
       WHERE v.vtp_name = $1
       ${filterClauses}
     `;
@@ -410,7 +414,9 @@ class Leave {
          l.reason,
          l.created_at   AS applied_at,
          r.name         AS reviewed_by_name,
-         l.reviewed_at
+         l.reviewed_at,
+         ler.approved_leave_days,
+         ler.excess_leave
        ${baseWhere}
        ORDER BY l.created_at DESC
        LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
