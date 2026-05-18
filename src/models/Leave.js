@@ -559,7 +559,7 @@ class Leave {
       SELECT from_date, to_date
       FROM leave_requests
       WHERE user_id = $1
-      AND status = 'approved'
+      AND leave_approved = TRUE
       AND from_date <= $3
       AND to_date >= $2
     `,

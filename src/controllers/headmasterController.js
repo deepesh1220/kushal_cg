@@ -311,6 +311,62 @@ const updateSchoolLatLong = async (req, res, next) => {
   }
 };
 
+// ─── POST /api/headmaster/vt-list ──────────────────────────────────────────
+// Returns VTs mapped to the logged-in headmaster's school with optional filtering.
+const getVtList = async (req, res, next) => {
+  try {
+    const udiseCode = req.user.udise_code;
+    const { date, vtId } = req.body;
+
+    if (!udiseCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Your account is not linked to a school UDISE code.',
+      });
+    }
+
+    const filterDate = date || new Date().toISOString().split('T')[0];
+    const params = [udiseCode, filterDate];
+    let vtFilter = '';
+
+    if (vtId) {
+      params.push(vtId);
+      vtFilter = `AND u.id = $3`;
+    }
+
+    // Fetch VTs linked to this UDISE code (Registered and Pending)
+    const query = `
+      SELECT 
+        u.id, 
+        u.name, 
+        u.email, 
+        u.phone,
+        u.vt_approval_status,
+        u.vtp_approval_status,
+        u.principal_updated_at as vt_approval_time,
+        u.vtp_updated_at as vtp_approval_time,
+        u.is_active,
+        ar.status as today_status,
+        ar.id as attendance_id,
+        ar.date as attendance_date
+      FROM users u
+      LEFT JOIN attendance_records ar ON ar.user_id = u.id AND ar.date = $2
+      WHERE u.udise_code = $1 
+      AND u.role_id = (SELECT id FROM roles WHERE name = 'vocational_teacher')
+      ${vtFilter}
+      ORDER BY u.name ASC;
+    `;
+    const result = await pool.query(query, params);
+
+    res.json({
+      success: true,
+      data: result.rows,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── POST /api/headmaster/mark-vt-attendance ──────────────────────────────
 // Allows headmaster to mark attendance for VTs in their school.
 const markVtAttendance = async (req, res, next) => {
@@ -329,7 +385,7 @@ const markVtAttendance = async (req, res, next) => {
     if (!user_id || !date || !status) {
       return res.status(400).json({
         status: 'error',
-        message: 'user_id, date, and status are required.',
+        message: 'vtId, date, and status are required.',
       });
     }
 
@@ -406,7 +462,7 @@ const markVtAttendance = async (req, res, next) => {
     }
 
     res.status(200).json({
-      status: 'success',
+      success: true,
       message: `Attendance marked as ${status} successfully.`,
       data: {
         ...record,
@@ -421,7 +477,7 @@ const markVtAttendance = async (req, res, next) => {
 // ─── PATCH /api/headmaster/update-vt-attendance/:id ─────────────────────────
 const updateVtAttendance = async (req, res, next) => {
   try {
-    const { id } = req.params;
+    const { id } = req.params; // attendanceId
     const { status, check_in_time, check_out_time, remarks } = req.body;
     const headmasterId = req.user.id;
     const udiseCode = req.user.udise_code;
@@ -515,7 +571,7 @@ const updateVtAttendance = async (req, res, next) => {
     }
 
     res.json({
-      status: 'success',
+      success: true,
       message: 'Attendance record updated successfully',
       data: {
         ...record,
@@ -540,6 +596,7 @@ module.exports = {
   getSchoolTiming,
   getSchoolDetails,
   updateSchoolLatLong,
+  getVtList,
   markVtAttendance,
   updateVtAttendance,
 };

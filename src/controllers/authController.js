@@ -660,12 +660,12 @@ const getMe = async (req, res) => {
   try {
     // If not provided in body/query, default to the currently authenticated user and today's date
     const { userId, date } = req.body;
-    let processedDate = date;
+    let processedDate = date || new Date().toISOString().split('T')[0];
 
     // Normalize date if it comes in DD-MM-YYYY or DD/MM/YYYY format
     if (processedDate && processedDate.match(/^\d{2}-\d{2}-\d{4}$/)) {
       const [day, month, year] = processedDate.split('-');
-      processedDate =`${year}-${month}-${day}`;
+      processedDate = `${year}-${month}-${day}`;
     } else if (processedDate && processedDate.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
       const [day, month, year] = processedDate.split('/');
       processedDate = `${year}-${month}-${day}`;
@@ -693,7 +693,7 @@ const getMe = async (req, res) => {
       // Check for Leave
       const leaveRes = await pool.query(`
         SELECT id FROM leave_requests 
-        WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $2
+        WHERE user_id = $1 AND leave_approved = TRUE AND from_date <= $2 AND to_date >= $2
       `, [userId, processedDate]);
 
       if (leaveRes.rows.length > 0) {
@@ -702,7 +702,7 @@ const getMe = async (req, res) => {
         // Check for OnDuty
         const odRes = await pool.query(`
           SELECT id FROM od_requests 
-          WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $2
+          WHERE user_id = $1 AND od_approved = TRUE AND from_date <= $2 AND to_date >= $2
         `, [userId, processedDate]);
 
         if (odRes.rows.length > 0) {
@@ -712,9 +712,17 @@ const getMe = async (req, res) => {
           const [yearStr, monthStr, dayStr] = processedDate.split('-');
           const yearHol = parseInt(yearStr, 10);
           const dateObjForHol = new Date(yearHol, parseInt(monthStr, 10) - 1, parseInt(dayStr, 10));
-          const govHolidays = await Report._getGovHolidays(yearHol);
+          const govHolidaysRaw = await Report._getGovHolidays(yearHol);
+          // Extract dates safely
+          const govHolidays = Array.isArray(govHolidaysRaw)
+            ? govHolidaysRaw.map(h => h.holiday_date || h.date)
+            : [];
 
-         if (govHolidays.includes(processedDate)) {
+          if (govHolidays.includes(processedDate)) {
+            attendanceData.status = 'gov holiday';
+          }
+
+          if (govHolidays.includes(processedDate)) {
             attendanceData.status = 'gov holiday';
           } else if (dateObjForHol.getDay() === 0) {
             attendanceData.status = 'holiday'; // Sunday
@@ -753,19 +761,19 @@ const getMe = async (req, res) => {
         date_requested: processedDate,
         monthly_summary: {
           month: `${year}-${String(month).padStart(2, '0')}`,
-      present: monthlySummary.present,
-      absent: monthlySummary.absent,
-      late: monthlySummary.late,
-      half_day: monthlySummary.half_day,
-      on_leave: monthlySummary.on_leave,
+          present: monthlySummary.present,
+          absent: monthlySummary.absent,
+          late: monthlySummary.late,
+          half_day: monthlySummary.half_day,
+          on_leave: monthlySummary.on_leave,
         },
-  vt_profile: vtProfile
-}
+        vt_profile: vtProfile
+      }
     });
   } catch (error) {
-  console.error('getMe error:', error.message);
-  return res.status(500).json({ status: false, message: 'Server error while fetching user profile and attendance.' });
-}
+    console.error('getMe error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error while fetching user profile and attendance.' });
+  }
 };
 
 // ─── POST /api/auth/login/vt ──────────────────────────────────────────────────

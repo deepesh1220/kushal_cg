@@ -216,6 +216,85 @@ const Attendance = {
     return { records: result.rows, totalCount };
   },
 
+  // ─── Get attendance for a DEO's district with optional cascading filters ─────
+  async findByDistrict(districtCd, { block_cd, cluster_cd, udise_code, user_id, status, filter_type = 'month', filter_value, limit = 50, offset = 0 } = {}) {
+    const params = [districtCd];
+    let query = `
+      SELECT
+        ar.id, ar.date, ar.check_in_time, ar.check_out_time,
+        ar.status, ar.latitude, ar.longitude, ar.checkout_latitude, ar.checkout_longitude, ar.photo_path, ar.remarks,
+        u.name AS vt_name, u.phone AS vt_phone, u.id AS vt_user_id,
+        v.district_name, v.block_name, v.school_name, v.trade
+      FROM attendance_records ar
+      JOIN users u ON u.id = ar.user_id
+      JOIN vt_staff_details v ON v.id = u.vt_staff_id
+      JOIN mst_schools s ON s.udise_sch_code = v.udise_code
+      WHERE s.district_cd = $1 AND s.vtp = 1
+    `;
+
+    if (block_cd) {
+      params.push(block_cd);
+      query += ` AND s.block_cd = $${params.length}`;
+    }
+
+    if (cluster_cd) {
+      params.push(cluster_cd);
+      query += ` AND s.cluster_cd = $${params.length}`;
+    }
+
+    if (udise_code) {
+      params.push(udise_code);
+      query += ` AND s.udise_sch_code = $${params.length}`;
+    }
+
+    if (user_id) {
+      params.push(user_id);
+      query += ` AND ar.user_id = $${params.length}`;
+    }
+    
+    if (status) {
+      params.push(status);
+      query += ` AND ar.status = $${params.length}`;
+    }
+
+    if (filter_type === 'date' && filter_value) {
+      params.push(filter_value);
+      query += ` AND ar.date = $${params.length}`;
+    } else if (filter_type === 'week' && filter_value) {
+      const [yearStr, weekStr] = filter_value.split('-W');
+      params.push(parseInt(yearStr), parseInt(weekStr));
+      query += ` AND EXTRACT(ISOYEAR FROM ar.date) = $${params.length - 1}
+                 AND EXTRACT(WEEK     FROM ar.date) = $${params.length}`;
+    } else if (filter_type === 'month' && filter_value) {
+      const [yearStr, monthStr] = filter_value.split('-');
+      params.push(parseInt(yearStr), parseInt(monthStr));
+      query += ` AND EXTRACT(YEAR  FROM ar.date) = $${params.length - 1}
+                 AND EXTRACT(MONTH FROM ar.date) = $${params.length}`;
+    } else if (filter_type === 'date_range' && filter_value) {
+      const [fromDate, toDate] = filter_value.split(',');
+      if (fromDate && toDate) {
+        params.push(fromDate, toDate);
+        query += ` AND ar.date >= $${params.length - 1} AND ar.date <= $${params.length}`;
+      } else if (fromDate) {
+        params.push(fromDate);
+        query += ` AND ar.date >= $${params.length}`;
+      }
+    }
+
+    // Get Total Count before pagination
+    const countQuery = `SELECT COUNT(*) FROM (${query}) as total_rows`;
+    const countResult = await pool.query(countQuery, params);
+    const totalCount = parseInt(countResult.rows[0].count);
+
+    params.push(limit);
+    query += ` ORDER BY ar.date DESC, ar.check_in_time DESC LIMIT $${params.length}`;
+    params.push(offset);
+    query += ` OFFSET $${params.length}`;
+
+    const result = await pool.query(query, params);
+    return { records: result.rows, totalCount };
+  },
+
   // ─── Update an attendance record ─────────────────────────────────────────────
   async update(id, { check_in_time, check_out_time, status, remarks, photo_path }) {
     const result = await pool.query(`

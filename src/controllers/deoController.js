@@ -615,10 +615,60 @@ const getDistrictVtTeachers = async (req, res) => {
   }
 };
 
+// POST /api/deo/attendance
+const getDeoAttendance = async (req, res) => {
+  try {
+    const { user, deo } = await resolveDeoProfile(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({ status: false, message: 'User not found.' });
+    }
+    if (!deo) {
+      return res.status(403).json({ status: false, message: 'DEO profile not found.' });
+    }
+
+    const districtCd = deo.district_cd;
+    const { block_cd, cluster_cd, udise_code, user_id, status, filter_type, filter_value, limit, page } = req.body;
+
+    const parsedLimit = limit ? parseInt(limit, 10) : 50;
+    const parsedPage = page ? parseInt(page, 10) : 1;
+    const offset = (parsedPage - 1) * parsedLimit;
+
+    const Attendance = require('../models/Attendance');
+
+    const { records, totalCount } = await Attendance.findByDistrict(districtCd, {
+      block_cd,
+      cluster_cd,
+      udise_code,
+      user_id,
+      status,
+      filter_type,
+      filter_value,
+      limit: parsedLimit,
+      offset,
+    });
+
+    return res.status(200).json({
+      status: true,
+      pagination: {
+        total: totalCount,
+        page: parsedPage,
+        limit: parsedLimit,
+        total_pages: Math.ceil(totalCount / parsedLimit),
+      },
+      data: records,
+    });
+  } catch (error) {
+    console.error('getDeoAttendance error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error fetching attendance data.' });
+  }
+};
+
 module.exports = {
   getSchoolsAndVts,
   getDeoDashboardCounts,
   getSchoolReports,
   getDistrictVtpList,
   getDistrictVtTeachers,
+  getDeoAttendance,
 };
