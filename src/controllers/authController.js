@@ -693,7 +693,7 @@ const getMe = async (req, res) => {
       // Check for Leave
       const leaveRes = await pool.query(`
         SELECT id FROM leave_requests 
-        WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $2
+        WHERE user_id = $1 AND leave_approved = TRUE AND from_date <= $2 AND to_date >= $2
       `, [userId, processedDate]);
 
       if (leaveRes.rows.length > 0) {
@@ -702,7 +702,7 @@ const getMe = async (req, res) => {
         // Check for OnDuty
         const odRes = await pool.query(`
           SELECT id FROM od_requests 
-          WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $2
+          WHERE user_id = $1 AND od_approved = TRUE AND from_date <= $2 AND to_date >= $2
         `, [userId, processedDate]);
 
         if (odRes.rows.length > 0) {

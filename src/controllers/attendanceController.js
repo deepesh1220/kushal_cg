@@ -585,13 +585,13 @@ const getDailyReport = async (req, res) => {
 
     const leaveRes = await pool.query(`
       SELECT from_date, to_date FROM leave_requests 
-      WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $3
+      WHERE user_id = $1 AND leave_approved = TRUE AND from_date <= $2 AND to_date >= $3
     `, [userId, endStr, startStr]);
     const leaves = leaveRes.rows;
 
     const odRes = await pool.query(`
       SELECT from_date, to_date FROM od_requests 
-      WHERE user_id = $1 AND status = 'approved' AND from_date <= $2 AND to_date >= $3
+      WHERE user_id = $1 AND od_approved = TRUE AND from_date <= $2 AND to_date >= $3
     `, [userId, endStr, startStr]);
     const ods = odRes.rows;
 
