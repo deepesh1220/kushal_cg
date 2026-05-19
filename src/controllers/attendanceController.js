@@ -22,7 +22,6 @@ const checkIn = async (req, res) => {
 
   const userId = req.user.id;
   const { latitude, longitude, remarks, isFakeGPS, checkin_photo } = req.body;
-  console.log(`${latitude, longitude, remarks}`)
   // ── Field validation ────────────────────────────────────────────────────────
   if (!latitude || !longitude || isFakeGPS === undefined) {
     return res.status(400).json({
@@ -333,7 +332,10 @@ const checkOut = async (req, res) => {
       message: 'Check-out successful.',
       data: {
         ...formatAttendanceRecord(updated),
-        face_verification: { match_percent: matchPercent, verified: true },
+        face_verification: {
+          match_percent: matchPercent,
+          verified: true
+        },
       },
     });
   } catch (error) {
