@@ -5,6 +5,7 @@ const {
   downloadMonthlyAttendance,
   getMonthlySummary,
   approveMonthlyReport,
+  approveTeacherMonthlyReport,
   approveMonthlyReportBulk,
   generateMonthlyVtReport,
   downloadVtMonthlyReportPdf,
@@ -24,6 +25,7 @@ router.get('/attendance/download', authorize('leave:view_own'), downloadMonthlyA
 
 // ── Existing: Approve Monthly Report (enhanced with sequential enforcement) ───
 router.post('/approve', approveMonthlyReport);
+router.post('/approve-teacher', approveTeacherMonthlyReport);
 router.post('/approve-bulk', approveMonthlyReportBulk);
 
 // ── New: Generate Monthly VT Report (creates attendance snapshot) ─────────────

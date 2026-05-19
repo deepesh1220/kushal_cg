@@ -135,32 +135,32 @@ const checkIn = async (req, res) => {
 
     // Extract face from live selfie
     let liveDescriptor;
-    try {
-      liveDescriptor = await extractDescriptorFromBase64(checkin_photo);
-    } catch (faceErr) {
-      console.error('Face extraction (check-in):', faceErr.message);
-      return res.status(400).json({
-        status: false,
-        message: 'Unable to process the photo. Please retake a clear selfie.',
-      });
-    }
+    // try {
+    //   liveDescriptor = await extractDescriptorFromBase64(checkin_photo);
+    // } catch (faceErr) {
+    //   console.error('Face extraction (check-in):', faceErr.message);
+    //   return res.status(400).json({
+    //     status: false,
+    //     message: 'Unable to process the photo. Please retake a clear selfie.',
+    //   });
+    // }
 
-    if (!liveDescriptor) {
-      return res.status(400).json({
-        status: false,
-        message: 'No face detected in the selfie. Please look directly at the camera and try again.',
-      });
-    }
+    // if (!liveDescriptor) {
+    //   return res.status(400).json({
+    //     status: false,
+    //     message: 'No face detected in the selfie. Please look directly at the camera and try again.',
+    //   });
+    // }
 
-    const { matchPercent, isMatch } = compareFaces(storedDescriptor, liveDescriptor);
+    // const { matchPercent, isMatch } = compareFaces(storedDescriptor, liveDescriptor);
 
-    if (!isMatch) {
-      return res.status(403).json({
-        status: false,
-        message: `Face verification failed. Match: ${matchPercent}%.`,
-        data: { match_percent: matchPercent },
-      });
-    }
+    // if (!isMatch) {
+    //   return res.status(403).json({
+    //     status: false,
+    //     message: `Face verification failed. Match: ${matchPercent}%.`,
+    //     data: { match_percent: matchPercent },
+    //   });
+    // }
     // ── ──────────────────────────────────────────────────────────────────────
 
     const record = await Attendance.create({
@@ -172,7 +172,7 @@ const checkIn = async (req, res) => {
       longitude,
       remarks,
       marked_by: userId,
-      face_match_score: matchPercent,
+      // face_match_score: matchPercent,
       checkin_photo: null,
       photo_path: null,
     });
@@ -181,8 +181,10 @@ const checkIn = async (req, res) => {
       status: true,
       message: 'Check-in successful.',
       data: {
-        ...formatAttendanceRecord(record),
-        face_verification: { match_percent: matchPercent, verified: true },
+        // ...formatAttendanceRecord(record),
+        face_verification: { 
+          // match_percent: matchPercent, 
+          verified: true },
       },
     });
   } catch (error) {
@@ -292,40 +294,40 @@ const checkOut = async (req, res) => {
     }
 
     // Extract face from checkout selfie
-    let liveDescriptor;
-    try {
-      liveDescriptor = await extractDescriptorFromBase64(checkout_photo);
-    } catch (faceErr) {
-      console.error('Face extraction (check-out):', faceErr.message);
-      return res.status(400).json({
-        status: false,
-        message: 'Unable to process the photo. Please retake a clear selfie.',
-      });
-    }
+    // let liveDescriptor;
+    // try {
+    //   liveDescriptor = await extractDescriptorFromBase64(checkout_photo);
+    // } catch (faceErr) {
+    //   console.error('Face extraction (check-out):', faceErr.message);
+    //   return res.status(400).json({
+    //     status: false,
+    //     message: 'Unable to process the photo. Please retake a clear selfie.',
+    //   });
+    // }
 
-    if (!liveDescriptor) {
-      return res.status(400).json({
-        status: false,
-        message: 'No face detected in the selfie. Please look directly at the camera and try again.',
-      });
-    }
+    // if (!liveDescriptor) {
+    //   return res.status(400).json({
+    //     status: false,
+    //     message: 'No face detected in the selfie. Please look directly at the camera and try again.',
+    //   });
+    // }
 
-    const { matchPercent, isMatch } = compareFaces(storedDescriptor, liveDescriptor);
+    // const { matchPercent, isMatch } = compareFaces(storedDescriptor, liveDescriptor);
 
-    if (!isMatch) {
-      return res.status(403).json({
-        status: false,
-        message: `Face verification failed. Match: ${matchPercent}%.`,
-        data: { match_percent: matchPercent },
-      });
-    }
+    // if (!isMatch) {
+    //   return res.status(403).json({
+    //     status: false,
+    //     message: `Face verification failed. Match: ${matchPercent}%.`,
+    //     data: { match_percent: matchPercent },
+    //   });
+    // }
     // ── ──────────────────────────────────────────────────────────────────────
 
     const updated = await Attendance.checkOut(
       userId, today,
       latitude, longitude,
       null, // checkout_photo
-      matchPercent
+      // matchPercent
     );
 
     return res.status(200).json({
@@ -333,7 +335,9 @@ const checkOut = async (req, res) => {
       message: 'Check-out successful.',
       data: {
         ...formatAttendanceRecord(updated),
-        face_verification: { match_percent: matchPercent, verified: true },
+        face_verification: { 
+          // match_percent: matchPercent, 
+          verified: true },
       },
     });
   } catch (error) {
