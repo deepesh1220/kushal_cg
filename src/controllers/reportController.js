@@ -760,11 +760,30 @@ const approveMonthlyReport = async (req, res) => {
   }
 };
 
+// POST /api/reports/approve-teacher
+// Approve or reject report for a single VT user only.
+const approveTeacherMonthlyReport = async (req, res) => {
+  const parsedVtUserId = Number(req.body?.vtUserId);
+  if (!Number.isInteger(parsedVtUserId) || parsedVtUserId <= 0) {
+    return res.status(400).json({ status: false, message: 'A valid vtUserId is required.' });
+  }
+
+  req.body = {
+    ...req.body,
+    vtUserId: parsedVtUserId,
+    udise_code: undefined,
+  };
+
+  return approveMonthlyReport(req, res);
+};
+
 // ─── Existing functions (unchanged) ──────────────────────────────────────────
 
 const approveMonthlyReportBulk = async (req, res) => {
   try {
     const { udise_codes, month, year, status, remarks } = req.body;
+    const monthInt = parseInt(month, 10);
+    const yearInt = parseInt(year, 10);
 
     let role_name = req.user.role_name;
     if (!role_name && req.user.role_id) {
@@ -774,6 +793,9 @@ const approveMonthlyReportBulk = async (req, res) => {
 
     if (!month || !year || !status) {
       return res.status(400).json({ status: false, message: 'month, year, and status are required.' });
+    }
+    if (Number.isNaN(monthInt) || monthInt < 1 || monthInt > 12 || Number.isNaN(yearInt) || yearInt < 2000) {
+      return res.status(400).json({ status: false, message: 'Invalid month/year values.' });
     }
     if (!Array.isArray(udise_codes) || udise_codes.length === 0) {
       return res.status(400).json({ status: false, message: 'udise_codes array is required.' });
@@ -821,7 +843,7 @@ const approveMonthlyReportBulk = async (req, res) => {
       JOIN roles r ON u.role_id = r.id AND r.name = 'vocational_teacher'
       JOIN vt_staff_details v ON v.id = u.vt_staff_id
       LEFT JOIN mst_schools s ON s.udise_sch_code = v.udise_code
-      WHERE v.udise_code = ANY($1::text[])
+      WHERE v.udise_code::text = ANY($1::text[])
     `;
     const params = [normalizedUdiseCodes];
 
@@ -830,7 +852,7 @@ const approveMonthlyReportBulk = async (req, res) => {
         return res.status(400).json({ status: false, message: 'Account not linked with school UDISE.' });
       }
       params.push(String(req.user.udise_code));
-      query += ` AND v.udise_code = $${params.length}`;
+      query += ` AND v.udise_code::text = $${params.length}`;
     } else if (role_name === 'deo') {
       const deo = await _getDeoProfile(req.user);
       if (!deo) return res.status(403).json({ status: false, message: 'DEO profile not found.' });
@@ -863,9 +885,14 @@ const approveMonthlyReportBulk = async (req, res) => {
         const existing = await client.query(
           `SELECT hm_approval_status, deo_approval_status, vtp_approval_status, is_locked
            FROM monthly_school_reports WHERE user_id = $1 AND report_month = $2 AND report_year = $3`,
-          [uid, month, year]
+          [uid, monthInt, yearInt]
         );
         const rec = existing.rows[0];
+
+        if (rec && rec[statusCol] === status) {
+          processedUsers.push({ user_id: uid, skipped: true, reason: `Already ${status}.` });
+          continue;
+        }
 
         if (rec?.is_locked && status === 'approved') {
           processedUsers.push({ user_id: uid, skipped: true, reason: 'Report already fully approved and locked.' });
@@ -894,7 +921,7 @@ const approveMonthlyReportBulk = async (req, res) => {
               (udise_code, user_id, report_month, report_year,
                ${statusCol}, ${remarksCol}, ${approvedByCol}, ${approvedAtCol}, updated_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW()) RETURNING *`,
-            [udiseCode, uid, month, year, status, remarks || '', req.user.id]
+            [udiseCode, uid, monthInt, yearInt, status, remarks || '', req.user.id]
           );
           processedUsers.push(ins.rows[0]);
         } else {
@@ -913,7 +940,7 @@ const approveMonthlyReportBulk = async (req, res) => {
                  updated_at = NOW()
              WHERE user_id = $5 AND report_month = $6 AND report_year = $7
              RETURNING *`,
-            [status, remarks || '', req.user.id, nowLocked, uid, month, year]
+            [status, remarks || '', req.user.id, nowLocked, uid, monthInt, yearInt]
           );
           processedUsers.push(upd.rows[0]);
         }
@@ -1037,6 +1064,7 @@ module.exports = {
   downloadMonthlyAttendance,
   getMonthlySummary,
   approveMonthlyReport,
+  approveTeacherMonthlyReport,
   approveMonthlyReportBulk,
   generateMonthlyVtReport,
   downloadVtMonthlyReportPdf,
