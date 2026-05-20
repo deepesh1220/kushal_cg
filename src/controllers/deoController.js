@@ -98,7 +98,7 @@ const getSchoolsAndVts = async (req, res) => {
       FROM vt_staff_details v
       LEFT JOIN users u ON u.vt_staff_id = v.id
       LEFT JOIN monthly_school_reports msr
-        ON msr.udise_code = v.udise_code
+        ON msr.user_id = u.id
         AND msr.report_month = $${monthParamIdx}
         AND msr.report_year = $${yearParamIdx}
       ${vtWhere}
@@ -252,6 +252,16 @@ const getSchoolReports = async (req, res) => {
     const districtCd = deo.district_cd;
 
     const params = [districtCd, currentMonth, currentYear];
+    const schoolDeoStatusExpr = `
+      CASE
+        WHEN COALESCE(ss.total_teachers, 0) > 0
+          AND COALESCE(ss.deo_approved_teachers, 0) = COALESCE(ss.total_teachers, 0)
+          THEN 'approved'
+        WHEN COALESCE(ss.deo_rejected_teachers, 0) > 0
+          THEN 'rejected'
+        ELSE 'pending'
+      END
+    `;
     let whereClause = 's.vtp = 1 AND s.district_cd = $1';
 
     if (udise_code) {
@@ -271,7 +281,7 @@ const getSchoolReports = async (req, res) => {
 
     if (status && status !== 'all') {
       params.push(status);
-      whereClause += ` AND COALESCE(r.deo_approval_status, 'pending') = $${params.length}`;
+      whereClause += ` AND (${schoolDeoStatusExpr}) = $${params.length}`;
     }
 
     if (block_cd) {
@@ -291,12 +301,31 @@ const getSchoolReports = async (req, res) => {
     }
 
     const countResult = await pool.query(`
+      WITH school_stats AS (
+        SELECT
+          s.udise_sch_code AS udise_code,
+          COUNT(DISTINCT u.id)::int AS total_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.hm_approval_status, 'pending') = 'approved')::int AS hm_approved_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.hm_approval_status, 'pending') = 'pending')::int AS hm_pending_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.hm_approval_status, 'pending') = 'rejected')::int AS hm_rejected_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.deo_approval_status, 'pending') = 'approved')::int AS deo_approved_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.deo_approval_status, 'pending') = 'pending')::int AS deo_pending_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.deo_approval_status, 'pending') = 'rejected')::int AS deo_rejected_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.vtp_approval_status, 'pending') = 'approved')::int AS vtp_approved_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.vtp_approval_status, 'pending') = 'pending')::int AS vtp_pending_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.vtp_approval_status, 'pending') = 'rejected')::int AS vtp_rejected_teachers
+        FROM mst_schools s
+        LEFT JOIN vt_staff_details v ON v.udise_code = s.udise_sch_code
+        LEFT JOIN users u ON u.vt_staff_id = v.id
+        LEFT JOIN monthly_school_reports msr
+          ON msr.user_id = u.id
+          AND msr.report_month = $2
+          AND msr.report_year = $3
+        GROUP BY s.udise_sch_code
+      )
       SELECT COUNT(*)
       FROM mst_schools s
-      LEFT JOIN monthly_school_reports r
-        ON s.udise_sch_code = r.udise_code
-        AND r.report_month = $2
-        AND r.report_year = $3
+      LEFT JOIN school_stats ss ON ss.udise_code = s.udise_sch_code
       WHERE ${whereClause}
     `, params);
 
@@ -306,25 +335,71 @@ const getSchoolReports = async (req, res) => {
     const dataParams = [...params, limitNum, offsetNum];
 
     const result = await pool.query(`
+      WITH school_stats AS (
+        SELECT
+          s.udise_sch_code AS udise_code,
+          COUNT(DISTINCT u.id)::int AS total_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.hm_approval_status, 'pending') = 'approved')::int AS hm_approved_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.hm_approval_status, 'pending') = 'pending')::int AS hm_pending_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.hm_approval_status, 'pending') = 'rejected')::int AS hm_rejected_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.deo_approval_status, 'pending') = 'approved')::int AS deo_approved_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.deo_approval_status, 'pending') = 'pending')::int AS deo_pending_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.deo_approval_status, 'pending') = 'rejected')::int AS deo_rejected_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.vtp_approval_status, 'pending') = 'approved')::int AS vtp_approved_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.vtp_approval_status, 'pending') = 'pending')::int AS vtp_pending_teachers,
+          COUNT(DISTINCT u.id) FILTER (WHERE COALESCE(msr.vtp_approval_status, 'pending') = 'rejected')::int AS vtp_rejected_teachers
+        FROM mst_schools s
+        LEFT JOIN vt_staff_details v ON v.udise_code = s.udise_sch_code
+        LEFT JOIN users u ON u.vt_staff_id = v.id
+        LEFT JOIN monthly_school_reports msr
+          ON msr.user_id = u.id
+          AND msr.report_month = $2
+          AND msr.report_year = $3
+        GROUP BY s.udise_sch_code
+      )
       SELECT
         s.udise_sch_code AS udise_code,
         s.school_name,
         s.block_name,
         s.district_name,
-        r.id AS report_id,
-        r.report_month,
-        r.report_year,
-        COALESCE(r.hm_approval_status, 'pending') AS hm_approval_status,
-        COALESCE(r.vtp_approval_status, 'pending') AS vtp_approval_status,
-        COALESCE(r.deo_approval_status, 'pending') AS deo_approval_status,
-        r.hm_remarks,
-        r.vtp_remarks,
-        r.deo_remarks
+        $2::int AS report_month,
+        $3::int AS report_year,
+        COALESCE(ss.total_teachers, 0) AS total_teachers,
+        COALESCE(ss.hm_approved_teachers, 0) AS hm_approved_teachers,
+        COALESCE(ss.hm_pending_teachers, 0) AS hm_pending_teachers,
+        COALESCE(ss.hm_rejected_teachers, 0) AS hm_rejected_teachers,
+        COALESCE(ss.deo_approved_teachers, 0) AS deo_approved_teachers,
+        COALESCE(ss.deo_pending_teachers, 0) AS deo_pending_teachers,
+        COALESCE(ss.deo_rejected_teachers, 0) AS deo_rejected_teachers,
+        COALESCE(ss.vtp_approved_teachers, 0) AS vtp_approved_teachers,
+        COALESCE(ss.vtp_pending_teachers, 0) AS vtp_pending_teachers,
+        COALESCE(ss.vtp_rejected_teachers, 0) AS vtp_rejected_teachers,
+        CASE
+          WHEN COALESCE(ss.total_teachers, 0) > 0
+            AND COALESCE(ss.hm_approved_teachers, 0) = COALESCE(ss.total_teachers, 0)
+            THEN 'approved'
+          WHEN COALESCE(ss.hm_rejected_teachers, 0) > 0
+            THEN 'rejected'
+          ELSE 'pending'
+        END AS hm_approval_status,
+        CASE
+          WHEN COALESCE(ss.total_teachers, 0) > 0
+            AND COALESCE(ss.vtp_approved_teachers, 0) = COALESCE(ss.total_teachers, 0)
+            THEN 'approved'
+          WHEN COALESCE(ss.vtp_rejected_teachers, 0) > 0
+            THEN 'rejected'
+          ELSE 'pending'
+        END AS vtp_approval_status,
+        ${schoolDeoStatusExpr} AS deo_approval_status,
+        NULL::TEXT AS hm_remarks,
+        NULL::TEXT AS vtp_remarks,
+        NULL::TEXT AS deo_remarks,
+        (
+          COALESCE(ss.total_teachers, 0) > 0
+          AND COALESCE(ss.hm_approved_teachers, 0) = COALESCE(ss.total_teachers, 0)
+        ) AS hm_all_approved
       FROM mst_schools s
-      LEFT JOIN monthly_school_reports r
-        ON s.udise_sch_code = r.udise_code
-        AND r.report_month = $2
-        AND r.report_year = $3
+      LEFT JOIN school_stats ss ON ss.udise_code = s.udise_sch_code
       WHERE ${whereClause}
       ORDER BY s.school_name ASC
       LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}
