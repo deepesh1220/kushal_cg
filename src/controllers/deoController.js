@@ -703,7 +703,22 @@ const getDeoAttendance = async (req, res) => {
     }
 
     const districtCd = deo.district_cd;
-    const { block_cd, cluster_cd, udise_code, user_id, status, filter_type, filter_value, limit, page } = req.body;
+    const {
+      block_cd,
+      cluster_cd,
+      udise_code,
+      user_id,
+      status,
+      trade,          // filter by trade (partial match)
+      vtp_name,       // filter by VTP name (partial match)
+      date,           // exact date  YYYY-MM-DD
+      from_date,      // date range start  YYYY-MM-DD
+      to_date,        // date range end    YYYY-MM-DD
+      filter_type,    // 'date' | 'week' | 'month' | 'date_range'
+      filter_value,   // paired value for filter_type
+      limit,
+      page,
+    } = req.body;
 
     const parsedLimit = limit ? parseInt(limit, 10) : 50;
     const parsedPage = page ? parseInt(page, 10) : 1;
@@ -717,6 +732,11 @@ const getDeoAttendance = async (req, res) => {
       udise_code,
       user_id,
       status,
+      trade,
+      vtp_name,
+      date,
+      from_date,
+      to_date,
       filter_type,
       filter_value,
       limit: parsedLimit,
