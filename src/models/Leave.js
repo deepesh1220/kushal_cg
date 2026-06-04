@@ -581,6 +581,22 @@ class Leave {
 
     // ─────────── Build final attendance map ───────────
     const attendanceMap = {};
+    const excessResult = await pool.query(
+  `
+  SELECT excess_leave
+  FROM leave_excess_records
+  WHERE user_id = $1
+    AND month = $2
+    AND year  = $3
+  ORDER BY created_at DESC
+  LIMIT 1
+  `,
+  [userId, monthNum, year]
+);
+
+const excessLeave = excessResult.rows.length > 0
+  ? parseFloat(excessResult.rows[0].excess_leave || 0)
+  : 0;
 
     // for (let day = 1; day <= lastDay; day++) {
     //   const currentDate = dayjs(`${month}-${String(day).padStart(2, "0")}`);
@@ -635,6 +651,7 @@ class Leave {
       attendance: attendanceMap,
       totalEarned: leaveBalance ? parseFloat(leaveBalance.total_earned || 0) : 0,
       remainingBalance: leaveBalance ? parseFloat(leaveBalance.remaining_balance || 0) : 0,
+      excessLeave,   // ← new
     };
   }
 
