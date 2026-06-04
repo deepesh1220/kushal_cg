@@ -718,13 +718,21 @@ const getMe = async (req, res) => {
             attendanceData.status = 'gov holiday';
           } else {
             // Check for School-Declared Holiday
-            const schoolHolRes = await pool.query(
-              `SELECT 1 FROM school_generated_holidays
-               WHERE udise_code = (SELECT udise_code FROM users WHERE id = $1)
-               AND generated_holiday_date = $2 LIMIT 1`,
-              [userId, processedDate]
+          const userUdiseRes = await pool.query(
+              `SELECT udise_code FROM users WHERE id = $1`,
+              [Number(userId)]
             );
-            if (schoolHolRes.rows.length > 0) {
+            const userUdise = userUdiseRes.rows[0]?.udise_code;
+            let isSchoolHoliday = false;
+            if (userUdise) {
+              const schoolHolRes = await pool.query(
+                `SELECT 1 FROM school_generated_holidays
+                 WHERE udise_code = $1 AND generated_holiday_date = $2 LIMIT 1`,
+                [String(userUdise), processedDate]
+              );
+              isSchoolHoliday = schoolHolRes.rows.length > 0;
+            }
+            if (isSchoolHoliday) {
               attendanceData.status = 'school holiday';
             } else if (dateObjForHol.getDay() === 0) {
               attendanceData.status = 'holiday'; // Sunday
