@@ -664,6 +664,48 @@ const initDB = async () => {
         ADD COLUMN IF NOT EXISTS leave_approved       BOOLEAN DEFAULT FALSE;
     `);
 
+    // ─────────────────────────────────────────────────────────
+    // TABLE: mst_holiday
+    // Master table for official holidays
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS mst_holiday (
+        holiday_id    SERIAL PRIMARY KEY,
+        holiday_date  DATE NOT NULL,
+        month_name    VARCHAR(20) NOT NULL,
+        year          INTEGER NOT NULL,
+        holiday_name  VARCHAR(255) NOT NULL,
+        weekday_name  VARCHAR(20) NOT NULL,
+        created_at    TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (holiday_date, holiday_name)
+      );
+    `);
+
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_mst_holiday_year ON mst_holiday(year);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_mst_holiday_date ON mst_holiday(holiday_date);`);
+
+    // ─────────────────────────────────────────────────────────
+    // TABLE: school_generated_holidays
+    // Principal-declared school-specific holidays
+    // ─────────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS school_generated_holidays (
+        generated_holiday_id    SERIAL PRIMARY KEY,
+        principal_name          VARCHAR(150) NOT NULL,
+        principal_mobile_number VARCHAR(20) NOT NULL,
+        udise_code              VARCHAR(30) NOT NULL,
+        school_name             VARCHAR(255) NOT NULL,
+        holiday_description     TEXT NOT NULL,
+        generated_holiday_date  DATE NOT NULL,
+        remarks                 TEXT,
+        created_at              TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (udise_code, generated_holiday_date)
+      );
+    `);
+
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_gen_holidays_udise ON school_generated_holidays(udise_code);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_gen_holidays_date  ON school_generated_holidays(generated_holiday_date);`);
+
     await client.query('COMMIT');
     console.log('✅ All tables created/verified successfully');
 

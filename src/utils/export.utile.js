@@ -308,6 +308,7 @@ const STATUS_STYLE = {
   A: { fill: "FCE4D6", font: "C00000" },
   L: { fill: "FFF2CC", font: "7F6000" },
   SU: { fill: "D9D9D9", font: "404040" },
+  SH: { fill: "E8F4FD", font: "0E7C47" },
 };
 
 const thin = { style: "thin", color: { argb: "FFA0A0A0" } };
@@ -582,6 +583,7 @@ const sendPDF = (report, res) => {
     A: ["#FCE4D6", "#C00000"],
     L: ["#FFF2CC", "#7F6000"],
     SU: ["#D9D9D9", "#404040"],
+    SH: ["#E8F4FD", "#0E7C47"],
   };
 
   doc.rect(20, y, nameW, 16).fill("#FFFFFF").stroke("#A0A0A0");
@@ -710,6 +712,7 @@ const sendNSQFPdf = (data, res) => {
     H: { bg: '#D9D9D9', fg: '#404040' },  // Sunday
     SUN: { bg: '#D9D9D9', fg: '#404040' },
     GH: { bg: '#D9D9D9', fg: '#404040' },  // Govt holiday
+    SH: { bg: '#E8F4FD', fg: '#0E7C47' },  // School holiday
     L: { bg: '#FFF2CC', fg: '#7F6000' },
     OD: { bg: '#E8F4FD', fg: '#1F6B9A' },
     HD: { bg: '#FFF2CC', fg: '#7F6000' },
@@ -867,11 +870,12 @@ const sendNSQFPdf = (data, res) => {
         : rawStatus === 'A' ? 'A'
           : rawStatus === 'H' ? 'SUN'
             : rawStatus === 'GH' ? 'H'
-              : rawStatus === 'L' ? 'L'
-                : rawStatus === 'OD' ? 'OD'
-                  : rawStatus === 'HD' ? 'HD'
-                    : rawStatus === 'LATE' ? 'LATE'
-                      : rawStatus;
+              : rawStatus === 'SH' ? 'SH'
+                : rawStatus === 'L' ? 'L'
+                  : rawStatus === 'OD' ? 'OD'
+                    : rawStatus === 'HD' ? 'HD'
+                      : rawStatus === 'LATE' ? 'LATE'
+                        : rawStatus;
 
       const colors = STATUS_COLOR[statusLabel] || STATUS_COLOR[rawStatus] || { bg: WHITE, fg: '#000' };
       const rowBg = overMonth ? '#F8F8F8'
@@ -884,7 +888,7 @@ const sendNSQFPdf = (data, res) => {
       const displayDay = overMonth ? '' : String(day);
       const displayStatus = overMonth || isFutureBlank ? '' : statusLabel;
       const remarks = overMonth || isFutureBlank ? ''
-        : (rec.remarks || (rawStatus === 'H' ? 'SUNDAY' : rawStatus === 'GH' ? 'HOLIDAY' : ''));
+        : (rec.remarks || (rawStatus === 'H' ? 'SUNDAY' : rawStatus === 'GH' ? 'HOLIDAY' : rawStatus === 'SH' ? 'SCHOOL HOLIDAY' : ''));
 
       fillRect(ML + xOff, y, dateColW, attRowH, rowBg, '#C0C0C0');
       fillRect(ML + xOff + dateColW, y, statColW, attRowH, rowBg, '#C0C0C0');
@@ -907,7 +911,7 @@ const sendNSQFPdf = (data, res) => {
   const sumDescW = PW - sumLabelW - sumCodeW;
 
   // Recount from attendance map (blank future days are not counted)
-  let cntPresent = 0, cntAbsent = 0, cntHoliday = 0, cntSunday = 0, cntLeave = 0;
+  let cntPresent = 0, cntAbsent = 0, cntHoliday = 0, cntSunday = 0, cntLeave = 0, cntSchoolHoliday = 0;
   for (let d = 1; d <= totalDaysInMonth; d++) {
     const s = (attendance[d] || {}).status || '';
     if (s === 'P') cntPresent++;
@@ -915,18 +919,21 @@ const sendNSQFPdf = (data, res) => {
     else if (s === 'H') cntSunday++;
     else if (s === 'GH') cntHoliday++;
     else if (s === 'L') cntLeave++;
+    else if (s === 'SH') cntSchoolHoliday++;
   }
   if (summary.totalPresent !== undefined) cntPresent = summary.totalPresent;
   if (summary.totalAbsent !== undefined) cntAbsent = summary.totalAbsent;
   if (summary.totalHolidays !== undefined) cntHoliday = summary.totalHolidays;
   if (summary.totalSundays !== undefined) cntSunday = summary.totalSundays;
   if (summary.totalLeaves !== undefined) cntLeave = summary.totalLeaves;
+  if (summary.totalSchoolHolidays !== undefined) cntSchoolHoliday = summary.totalSchoolHolidays;
 
   [
     [`A.  Total Holidays: ${cntHoliday}`, 'P -', 'for Present'],
     [`B.  Total Sunday: ${cntSunday}`, 'A -', 'for Absent'],
-    [`C.  No. of Extra Leaves: ${cntLeave}`, 'L -', 'for Leave'],
-    [`D.  Total Present Days: ${cntPresent}`, 'H -', 'for Holidays'],
+    [`C.  School Holidays: ${cntSchoolHoliday}`, 'L -', 'for Leave'],
+    [`D.  No. of Extra Leaves: ${cntLeave}`, 'H -', 'for Holidays'],
+    [`E.  Total Present Days: ${cntPresent}`, 'SH -', 'for School Holidays'],
     ['', 'Sun-', 'for Sundays'],
   ].forEach(([label, code, desc]) => {
     fillRect(ML, y, sumLabelW, sumRowH, GRAY_LIGHT, '#C0C0C0');
@@ -983,8 +990,9 @@ const sendNSQFPdf = (data, res) => {
     ['Total Leaves', cntLeave, '#FFF2CC', '#7F6000'],
     ['Govt Holidays', cntHoliday, '#D9D9D9', '#404040'],
     ['Total Sundays', cntSunday, '#EDEDED', '#555555'],
+    ['School Holidays', cntSchoolHoliday, '#E8F4FD', '#0E7C47'],
   ];
-  for (let ki = 0; ki < 5; ki++) {
+  for (let ki = 0; ki < 6; ki++) {
     const [kLabel, kVal, kBg, kFg] = kpiBoxes[ki];
     const bx = ML + (ki % 3) * boxW;
     const by = y + Math.floor(ki / 3) * boxH;
