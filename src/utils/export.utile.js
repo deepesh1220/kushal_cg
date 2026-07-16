@@ -334,6 +334,7 @@ const sendExcel = async (report, res) => {
     udiseCode = "",
     totalEarned = 0,
     remainingBalance = 0,
+    excessLeave = 0, 
   } = report;
 
   const att = sanitizeAtt(rawAtt);
@@ -480,7 +481,9 @@ const sendExcel = async (report, res) => {
   const leaveBalanceRows = [
     ["Total Earned Leave", totalEarned, "E8F4FD", "1F3864"],
     ["Remaining Leave", remainingBalance, "E2EFDA", "276221"],
-    // ["Leave Used (This Month)", leave,           "FFF2CC", "7F6000"],
+    ...(excessLeave > 0
+  ? [["Extra Leave", excessLeave, "FCE4D6", "C00000"]]
+  : []),
   ];
 
   leaveBalanceRows.forEach(([label, val, bg, fc], i) => {
@@ -527,6 +530,7 @@ const sendPDF = (report, res) => {
     udiseCode = "",
     totalEarned = 0,
     remainingBalance = 0,
+     excessLeave = 0,  
   } = report;
 
   const att = sanitizeAtt(rawAtt);
@@ -621,12 +625,19 @@ const sendPDF = (report, res) => {
     ["Total Days", days, "#D6E4F0", "#1F3864"],
   ];
 
-  const lbData = [
-    ["Total Earned Leave", totalEarned, "#E8F4FD", "#1F3864"],
-    ["Remaining Leave", remainingBalance, "#E2EFDA", "#276221"],
-    // ["Leave Used (This Month)", leave,            "#FFF2CC", "#7F6000"],
-  ];
+  // const lbData = [
+  //   ["Total Earned Leave", totalEarned, "#E8F4FD", "#1F3864"],
+  //   ["Remaining Leave", remainingBalance, "#E2EFDA", "#276221"],
+  //   // ["Leave Used (This Month)", leave,            "#FFF2CC", "#7F6000"],
+  // ];
 
+  const lbData = [
+  ["Total Earned Leave", totalEarned,      "#E8F4FD", "#1F3864"],
+  ["Remaining Leave",    remainingBalance,  "#E2EFDA", "#276221"],
+  ...(excessLeave > 0
+    ? [["Extra Leave", excessLeave, "#FCE4D6", "#C00000"]]
+    : []),
+];
   const blockW = 160; // width of each summary block
   const valW = 40;
   const labelW = blockW - valW;
