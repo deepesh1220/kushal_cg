@@ -14,6 +14,8 @@ router.get('/dashboard-counts', authorize('attendance:view_all'), deoController.
 router.get('/school-reports', authorize('attendance:view_all'), deoController.getSchoolReports);
 router.get('/vtps', authorize('attendance:view_all'), deoController.getDistrictVtpList);
 router.get('/vt-teachers', authorize('attendance:view_all'), deoController.getDistrictVtTeachers);
+router.get('/vtp-names', authorize('attendance:view_all'), deoController.getDistrictVtpNames);
+router.get('/trades', authorize('attendance:view_all'), deoController.getDistrictTrades);
 router.post('/attendance', authorize('attendance:view_all'), deoController.getDeoAttendance);
 
 module.exports = router;

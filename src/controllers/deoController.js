@@ -703,7 +703,22 @@ const getDeoAttendance = async (req, res) => {
     }
 
     const districtCd = deo.district_cd;
-    const { block_cd, cluster_cd, udise_code, user_id, status, filter_type, filter_value, limit, page } = req.body;
+    const {
+      block_cd,
+      cluster_cd,
+      udise_code,
+      user_id,
+      status,
+      trade,          // filter by trade (partial match)
+      vtp_name,       // filter by VTP name (partial match)
+      date,           // exact date  YYYY-MM-DD
+      from_date,      // date range start  YYYY-MM-DD
+      to_date,        // date range end    YYYY-MM-DD
+      filter_type,    // 'date' | 'week' | 'month' | 'date_range'
+      filter_value,   // paired value for filter_type
+      limit,
+      page,
+    } = req.body;
 
     const parsedLimit = limit ? parseInt(limit, 10) : 50;
     const parsedPage = page ? parseInt(page, 10) : 1;
@@ -717,6 +732,11 @@ const getDeoAttendance = async (req, res) => {
       udise_code,
       user_id,
       status,
+      trade,
+      vtp_name,
+      date,
+      from_date,
+      to_date,
       filter_type,
       filter_value,
       limit: parsedLimit,
@@ -739,6 +759,64 @@ const getDeoAttendance = async (req, res) => {
   }
 };
 
+// GET /api/deo/vtp-names  — distinct VTP names for the DEO's district
+const getDistrictVtpNames = async (req, res) => {
+  try {
+    const { user, deo } = await resolveDeoProfile(req.user.id);
+    if (!user) return res.status(404).json({ status: false, message: 'User not found.' });
+    if (!deo) return res.status(403).json({ status: false, message: 'DEO profile not found.' });
+
+    const result = await pool.query(`
+      SELECT DISTINCT TRIM(v.vtp_name) AS vtp_name
+      FROM vt_staff_details v
+      JOIN mst_schools s ON s.udise_sch_code = v.udise_code
+      WHERE s.district_cd = $1
+        AND s.vtp = 1
+        AND v.vtp_name IS NOT NULL
+        AND TRIM(v.vtp_name) <> ''
+      ORDER BY vtp_name ASC
+    `, [deo.district_cd]);
+
+    return res.status(200).json({
+      status: true,
+      message: 'VTP names fetched successfully.',
+      data: result.rows.map((r) => r.vtp_name),
+    });
+  } catch (error) {
+    console.error('getDistrictVtpNames error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error fetching VTP names.' });
+  }
+};
+
+// GET /api/deo/trades  — distinct trade names for the DEO's district
+const getDistrictTrades = async (req, res) => {
+  try {
+    const { user, deo } = await resolveDeoProfile(req.user.id);
+    if (!user) return res.status(404).json({ status: false, message: 'User not found.' });
+    if (!deo) return res.status(403).json({ status: false, message: 'DEO profile not found.' });
+
+    const result = await pool.query(`
+      SELECT DISTINCT TRIM(v.trade) AS trade
+      FROM vt_staff_details v
+      JOIN mst_schools s ON s.udise_sch_code = v.udise_code
+      WHERE s.district_cd = $1
+        AND s.vtp = 1
+        AND v.trade IS NOT NULL
+        AND TRIM(v.trade) <> ''
+      ORDER BY trade ASC
+    `, [deo.district_cd]);
+
+    return res.status(200).json({
+      status: true,
+      message: 'Trade names fetched successfully.',
+      data: result.rows.map((r) => r.trade),
+    });
+  } catch (error) {
+    console.error('getDistrictTrades error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error fetching trade names.' });
+  }
+};
+
 module.exports = {
   getSchoolsAndVts,
   getDeoDashboardCounts,
@@ -746,4 +824,6 @@ module.exports = {
   getDistrictVtpList,
   getDistrictVtTeachers,
   getDeoAttendance,
+  getDistrictVtpNames,
+  getDistrictTrades,
 };
