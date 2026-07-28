@@ -712,24 +712,35 @@ const getMe = async (req, res) => {
           const [yearStr, monthStr, dayStr] = processedDate.split('-');
           const yearHol = parseInt(yearStr, 10);
           const dateObjForHol = new Date(yearHol, parseInt(monthStr, 10) - 1, parseInt(dayStr, 10));
-          const govHolidaysRaw = await Report._getGovHolidays(yearHol);
-          // Extract dates safely
-          const govHolidays = Array.isArray(govHolidaysRaw)
-            ? govHolidaysRaw.map(h => h.holiday_date || h.date)
-            : [];
+          const govHolidays = await Report._getGovHolidays(yearHol);
 
-          if (govHolidays.includes(processedDate)) {
+          if (govHolidays.has(processedDate)) {
             attendanceData.status = 'gov holiday';
-          }
-
-          if (govHolidays.includes(processedDate)) {
-            attendanceData.status = 'gov holiday';
-          } else if (dateObjForHol.getDay() === 0) {
-            attendanceData.status = 'holiday'; // Sunday
-          } else if (attendanceRecord) {
-            attendanceData.status = 'absent';
-            attendanceData.check_in = toIST(attendanceRecord.check_in_time);
-            attendanceData.check_out = toIST(attendanceRecord.check_out_time);
+          } else {
+            // Check for School-Declared Holiday
+          const userUdiseRes = await pool.query(
+              `SELECT udise_code FROM users WHERE id = $1`,
+              [Number(userId)]
+            );
+            const userUdise = userUdiseRes.rows[0]?.udise_code;
+            let isSchoolHoliday = false;
+            if (userUdise) {
+              const schoolHolRes = await pool.query(
+                `SELECT 1 FROM school_generated_holidays
+                 WHERE udise_code = $1 AND generated_holiday_date = $2 LIMIT 1`,
+                [String(userUdise), processedDate]
+              );
+              isSchoolHoliday = schoolHolRes.rows.length > 0;
+            }
+            if (isSchoolHoliday) {
+              attendanceData.status = 'school holiday';
+            } else if (dateObjForHol.getDay() === 0) {
+              attendanceData.status = 'holiday'; // Sunday
+            } else if (attendanceRecord) {
+              attendanceData.status = 'absent';
+              attendanceData.check_in = toIST(attendanceRecord.check_in_time);
+              attendanceData.check_out = toIST(attendanceRecord.check_out_time);
+            }
           }
         }
       }

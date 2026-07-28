@@ -1,117 +1,190 @@
-const axios = require('axios');
+const Holiday = require('../models/Holiday');
 
-// In-memory cache: { year: { data, fetchedAt } }
-const cache = {};
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+// ═══════════════════════════════════════════════════════════════════════════════
+// Master Holiday Endpoints
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Fetch India holidays from Calendarific for a given year.
- * Optionally filter to Chhattisgarh-specific entries if available.
+ * GET /api/holidays?year=YYYY
+ * Fetch all master holidays, optionally filtered by year.
  */
-const getHolidays = async (req, res) => {
-  const year = parseInt(req.query.year) || new Date().getFullYear();
-
-  // ── Validate year ──────────────────────────────────────────────────────────
-  if (year < 2000 || year > 2100) {
-    return res.status(400).json({ success: false, message: 'Invalid year. Use 2000–2100.' });
-  }
-
-  // ── Serve from cache if fresh ──────────────────────────────────────────────
-  const cached = cache[year];
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    return res.json({ success: true, year, total: cached.data.length, data: cached.data, source: 'cache' });
-  }
-
-  // ── Check API key ──────────────────────────────────────────────────────────
-  const apiKey = process.env.CALENDARIFIC_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ success: false, message: 'CALENDARIFIC_API_KEY is not configured in .env' });
-  }
-
+const getMasterHolidays = async (req, res) => {
   try {
-    const BASE_PARAMS = { api_key: apiKey, country: 'IN', year };
+    const { year } = req.query;
 
-    // ── Two parallel calls ───────────────────────────────────────────────────
-    // 1. National holidays — all of India (no location filter)
-    // 2. State/local holidays — Chhattisgarh only (ISO 3166-2: IN-CT)
-    const [nationalRes, stateRes] = await Promise.allSettled([
-      axios.get('https://calendarific.com/api/v2/holidays', {
-        params: { ...BASE_PARAMS, type: 'national' },
-        timeout: 10000,
-      }),
-      axios.get('https://calendarific.com/api/v2/holidays', {
-        params: { ...BASE_PARAMS, type: 'local', location: 'IN-CT' },
-        timeout: 10000,
-      }),
-    ]);
-
-    const nationalHolidays = nationalRes.status === 'fulfilled'
-      ? (nationalRes.value.data?.response?.holidays || [])
-      : [];
-    const stateHolidays = stateRes.status === 'fulfilled'
-      ? (stateRes.value.data?.response?.holidays || [])
-      : [];
-
-    console.log(`📅 Calendarific: ${nationalHolidays.length} national + ${stateHolidays.length} state holidays fetched for ${year}`);
-
-    // ── Normalise a raw Calendarific holiday ─────────────────────────────────
-    const normalise = (h, category) => ({
-      name:         h.name,
-      description:  h.description || '',
-      date:         h.date?.iso || '',
-      day:          h.date?.datetime
-        ? `${h.date.datetime.year}-${String(h.date.datetime.month).padStart(2, '0')}-${String(h.date.datetime.day).padStart(2, '0')}`
-        : null,
-      type:         Array.isArray(h.type) ? h.type.join(', ') : (h.type || 'National'),
-      primary_type: Array.isArray(h.primary_type)
-        ? h.primary_type[0]
-        : (h.primary_type || h.type?.[0] || 'Holiday'),
-      category,     // 'national' | 'state'
-    });
-
-    const nationalNorm = nationalHolidays.map(h => normalise(h, 'national'));
-    const stateNorm    = stateHolidays.map(h => normalise(h, 'state'));
-
-    // ── Merge + deduplicate by date + name ───────────────────────────────────
-    const seen = new Set();
-    const merged = [...nationalNorm, ...stateNorm].filter(h => {
-      const key = `${h.day || h.date}__${h.name.toLowerCase()}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }).sort((a, b) => new Date(a.date) - new Date(b.date));
-
-    // ── Store in cache ────────────────────────────────────────────────────────
-    cache[year] = { data: merged, fetchedAt: Date.now() };
-
-    return res.json({ success: true, year, total: merged.length, data: merged, source: 'api' });
-
-  } catch (err) {
-    console.error('❌ Calendarific API error:', err.message);
-
-    // If Calendarific is down but we have stale cache, serve it
-    if (cached) {
-      return res.json({ success: true, year, total: cached.data.length, data: cached.data, source: 'stale_cache', warning: 'API unavailable; serving stale data' });
+    if (year && (isNaN(year) || year < 2000 || year > 2100)) {
+      return res.status(400).json({ success: false, message: 'Invalid year. Use 2000–2100.' });
     }
 
-    const status = err.response?.status || 503;
-    const message = err.response?.data?.meta?.error_detail || err.message || 'Failed to fetch holidays';
-    return res.status(status).json({ success: false, message });
+    const holidays = await Holiday.getAllMasterHolidays(year || null);
+
+    return res.json({
+      success: true,
+      total: holidays.length,
+      data: holidays,
+    });
+  } catch (err) {
+    console.error('❌ getMasterHolidays error:', err.message);
+    return res.status(500).json({ success: false, message: 'Failed to fetch holidays' });
   }
 };
 
 /**
- * Clear cache for a specific year or all years (admin utility).
- * DELETE /api/holidays?year=YYYY  or  DELETE /api/holidays
+ * POST /api/holidays
+ * Insert a new master holiday (admin-only).
+ * Body: { holiday_date, holiday_name }
  */
-const clearCache = (req, res) => {
-  const year = req.query.year;
-  if (year) {
-    delete cache[parseInt(year)];
-    return res.json({ success: true, message: `Cache cleared for ${year}` });
+const createMasterHoliday = async (req, res) => {
+  try {
+    const { holiday_date, holiday_name } = req.body;
+
+    // ── Validation ────────────────────────────────────────────────────────────
+    if (!holiday_date) {
+      return res.status(400).json({ success: false, message: 'Holiday date is required' });
+    }
+    if (!holiday_name || !holiday_name.trim()) {
+      return res.status(400).json({ success: false, message: 'Holiday name is required' });
+    }
+
+    const dateObj = new Date(holiday_date);
+    if (isNaN(dateObj.getTime())) {
+      return res.status(400).json({ success: false, message: 'Invalid date format' });
+    }
+
+    const holiday = await Holiday.createMasterHoliday({
+      holiday_date,
+      holiday_name: holiday_name.trim(),
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Master holiday created successfully',
+      data: holiday,
+    });
+  } catch (err) {
+    // Handle unique constraint violation (duplicate date + name)
+    if (err.code === '23505') {
+      return res.status(409).json({
+        success: false,
+        message: 'A holiday with this date and name already exists',
+      });
+    }
+    console.error('❌ createMasterHoliday error:', err.message);
+    return res.status(500).json({ success: false, message: 'Failed to create holiday' });
   }
-  Object.keys(cache).forEach(k => delete cache[k]);
-  return res.json({ success: true, message: 'All holiday cache cleared' });
 };
 
-module.exports = { getHolidays, clearCache };
+// ═══════════════════════════════════════════════════════════════════════════════
+// School Generated Holiday Endpoints
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/holidays/generated/:udise_code
+ * Fetch all generated holidays for a specific school.
+ */
+const getGeneratedHolidays = async (req, res) => {
+  try {
+    const { udise_code } = req.params;
+
+    if (!udise_code) {
+      return res.status(400).json({ success: false, message: 'UDISE code is required' });
+    }
+
+    const holidays = await Holiday.getGeneratedHolidays(udise_code);
+
+    return res.json({
+      success: true,
+      total: holidays.length,
+      data: holidays,
+    });
+  } catch (err) {
+    console.error('❌ getGeneratedHolidays error:', err.message);
+    return res.status(500).json({ success: false, message: 'Failed to fetch generated holidays' });
+  }
+};
+
+/**
+ * POST /api/holidays/generated
+ * Principal declares a school-specific holiday.
+ * Body: { principal_name, principal_mobile_number, udise_code, school_name,
+ *         holiday_description, generated_holiday_date, remarks }
+ */
+const createGeneratedHoliday = async (req, res) => {
+  try {
+    const {
+      principal_name,
+      principal_mobile_number,
+      udise_code,
+      school_name,
+      holiday_description,
+      generated_holiday_date,
+      remarks,
+    } = req.body;
+
+    // ── Validation ────────────────────────────────────────────────────────────
+    const errors = [];
+
+    if (!principal_name || !principal_name.trim()) {
+      errors.push('Principal name is required');
+    }
+    if (!principal_mobile_number) {
+      errors.push('Principal mobile number is required');
+    } else if (!/^\d{10}$/.test(String(principal_mobile_number).replace(/\D/g, ''))) {
+      errors.push('Mobile number must be a valid 10-digit number');
+    }
+    if (!udise_code) {
+      errors.push('UDISE code is required');
+    }
+    if (!school_name || !school_name.trim()) {
+      errors.push('School name is required');
+    }
+    if (!holiday_description || !holiday_description.trim()) {
+      errors.push('Holiday description is required');
+    }
+    if (!generated_holiday_date) {
+      errors.push('Holiday date is required');
+    } else {
+      const dateObj = new Date(generated_holiday_date);
+      if (isNaN(dateObj.getTime())) {
+        errors.push('Invalid date format');
+      }
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, message: errors.join(', '), errors });
+    }
+
+    const holiday = await Holiday.createGeneratedHoliday({
+      principal_name: principal_name.trim(),
+      principal_mobile_number: String(principal_mobile_number).replace(/\D/g, ''),
+      udise_code: String(udise_code).trim(),
+      school_name: school_name.trim(),
+      holiday_description: holiday_description.trim(),
+      generated_holiday_date,
+      remarks: remarks?.trim() || null,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'School holiday declared successfully',
+      data: holiday,
+    });
+  } catch (err) {
+    // Handle unique constraint violation (same school + same date)
+    if (err.code === '23505') {
+      return res.status(409).json({
+        success: false,
+        message: 'A holiday is already declared for this school on the selected date',
+      });
+    }
+    console.error('❌ createGeneratedHoliday error:', err.message);
+    return res.status(500).json({ success: false, message: 'Failed to declare holiday' });
+  }
+};
+
+module.exports = {
+  getMasterHolidays,
+  createMasterHoliday,
+  getGeneratedHolidays,
+  createGeneratedHoliday,
+};
