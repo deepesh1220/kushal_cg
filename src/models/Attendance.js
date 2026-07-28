@@ -172,7 +172,7 @@ const Attendance = {
       params.push(user_id);
       query += ` AND ar.user_id = $${params.length}`;
     }
-    
+
     if (status) {
       params.push(status);
       query += ` AND ar.status = $${params.length}`;
@@ -217,14 +217,15 @@ const Attendance = {
   },
 
   // ─── Get attendance for a DEO's district with optional cascading filters ─────
-  async findByDistrict(districtCd, { block_cd, cluster_cd, udise_code, user_id, status, filter_type = 'month', filter_value, limit = 50, offset = 0 } = {}) {
+  async findByDistrict(districtCd, { block_cd, cluster_cd, udise_code, user_id, status, trade, vtp_name, date, from_date, to_date, filter_type = 'month', filter_value, limit = 50, offset = 0 } = {}) {
     const params = [districtCd];
     let query = `
       SELECT
         ar.id, ar.date, ar.check_in_time, ar.check_out_time,
         ar.status, ar.latitude, ar.longitude, ar.checkout_latitude, ar.checkout_longitude, ar.photo_path, ar.remarks,
         u.name AS vt_name, u.phone AS vt_phone, u.id AS vt_user_id,
-        v.district_name, v.block_name, v.school_name, v.trade
+        v.district_name, v.block_name, v.school_name, v.trade, v.udise_code,
+        v.vtp_name
       FROM attendance_records ar
       JOIN users u ON u.id = ar.user_id
       JOIN vt_staff_details v ON v.id = u.vt_staff_id
@@ -251,13 +252,41 @@ const Attendance = {
       params.push(user_id);
       query += ` AND ar.user_id = $${params.length}`;
     }
-    
+
     if (status) {
       params.push(status);
       query += ` AND ar.status = $${params.length}`;
     }
 
-    if (filter_type === 'date' && filter_value) {
+    // Trade filter (partial match)
+    if (trade) {
+      params.push(`%${trade}%`);
+      query += ` AND v.trade ILIKE $${params.length}`;
+    }
+
+    // VTP name filter (partial match)
+    if (vtp_name) {
+      params.push(`%${vtp_name}%`);
+      query += ` AND v.vtp_name ILIKE $${params.length}`;
+    }
+
+    // ── Date filters ──────────────────────────────────────────────────────────
+    // Explicit date params take priority over filter_type/filter_value
+    if (date) {
+      // Exact date: date=YYYY-MM-DD
+      params.push(date);
+      query += ` AND ar.date = $${params.length}`;
+    } else if (from_date || to_date) {
+      // Explicit date range
+      if (from_date) {
+        params.push(from_date);
+        query += ` AND ar.date >= $${params.length}`;
+      }
+      if (to_date) {
+        params.push(to_date);
+        query += ` AND ar.date <= $${params.length}`;
+      }
+    } else if (filter_type === 'date' && filter_value) {
       params.push(filter_value);
       query += ` AND ar.date = $${params.length}`;
     } else if (filter_type === 'week' && filter_value) {
