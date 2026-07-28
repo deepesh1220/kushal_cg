@@ -17,7 +17,19 @@ const { loadModels } = require('./utils/faceUtils');
 const app = express();
 
 // ─── Core Middleware ──────────────────────────────────────────────────────────
-app.use(cors());
+app.use(cors(
+  {
+    origin: [
+      "http://10.62.1.106:5000",
+      "http://10.62.1.106:5173",
+      "http://localhost:5000",
+      "http://localhost:5173"
+    ],
+    credentials: true,
+    optionsSuccessStatus: 200,
+    exposedHeaders: ["Set-Cookie"]
+  }
+));
 app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));

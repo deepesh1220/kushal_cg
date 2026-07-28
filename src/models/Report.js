@@ -1,40 +1,45 @@
 const { pool } = require('../config/db');
 const dayjs = require('dayjs');
-const axios = require('axios');
 
 // In-memory cache for holidays
 const holidayCache = {};
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 class Report {
+  // Fetch official (master) holidays from local mst_holiday table
   static async _getGovHolidays(year) {
     if (holidayCache[year] && Date.now() - holidayCache[year].fetchedAt < CACHE_TTL_MS) {
       return holidayCache[year].data;
     }
-    const apiKey = process.env.CALENDARIFIC_API_KEY;
-    if (!apiKey) return []; // Fallback if no key
-
     try {
-      const BASE_PARAMS = { api_key: apiKey, country: 'IN', year };
-      const [nationalRes, stateRes] = await Promise.allSettled([
-        axios.get('https://calendarific.com/api/v2/holidays', { params: { ...BASE_PARAMS, type: 'national' }, timeout: 5000 }),
-        axios.get('https://calendarific.com/api/v2/holidays', { params: { ...BASE_PARAMS, type: 'local', location: 'IN-CT' }, timeout: 5000 }),
-      ]);
-
-      const national = nationalRes.status === 'fulfilled' ? (nationalRes.value.data?.response?.holidays || []) : [];
-      const state = stateRes.status === 'fulfilled' ? (stateRes.value.data?.response?.holidays || []) : [];
-
-      const merged = [...national, ...state];
-      const holidayDates = new Set();
-      merged.forEach(h => {
-        const dateStr = h.date?.iso || (h.date?.datetime ? `${h.date.datetime.year}-${String(h.date.datetime.month).padStart(2, '0')}-${String(h.date.datetime.day).padStart(2, '0')}` : null);
-        if (dateStr) holidayDates.add(dateStr.split('T')[0]); // Keep only YYYY-MM-DD
-      });
-
+      const { rows } = await pool.query(
+        `SELECT holiday_date FROM mst_holiday WHERE year = $1`, [year]
+      );
+      const holidayDates = new Set(
+        rows.map(r => dayjs(r.holiday_date).format('YYYY-MM-DD'))
+      );
       holidayCache[year] = { data: holidayDates, fetchedAt: Date.now() };
       return holidayDates;
     } catch (err) {
-      console.error('Error fetching holidays for report:', err.message);
+      console.error('Error fetching gov holidays from DB:', err.message);
+      return new Set();
+    }
+  }
+
+  // Fetch school-declared holidays for a specific UDISE code + date range
+  static async _getSchoolHolidays(udiseCode, startDate, endDate) {
+    if (!udiseCode) return new Set();
+    try {
+      const { rows } = await pool.query(
+        `SELECT generated_holiday_date FROM school_generated_holidays
+         WHERE udise_code = $1 AND generated_holiday_date BETWEEN $2 AND $3`,
+        [udiseCode, startDate, endDate]
+      );
+      return new Set(
+        rows.map(r => dayjs(r.generated_holiday_date).format('YYYY-MM-DD'))
+      );
+    } catch (err) {
+      console.error('Error fetching school holidays from DB:', err.message);
       return new Set();
     }
   }
@@ -148,10 +153,20 @@ class Report {
     // 4. Fetch Gov Holidays
     const govHolidays = await Report._getGovHolidays(year);
 
+    // 4b. Fetch School-Declared Holidays per UDISE code
+    const udiseCodes = [...new Set(users.map(u => u.udise_code).filter(Boolean))];
+    const schoolHolidayMap = {}; // { udise_code: Set(dateStr) }
+    await Promise.all(udiseCodes.map(async (uc) => {
+      schoolHolidayMap[uc] = await Report._getSchoolHolidays(
+        uc, startDate.format('YYYY-MM-DD'), endDate.format('YYYY-MM-DD')
+      );
+    }));
+
     // 5. Build Report
     const reportData = users.map(user => {
       const uId = user.id;
       const monthAttendance = {};
+      const userSchoolHolidays = schoolHolidayMap[user.udise_code] || new Set();
 
       for (let day = 1; day <= lastDay; day++) {
         const dateObj = dayjs(`${month}-${day}`);
@@ -159,6 +174,7 @@ class Report {
 
         const isSunday = dateObj.day() === 0;
         const isGovHoliday = govHolidays.has(dateStr);
+        const isSchoolHoliday = userSchoolHolidays.has(dateStr);
         const hasLeave = leaveMap[uId] && leaveMap[uId].has(dateStr);
         const attRecord = attendanceMap[uId] && attendanceMap[uId][dateStr];
 
@@ -182,6 +198,8 @@ class Report {
           statusStr = "H";
         } else if (isGovHoliday && (!attRecord || statusStr === 'A')) {
           statusStr = "GH";
+        } else if (isSchoolHoliday && (!attRecord || statusStr === 'A')) {
+          statusStr = "SH";
         } else if (hasLeave) {
           statusStr = "L";
         }

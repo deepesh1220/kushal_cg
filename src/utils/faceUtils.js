@@ -78,6 +78,8 @@ const loadModels = async () => {
 // ─────────────────────────────────────────────────────────────────────────────
 const bufferToTensor = async (imageBuffer) => {
   const { data, info } = await sharp(imageBuffer)
+    .rotate()
+    .toFormat('jpeg') 
     .resize({ width: 640, withoutEnlargement: true })   // 1. resize
     .clahe({ width: 8, height: 8, maxSlope: 3 })         // 2. local contrast eq.
     .gamma(1.2)                                          // 3. mild gamma lift

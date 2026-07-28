@@ -81,19 +81,28 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
     }
   });
 
+  // Fetch school-declared holidays for this VT's school
+  const schoolHolidays = await Report._getSchoolHolidays(
+    vtDetails.udise_code, startOfMonth, endOfMonth
+  );
+
   // Normalise attendance map: day -> { status, check_in, check_out, remarks }
   const attendance = {};
-  let totalPresent = 0, totalAbsent = 0, totalHolidays = 0, totalSundays = 0, totalLeaves = 0;
+  let totalPresent = 0, totalAbsent = 0, totalHolidays = 0, totalSundays = 0, totalLeaves = 0, totalSchoolHolidays = 0;
 
   for (let d = 1; d <= totalDays; d++) {
     const isFutureDay = isCurrentMonth && d > todayDate;
     const isSunday = new Date(year, month - 1, d).getDay() === 0;
+    const dateStrForHol = dayjs(`${year}-${String(month).padStart(2,'0')}-${String(d).padStart(2,'0')}`).format('YYYY-MM-DD');
+    const isSchoolHoliday = schoolHolidays.has(dateStrForHol);
     const rec = attendanceRaw[d] || {};
 
     let s;
     if (isFutureDay) {
       if (isSunday) {
         s = 'H';                                    // future Sunday → always SUN
+      } else if (isSchoolHoliday) {
+        s = 'SH';                                   // future school holiday
       } else if (fullMonthLeaveDates.has(d)) {
         s = 'L';                                    // future approved leave
       } else {
@@ -101,7 +110,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
       }
     } else {
       // Past / today: getMonthlySummaryReport already returns 'H' for Sundays,
-      // so trust its result; fall back to 'H' for any Sunday missed, else 'A'.
+      // 'SH' for school holidays, so trust its result.
       s = rec.status || (isSunday ? 'H' : 'A');
     }
 
@@ -116,6 +125,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
     else if (s === 'GH') totalHolidays++;
     else if (s === 'H') totalSundays++;
     else if (s === 'L') totalLeaves++;
+    else if (s === 'SH') totalSchoolHolidays++;
     // '' (blank future non-Sunday days) intentionally not counted
   }
 
@@ -151,7 +161,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
       block_name: vtDetails.block_name || '',
     },
     attendance,
-    summary: { totalPresent, totalAbsent, totalHolidays, totalSundays, totalLeaves },
+    summary: { totalPresent, totalAbsent, totalHolidays, totalSundays, totalLeaves, totalSchoolHolidays },
     leaveDetails: {
       fyLabel,
       annualEntitlement: 13,
