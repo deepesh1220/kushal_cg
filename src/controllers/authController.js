@@ -783,7 +783,7 @@ const getMe = async (req, res) => {
     });
   } catch (error) {
     console.error('getMe error:', error.message);
-    return res.status(500).json({ status: false, message: 'Server error while fetching user profile and attendance.' });
+    return res.status(500).json({ status: false, message: 'Server error while fetching user profile and VT records.' });
   }
 };
 

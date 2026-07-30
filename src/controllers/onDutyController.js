@@ -146,7 +146,7 @@ const approveOnDuty = async (req, res) => {
     }
 
     const finalMessage = updated.od_approved
-      ? `OD request fully approved (Headmaster + VTP). Attendance updated.`
+      ? `OD request fully approved (Headmaster + VTP). VT status updated.`
       : status === 'rejected'
         ? `OD request rejected by Headmaster.`
         : `OD request approved by Headmaster. Awaiting VTP approval.`;
@@ -452,7 +452,7 @@ const actionOnDutyByVtp = async (req, res) => {
     }
 
     const finalMessage = updated.od_approved
-      ? `OD request fully approved (Headmaster + VTP). Attendance updated.`
+      ? `OD request fully approved (Headmaster + VTP). VT status updated.`
       : status === 'rejected'
         ? `OD request rejected by VTP.`
         : `OD request approved by VTP. Awaiting Headmaster approval.`;

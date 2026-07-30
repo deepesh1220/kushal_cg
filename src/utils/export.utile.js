@@ -323,7 +323,7 @@ const sanitizeAtt = (raw) =>
 // ── Excel ─────────────────────────────────────────────────────────────────
 const sendExcel = async (report, res) => {
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet("Attendance");
+  const ws = wb.addWorksheet("VT Approval");
 
   const {
     totalDays: days,
@@ -347,7 +347,7 @@ const sendExcel = async (report, res) => {
   // ── Row 1: Title ─────────────────────────────────────────────────────────
   ws.mergeCells(1, 1, 1, sumCol);
   const titleCell = ws.getCell(1, 1);
-  titleCell.value = `Attendance Report — ${monthLabel}`;
+  titleCell.value = `VT Approval Report — ${monthLabel}`;
   titleCell.font = { name: "Arial", bold: true, size: 14, color: { argb: "FFFFFFFF" } };
   titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F3864" } };
   titleCell.alignment = { horizontal: "center", vertical: "middle" };
@@ -512,7 +512,7 @@ const sendExcel = async (report, res) => {
   res.setHeader("Content-Type",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition",
-    `attachment; filename=attendance_${month}.xlsx`);
+    `attachment; filename=vocational_training_approval_${month}.xlsx`);
   await wb.xlsx.write(res);
   res.end();
 };
@@ -540,7 +540,7 @@ const sendPDF = (report, res) => {
 
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition",
-    `attachment; filename=attendance_${month}.pdf`);
+    `attachment; filename=vocational_training_approval_${month}.pdf`);
   doc.pipe(res);
 
   const W = doc.page.width - 40;
@@ -549,7 +549,7 @@ const sendPDF = (report, res) => {
   // Title
   doc.rect(20, y, W, 24).fill("#1F3864");
   doc.fillColor("white").font("Helvetica-Bold").fontSize(13)
-    .text(`Attendance Report — ${monthLabel}`, 20, y + 5, { width: W, align: "center" });
+    .text(`VT Approval Report — ${monthLabel}`, 20, y + 5, { width: W, align: "center" });
   y += 28;
 
   // Info bar
@@ -702,7 +702,7 @@ const sendNSQFPdf = (data, res) => {
   const vtName = (vtDetails.vt_name || 'VT').replace(/\s+/g, '_');
   const monthName = new Date(year, month - 1, 1).toLocaleString('en-IN', { month: 'long' });
   res.setHeader('Content-Disposition',
-    `attachment; filename=VT_Attendance_${vtName}_${monthName}_${year}.pdf`);
+    `attachment; filename=VT_Vocational_Training_Approval_${vtName}_${monthName}_${year}.pdf`);
   doc.pipe(res);
 
   const ML = 28;           // left margin
@@ -808,7 +808,7 @@ const sendNSQFPdf = (data, res) => {
   y += 22;
 
   fillRect(ML, y, PW, 14, MED_BLUE);
-  cellText("Vocational Trainer's Monthly Attendance Sheet", ML, y, PW, 14, WHITE, 8, true, 'center');
+  cellText("VT Monthly Status Report", ML, y, PW, 14, WHITE, 8, true, 'center');
   y += 14;
 
   // ─── VT DETAILS TABLE ────────────────────────────────────────────────────────
@@ -844,7 +844,7 @@ const sendNSQFPdf = (data, res) => {
     { text: `${vtDetails.vt_name || ''} `, bold: false },
     { text: vtDetails.vt_mob ? `| ${vtDetails.vt_mob}` : '', bold: true }
   ], 'Trade :', vtDetails.trade || '');
-  drawDetail('Attendance for Month :', `${monthName}-${year}`, 'Training Partner :', 'Learnet Skills Limited');
+  drawDetail('Approval Month :', `${monthName}-${year}`, 'Training Partner :', 'Learnet Skills Limited');
 
   y += 4;
 
@@ -990,7 +990,7 @@ const sendNSQFPdf = (data, res) => {
   // ─── ATTENDANCE OVERVIEW STATS CARD ──────────────────────────────────────────
   y += 8;
   fillRect(ML, y, PW, 13, MED_BLUE, '#A0A0A0');
-  cellText('Attendance Overview', ML, y, PW, 13, WHITE, 8, true, 'center');
+  cellText('VT Overview', ML, y, PW, 13, WHITE, 8, true, 'center');
   y += 13;
 
   const boxW = PW / 3;

@@ -167,7 +167,7 @@ const getAttendanceTracking = async (req, res) => {
 
     return res.status(200).json({
       status: true,
-      message: 'Attendance tracking reports fetched successfully.',
+      message: 'VT approval reports fetched successfully.',
       month: reportMonth,
       year: reportYear,
       total,
@@ -186,7 +186,7 @@ const getAttendanceTracking = async (req, res) => {
     });
   } catch (error) {
     console.error('getAttendanceTracking error:', error.message);
-    return res.status(500).json({ status: false, message: 'Server error fetching attendance tracking reports.' });
+    return res.status(500).json({ status: false, message: 'Server error fetching VT approval reports.' });
   }
 };
 

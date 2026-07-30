@@ -543,7 +543,7 @@ const initDB = async () => {
 
     // ─────────────────────────────────────────────────────────
     // TABLE: vtp
-    // Vocational Training Provider master table.
+    // Vocational Trainer Provider master table.
     // VTP users can log in via /auth/web/login with role_id for
     // 'vocational_teacher_provider'.
     // ─────────────────────────────────────────────────────────
@@ -575,7 +575,7 @@ const initDB = async () => {
 
     // ─────────────────────────────────────────────────────────
     // TABLE: mst_vtp
-    // Master table for Vocational Training Providers
+    // Master table for Vocational Trainer Providers
     // ─────────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS mst_vtp (
@@ -739,15 +739,15 @@ const seedDefaults = async (client) => {
     },
     {
       name: 'admin',
-      description: 'Manage users, attendance records, reports, and approve leaves',
+      description: 'Manage users, Vocational Trainer records, reports, and approve leaves',
     },
     {
       name: 'deo',
-      description: 'District Education Officer — enter and update attendance data on behalf of teachers',
+      description: 'District Education Officer — enter and update Vocational Trainer data on behalf of teachers',
     },
     {
       name: 'headmaster',
-      description: 'School head — view all attendance, approve leaves, access reports',
+      description: 'School head — view all Vocational Trainer records, approve leaves, access reports',
     },
     {
       name: 'vocational_teacher_provider',
@@ -755,11 +755,11 @@ const seedDefaults = async (client) => {
     },
     {
       name: 'vocational_teacher',
-      description: 'Vocational teacher — mark own attendance and submit leave requests',
+      description: 'Vocational teacher — mark own Vocational Trainer status and submit leave requests',
     },
     {
       name: 'programmer',
-      description: 'Programmer — enter and update attendance data on behalf of headmaster and teachers',
+      description: 'Programmer — enter and update Vocational Trainer data on behalf of headmaster and teachers',
     },
   ];
 
@@ -785,14 +785,14 @@ const seedDefaults = async (client) => {
     { name: 'roles:delete', module: 'roles', action: 'delete', description: 'Delete roles' },
     { name: 'roles:assign', module: 'roles', action: 'assign', description: 'Assign roles to users' },
     // ── Attendance ───────────────────────────────────────────────────────────
-    { name: 'attendance:view_own', module: 'attendance', action: 'view_own', description: 'View own attendance records only' },
-    { name: 'attendance:view_all', module: 'attendance', action: 'view_all', description: 'View attendance records of all users' },
-    { name: 'attendance:view_teachers', module: 'attendance', action: 'view_teachers', description: 'View attendance of assigned vocational teachers' },
-    { name: 'attendance:create', module: 'attendance', action: 'create', description: 'Mark own attendance' },
-    { name: 'attendance:create_others', module: 'attendance', action: 'create_others', description: 'Mark attendance on behalf of others (DEO)' },
-    { name: 'attendance:update', module: 'attendance', action: 'update', description: 'Edit/correct attendance records' },
-    { name: 'attendance:delete', module: 'attendance', action: 'delete', description: 'Delete attendance records' },
-    { name: 'attendance:report', module: 'attendance', action: 'report', description: 'Generate and view attendance reports' },
+    { name: 'attendance:view_own', module: 'attendance', action: 'view_own', description: 'View own Vocational Trainer records only' },
+    { name: 'attendance:view_all', module: 'attendance', action: 'view_all', description: 'View Vocational Trainer records of all users' },
+    { name: 'attendance:view_teachers', module: 'attendance', action: 'view_teachers', description: 'View Vocational Trainer records of assigned vocational teachers' },
+    { name: 'attendance:create', module: 'attendance', action: 'create', description: 'Mark own Vocational Trainer status' },
+    { name: 'attendance:create_others', module: 'attendance', action: 'create_others', description: 'Mark Vocational Trainer status on behalf of others (DEO)' },
+    { name: 'attendance:update', module: 'attendance', action: 'update', description: 'Edit or correct Vocational Trainer records' },
+    { name: 'attendance:delete', module: 'attendance', action: 'delete', description: 'Delete Vocational Trainer records' },
+    { name: 'attendance:report', module: 'attendance', action: 'report', description: 'Generate and view Vocational Trainer reports' },
     // ── Leave ────────────────────────────────────────────────────────────────
     { name: 'leave:request', module: 'leave', action: 'request', description: 'Submit a leave request' },
     { name: 'leave:view_own', module: 'leave', action: 'view_own', description: 'View own leave requests' },
@@ -807,8 +807,8 @@ const seedDefaults = async (client) => {
     { name: 'vt:approve', module: 'vt', action: 'approve', description: 'Approve or reject Vocational Teacher registrations (Principal/HM layer)' },
     { name: 'vt:approve_vtp', module: 'vt', action: 'approve_vtp', description: 'Approve or reject Vocational Teacher registrations (VTP layer)' },
     // ── Monthly Report Workflow ───────────────────────────────────────────────
-    { name: 'reports:generate',     module: 'reports', action: 'generate',     description: 'Generate monthly VT attendance report PDF snapshot' },
-    { name: 'reports:view_monthly', module: 'reports', action: 'view_monthly', description: 'View monthly VT attendance report list' },
+    { name: 'reports:generate',     module: 'reports', action: 'generate',     description: 'Generate monthly VT Vocational Trainer report PDF snapshot' },
+    { name: 'reports:view_monthly', module: 'reports', action: 'view_monthly', description: 'View monthly VT Vocational Trainer report list' },
     { name: 'reports:approve_hm',   module: 'reports', action: 'approve_hm',   description: 'Principal/HM: approve monthly VT report (layer 1)' },
     { name: 'reports:approve_deo',  module: 'reports', action: 'approve_deo',  description: 'DEO: approve monthly VT report (layer 2, requires HM approval)' },
     { name: 'reports:approve_vtp',  module: 'reports', action: 'approve_vtp',  description: 'VTP: final approve monthly VT report (layer 3, requires HM+DEO approval)' },

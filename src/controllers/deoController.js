@@ -755,7 +755,7 @@ const getDeoAttendance = async (req, res) => {
     });
   } catch (error) {
     console.error('getDeoAttendance error:', error.message);
-    return res.status(500).json({ status: false, message: 'Server error fetching attendance data.' });
+    return res.status(500).json({ status: false, message: 'Server error fetching VT data.' });
   }
 };
 
