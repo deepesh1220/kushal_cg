@@ -20,8 +20,8 @@ const app = express();
 app.use(cors(
   {
     origin: [
-      "http://10.62.1.106:5000",
-      "http://10.62.1.106:5173",
+      "http://10.62.1.102:5000",
+      "http://10.62.1.102:5173",
       "http://localhost:5000",
       "http://localhost:5173",
       "http://10.40.40.68:5000"
