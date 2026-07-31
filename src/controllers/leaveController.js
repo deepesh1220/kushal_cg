@@ -200,9 +200,13 @@ const approveRejectLeave = async (req, res) => {
   const reviewer = req.user;
   const leaveId = req.params.id;
   const { status } = req.body;
+  const remarks = typeof req.body?.remarks === 'string' ? req.body.remarks.trim() || null : null;
 
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(400).json({ status: false, message: 'Status must be either approved or rejected.' });
+  }
+  if (remarks?.length > 1000) {
+    return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
   }
 
   try {
@@ -222,7 +226,7 @@ const approveRejectLeave = async (req, res) => {
     }
 
     // Update leave status first (primary action — never blocks on balance issues)
-    const updated = await Leave.updateStatus(leaveId, { status, reviewerId: reviewer.id });
+    const updated = await Leave.updateStatus(leaveId, { status, reviewerId: reviewer.id, remarks });
 
     // On final approval, attempt EL deduction (non-blocking — logs failure but doesn't fail approval)
     let deductionInfo = null;

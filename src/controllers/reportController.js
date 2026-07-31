@@ -609,7 +609,11 @@ const getDashboardPendingCounts = async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 const approveMonthlyReport = async (req, res) => {
   try {
-    const { udise_code, vtUserId, month, year, status, remarks } = req.body;
+    const { udise_code, vtUserId, month, year, status } = req.body;
+    const remarks = typeof req.body?.remarks === 'string' ? req.body.remarks.trim() : '';
+    if (remarks.length > 1000) {
+      return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
+    }
 
     // Resolve role name
     let role_name = req.user.role_name;
@@ -703,14 +707,14 @@ const approveMonthlyReport = async (req, res) => {
           await client.query('ROLLBACK');
           return res.status(400).json({
             status: false,
-            message: `Report for user ${uid} has not been approved by Principal/HM yet.`,
+            message: `Report for user ${uid} has not been approved by Principal/Hos yet.`,
           });
         }
 
         if ((role_name === 'vocational_teacher_provider' || role_name === 'vtp')) {
           if (rec?.hm_approval_status !== 'approved') {
             await client.query('ROLLBACK');
-            return res.status(400).json({ status: false, message: 'Not approved by Principal/HM yet.' });
+            return res.status(400).json({ status: false, message: 'Not approved by Principal/Hos yet.' });
           }
           if (rec?.deo_approval_status !== 'approved') {
             await client.query('ROLLBACK');
@@ -791,7 +795,11 @@ const approveTeacherMonthlyReport = async (req, res) => {
 
 const approveMonthlyReportBulk = async (req, res) => {
   try {
-    const { udise_codes, month, year, status, remarks } = req.body;
+    const { udise_codes, month, year, status } = req.body;
+    const remarks = typeof req.body?.remarks === 'string' ? req.body.remarks.trim() : '';
+    if (remarks.length > 1000) {
+      return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
+    }
     const monthInt = parseInt(month, 10);
     const yearInt = parseInt(year, 10);
 
@@ -911,13 +919,13 @@ const approveMonthlyReportBulk = async (req, res) => {
 
         if (role_name === 'deo' && rec?.hm_approval_status !== 'approved') {
           await client.query('ROLLBACK');
-          return res.status(400).json({ status: false, message: `School ${udiseCode} has VT report pending HM approval.` });
+          return res.status(400).json({ status: false, message: `School ${udiseCode} has VT report pending Hos approval.` });
         }
 
         if ((role_name === 'vocational_teacher_provider' || role_name === 'vtp')) {
           if (rec?.hm_approval_status !== 'approved') {
             await client.query('ROLLBACK');
-            return res.status(400).json({ status: false, message: `School ${udiseCode} is pending HM approval.` });
+            return res.status(400).json({ status: false, message: `School ${udiseCode} is pending Hos approval.` });
           }
           if (rec?.deo_approval_status !== 'approved') {
             await client.query('ROLLBACK');

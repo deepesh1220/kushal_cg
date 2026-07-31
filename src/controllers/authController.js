@@ -821,7 +821,7 @@ const loginVT = async (req, res) => {
         hm_approval: user.vt_approval_status,
         vtp_approval: user.vtp_approval_status,
         vtp_mobile: vtpMobile,
-        code: 'PENDING_APPROVAL OF HM and VTP',
+        code: 'PENDING_APPROVAL OF Hos and VTP',
         message: 'Your registration is pending approval from your school Headmaster and VTP. Please wait.',
       });
     }

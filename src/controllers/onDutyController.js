@@ -96,10 +96,14 @@ const applyOnDuty = async (req, res) => {
 const approveOnDuty = async (req, res) => {
   const reviewer = req.user;
   const odId     = req.params.id;
-  const { status, remarks } = req.body;
+  const { status } = req.body;
+  const remarks = typeof req.body?.remarks === 'string' ? req.body.remarks.trim() || null : null;
 
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(400).json({ status: false, message: 'Status must be either approved or rejected.' });
+  }
+  if (remarks?.length > 1000) {
+    return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
   }
 
   try {
@@ -390,10 +394,14 @@ const getVtpScopedOnDutyRequests = async (req, res) => {
 const actionOnDutyByVtp = async (req, res) => {
   const { requestId } = req.params;
   const parsedId = parseInt(requestId, 10);
-  const { status, remarks } = req.body;
+  const { status } = req.body;
+  const remarks = typeof req.body?.remarks === 'string' ? req.body.remarks.trim() || null : null;
 
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(400).json({ status: false, message: "status must be 'approved' or 'rejected'." });
+  }
+  if (remarks?.length > 1000) {
+    return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
   }
 
   try {

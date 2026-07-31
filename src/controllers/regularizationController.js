@@ -184,9 +184,13 @@ const approveRegularization = async (req, res) => {
   const reviewer = req.user;
   const regId = req.params.id;
   const { status } = req.body;
+  const remarks = typeof req.body?.remarks === 'string' ? req.body.remarks.trim() || null : null;
 
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(400).json({ status: false, message: 'Status must be either approved or rejected.' });
+  }
+  if (remarks?.length > 1000) {
+    return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
   }
 
   try {
@@ -203,7 +207,7 @@ const approveRegularization = async (req, res) => {
     const authError = await _validateVtBelongsToHeadmaster(reg.user_id, reviewer);
     if (authError) return res.status(authError.status).json(authError.body);
 
-    const updated = await Regularization.updateStatus(regId, { status, reviewerId: reviewer.id });
+    const updated = await Regularization.updateStatus(regId, { status, reviewerId: reviewer.id, remarks });
 
     // On approval → upsert attendance_records as 'present' with regularization timestamps
     if (status === 'approved') {

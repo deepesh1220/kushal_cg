@@ -636,6 +636,8 @@ const initDB = async () => {
     // ─────────────────────────────────────────────────────────
     await client.query(`
       ALTER TABLE users ADD COLUMN IF NOT EXISTS vtp_approval_status VARCHAR(20) DEFAULT NULL;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS vt_approval_remarks TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS vtp_approval_remarks TEXT;
       ALTER TABLE users DROP CONSTRAINT IF EXISTS users_vtp_approval_status_check;
       ALTER TABLE users ADD CONSTRAINT users_vtp_approval_status_check
         CHECK (vtp_approval_status IS NULL OR vtp_approval_status IN ('pending','accepted','rejected'));
@@ -661,7 +663,14 @@ const initDB = async () => {
       ALTER TABLE leave_requests
         ADD COLUMN IF NOT EXISTS principal_updated_at TIMESTAMPTZ DEFAULT NULL,
         ADD COLUMN IF NOT EXISTS vtp_updated_at       TIMESTAMPTZ DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS principal_remarks    TEXT,
+        ADD COLUMN IF NOT EXISTS vtp_remarks          TEXT,
         ADD COLUMN IF NOT EXISTS leave_approved       BOOLEAN DEFAULT FALSE;
+    `);
+
+    await client.query(`
+      ALTER TABLE regularization_requests
+        ADD COLUMN IF NOT EXISTS review_remarks TEXT;
     `);
 
     // ─────────────────────────────────────────────────────────
