@@ -169,7 +169,7 @@ const approveVtByVtp = async (req, res) => {
     return res.status(200).json({
       status: true,
       message: updated.is_active
-        ? `Vocational Teacher "${updated.name}" has been fully approved (Hos + VTP) and can now login.`
+        ? `Vocational Teacher "${updated.name}" has been fully approved (HOS + VTP) and can now login.`
         : `Vocational Teacher "${updated.name}" approved by VTP. Awaiting Headmaster approval.`,
       data: updated,
     });
