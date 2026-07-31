@@ -148,12 +148,16 @@ const getVtpScopedVts = async (req, res) => {
 // VTP approves a VT — combined with HM approval, account becomes active
 const approveVtByVtp = async (req, res) => {
   const { userId } = req.params;
+  const remarks = typeof req.body?.remarks === 'string' ? req.body.remarks.trim() || null : null;
+  if (remarks?.length > 1000) {
+    return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
+  }
 
   try {
     const validationError = await _validateVtBelongsToVtp(userId, req.user);
     if (validationError) return res.status(validationError.status).json(validationError.body);
 
-    const updated = await User.updateVtpApprovalStatus(userId, 'accepted', req.user.id);
+    const updated = await User.updateVtpApprovalStatus(userId, 'accepted', req.user.id, remarks);
 
     if (!updated) {
       return res.status(404).json({
@@ -165,7 +169,7 @@ const approveVtByVtp = async (req, res) => {
     return res.status(200).json({
       status: true,
       message: updated.is_active
-        ? `Vocational Teacher "${updated.name}" has been fully approved (HM + VTP) and can now login.`
+        ? `Vocational Teacher "${updated.name}" has been fully approved (Hos + VTP) and can now login.`
         : `Vocational Teacher "${updated.name}" approved by VTP. Awaiting Headmaster approval.`,
       data: updated,
     });
@@ -179,13 +183,17 @@ const approveVtByVtp = async (req, res) => {
 // VTP rejects a VT — account stays inactive
 const rejectVtByVtp = async (req, res) => {
   const { userId } = req.params;
-  const { reason } = req.body;
+  const rawRemarks = req.body?.remarks ?? req.body?.reason;
+  const remarks = typeof rawRemarks === 'string' ? rawRemarks.trim() || null : null;
+  if (remarks?.length > 1000) {
+    return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
+  }
 
   try {
     const validationError = await _validateVtBelongsToVtp(userId, req.user);
     if (validationError) return res.status(validationError.status).json(validationError.body);
 
-    const updated = await User.updateVtpApprovalStatus(userId, 'rejected', req.user.id);
+    const updated = await User.updateVtpApprovalStatus(userId, 'rejected', req.user.id, remarks);
 
     if (!updated) {
       return res.status(404).json({
@@ -255,12 +263,16 @@ const getVtpScopedLeaves = async (req, res) => {
 const approveLeaveByVtp = async (req, res) => {
   const { leaveId } = req.params;
   const parsedLeaveId = parseInt(leaveId, 10);
+  const remarks = typeof req.body?.remarks === 'string' ? req.body.remarks.trim() || null : null;
+  if (remarks?.length > 1000) {
+    return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
+  }
 
   try {
     const validationError = await _validateLeaveBelongsToVtp(parsedLeaveId, req.user);
     if (validationError) return res.status(validationError.status).json(validationError.body);
 
-    const updated = await Leave.updateVtpStatus(parsedLeaveId, { status: 'approved', reviewerId: req.user.id });
+    const updated = await Leave.updateVtpStatus(parsedLeaveId, { status: 'approved', reviewerId: req.user.id, remarks });
 
     if (!updated) {
       return res.status(404).json({ status: false, message: 'Leave request not found.' });
@@ -319,12 +331,17 @@ const approveLeaveByVtp = async (req, res) => {
 const rejectLeaveByVtp = async (req, res) => {
   const { leaveId } = req.params;
   const parsedLeaveId = parseInt(leaveId, 10);
+  const rawRemarks = req.body?.remarks ?? req.body?.reason;
+  const remarks = typeof rawRemarks === 'string' ? rawRemarks.trim() || null : null;
+  if (remarks?.length > 1000) {
+    return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
+  }
 
   try {
     const validationError = await _validateLeaveBelongsToVtp(parsedLeaveId, req.user);
     if (validationError) return res.status(validationError.status).json(validationError.body);
 
-    const updated = await Leave.updateVtpStatus(parsedLeaveId, { status: 'rejected', reviewerId: req.user.id });
+    const updated = await Leave.updateVtpStatus(parsedLeaveId, { status: 'rejected', reviewerId: req.user.id, remarks });
 
     if (!updated) {
       return res.status(404).json({ status: false, message: 'Leave request not found.' });

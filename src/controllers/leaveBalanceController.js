@@ -362,9 +362,13 @@ const approveWithDeduction = async (req, res) => {
     const leaveRequestId = req.params.leaveRequestId;
     const reviewerId = req.user.id;
     const { status } = req.body;
+    const remarks = typeof req.body?.remarks === 'string' ? req.body.remarks.trim() || null : null;
 
     if (!status || !['approved', 'rejected'].includes(status)) {
       return res.status(400).json({ status: false, message: 'Status must be approved or rejected.' });
+    }
+    if (remarks?.length > 1000) {
+      return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
     }
 
     // Validate authorization
@@ -392,7 +396,7 @@ const approveWithDeduction = async (req, res) => {
 
     // If rejecting, just update status without deduction
     if (status === 'rejected') {
-      const result = await Leave.updateStatus(leaveRequestId, { status, reviewerId });
+      const result = await Leave.updateStatus(leaveRequestId, { status, reviewerId, remarks });
       return res.status(200).json({
         status: true,
         message: 'Leave rejected successfully',
@@ -401,7 +405,7 @@ const approveWithDeduction = async (req, res) => {
     }
 
     // Approve with deduction
-    const result = await Leave.approveWithDeduction(leaveRequestId, { reviewerId, status });
+    const result = await Leave.approveWithDeduction(leaveRequestId, { reviewerId, status, remarks });
 
     return res.status(result.success ? 200 : 400).json({
       status: result.success,

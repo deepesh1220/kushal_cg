@@ -783,7 +783,7 @@ const getMe = async (req, res) => {
     });
   } catch (error) {
     console.error('getMe error:', error.message);
-    return res.status(500).json({ status: false, message: 'Server error while fetching user profile and attendance.' });
+    return res.status(500).json({ status: false, message: 'Server error while fetching user profile and VT records.' });
   }
 };
 
@@ -821,7 +821,7 @@ const loginVT = async (req, res) => {
         hm_approval: user.vt_approval_status,
         vtp_approval: user.vtp_approval_status,
         vtp_mobile: vtpMobile,
-        code: 'PENDING_APPROVAL OF HM and VTP',
+        code: 'PENDING_APPROVAL OF Hos and VTP',
         message: 'Your registration is pending approval from your school Headmaster and VTP. Please wait.',
       });
     }

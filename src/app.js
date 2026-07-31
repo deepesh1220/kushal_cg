@@ -23,7 +23,8 @@ app.use(cors(
       "http://10.62.1.102:5000",
       "http://10.62.1.102:5173",
       "http://localhost:5000",
-      "http://localhost:5173"
+      "http://localhost:5173",
+      "http://10.40.40.68:5000"
     ],
     credentials: true,
     optionsSuccessStatus: 200,
@@ -64,7 +65,7 @@ const startServer = async () => {
     await createDatabaseIfNotExists(); // Step 1: Ensure DB exists
     await initDB();                    // Step 2: Create tables + seed roles/permissions
     await loadModels();                // Step 3: Preload face recognition models
-    app.listen(PORT, () => {
+    app.listen(PORT, "0.0.0.0", () => {
       console.log(`\n🚀 Server running on http://localhost:${PORT}`);
       console.log(`📋 Health check: http://localhost:${PORT}/api/health\n`);
 

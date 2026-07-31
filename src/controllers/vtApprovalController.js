@@ -69,6 +69,10 @@ const getAllVts = async (req, res) => {
 // Headmaster approves a VT — account becomes active
 const approveVt = async (req, res) => {
   const { userId } = req.params;
+  const remarks = typeof req.body?.remarks === 'string' ? req.body.remarks.trim() || null : null;
+  if (remarks?.length > 1000) {
+    return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
+  }
   const { pool } = require('../config/db');
 
   try {
@@ -106,7 +110,7 @@ const approveVt = async (req, res) => {
     }
 
     // ── 3. Perform approval ──────────────────────────────────────────────────
-    const updated = await User.updateApprovalStatus(userId, 'accepted', req.user.id);
+    const updated = await User.updateApprovalStatus(userId, 'accepted', req.user.id, remarks);
 
     if (!updated) {
       return res.status(404).json({
@@ -130,14 +134,18 @@ const approveVt = async (req, res) => {
 // Headmaster rejects a VT — account stays inactive
 const rejectVt = async (req, res) => {
   const { userId } = req.params;
-  const { reason } = req.body;
+  const rawRemarks = req.body?.remarks ?? req.body?.reason;
+  const remarks = typeof rawRemarks === 'string' ? rawRemarks.trim() || null : null;
+  if (remarks?.length > 1000) {
+    return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
+  }
 
   try {
     // Verify the VT belongs to the headmaster's school
     const validationError = await _validateVtBelongsToHeadmaster(userId, req.user);
     if (validationError) return res.status(validationError.status).json(validationError.body);
 
-    const updated = await User.updateApprovalStatus(userId, 'rejected', req.user.id);
+    const updated = await User.updateApprovalStatus(userId, 'rejected', req.user.id, remarks);
 
     if (!updated) {
       return res.status(404).json({

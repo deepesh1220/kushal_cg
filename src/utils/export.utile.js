@@ -26,7 +26,7 @@ const sanitizeAtt = (raw) =>
 // ── Excel ─────────────────────────────────────────────────────────────────
 const sendExcel = async (report, res) => {
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet("Attendance");
+  const ws = wb.addWorksheet("VT Approval");
 
   const {
     totalDays: days,
@@ -511,7 +511,7 @@ const sendNSQFPdf = (data, res) => {
   y += 22;
 
   fillRect(ML, y, PW, 14, MED_BLUE);
-  cellText("Vocational Trainer's Monthly Report Sheet", ML, y, PW, 14, WHITE, 8, true, 'center');
+  cellText("VT Monthly Status Report", ML, y, PW, 14, WHITE, 8, true, 'center');
   y += 14;
 
   // ─── VT DETAILS TABLE ────────────────────────────────────────────────────────
@@ -693,7 +693,7 @@ const sendNSQFPdf = (data, res) => {
   // ─── ATTENDANCE OVERVIEW STATS CARD ──────────────────────────────────────────
   y += 8;
   fillRect(ML, y, PW, 13, MED_BLUE, '#A0A0A0');
-  cellText('Report Overview', ML, y, PW, 13, WHITE, 8, true, 'center');
+  cellText('VT Overview', ML, y, PW, 13, WHITE, 8, true, 'center');
   y += 13;
 
   const boxW = PW / 3;
@@ -766,7 +766,7 @@ const sendNSQFPdf = (data, res) => {
   };
 
   let apY = y;
-  drawApprovalRow('Principal/HM :', hmA, LIGHT_BLUE, apY); apY += apLineH;
+  drawApprovalRow('Principal/Hos :', hmA, LIGHT_BLUE, apY); apY += apLineH;
   fillRect(ap3X, apY, ap3W, apLineH, WHITE, '#C0C0C0');
   cellText(`Date: ${fmtDate(hmA.approvedAt)}`, ap3X, apY, ap3W, apLineH, '#555', 6, false);
   apY += apLineH;
