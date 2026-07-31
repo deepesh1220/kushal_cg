@@ -942,9 +942,9 @@ const sendNSQFPdf = (data, res) => {
   [
     [`A.  Total Holidays: ${cntHoliday}`, 'P -', 'for Present'],
     [`B.  Total Sunday: ${cntSunday}`, 'A -', 'for Absent'],
-    [`C.  School Holidays: ${cntSchoolHoliday}`, 'L -', 'for Leave'],
+    [`C.  Local Holidays: ${cntSchoolHoliday}`, 'L -', 'for Leave'],
     [`D.  No. of Extra Leaves: ${cntLeave}`, 'H -', 'for Holidays'],
-    [`E.  Total Present Days: ${cntPresent}`, 'SH -', 'for School Holidays'],
+    [`E.  Total Present Days: ${cntPresent}`, 'SH -', 'for Local Holidays'],
     ['', 'Sun-', 'for Sundays'],
   ].forEach(([label, code, desc]) => {
     fillRect(ML, y, sumLabelW, sumRowH, GRAY_LIGHT, '#C0C0C0');
@@ -1001,7 +1001,7 @@ const sendNSQFPdf = (data, res) => {
     ['Total Leaves', cntLeave, '#FFF2CC', '#7F6000'],
     ['Govt Holidays', cntHoliday, '#D9D9D9', '#404040'],
     ['Total Sundays', cntSunday, '#EDEDED', '#555555'],
-    ['School Holidays', cntSchoolHoliday, '#E8F4FD', '#0E7C47'],
+    ['Local Holidays', cntSchoolHoliday, '#E8F4FD', '#0E7C47'],
   ];
   for (let ki = 0; ki < 6; ki++) {
     const [kLabel, kVal, kBg, kFg] = kpiBoxes[ki];
