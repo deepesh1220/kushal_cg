@@ -3,6 +3,7 @@ const Leave = require('../models/Leave');
 const { pool } = require('../config/db');
 
 const VTP_ROLE_NAME = 'vocational_teacher_provider';
+const normalizeVtpName = (value) => String(value ?? '').trim().toLowerCase();
 
 // ─── Internal helper ──────────────────────────────────────────────────────────
 // Validates that the VT being approved/rejected belongs to the VTP's organization
@@ -40,7 +41,7 @@ const _validateVtBelongsToVtp = async (vtUserId, vtpUser) => {
     };
   }
 
-  if (String(result.rows[0].vtp_name).trim() !== String(vtpName).trim()) {
+  if (normalizeVtpName(result.rows[0].vtp_name) !== normalizeVtpName(vtpName)) {
     return {
       status: 403,
       body: {
@@ -73,7 +74,7 @@ const _validateLeaveBelongsToVtp = async (leaveId, vtpUser) => {
   }
 
   const vtpName = vtpUser.organization_name;
-  if (String(result.rows[0].vtp_name).trim() !== String(vtpName).trim()) {
+  if (normalizeVtpName(result.rows[0].vtp_name) !== normalizeVtpName(vtpName)) {
     return {
       status: 403,
       body: { status: false, message: 'You are not authorized to approve leaves for this VT.' },
