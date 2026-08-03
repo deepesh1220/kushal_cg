@@ -536,13 +536,13 @@ const deleteUserAttendance = async (req, res, next) => {
     if (result.rowCount === 0) {
       return res.status(404).json({
         status: false,
-        message: 'Attendance record not found for this user.',
+        message: 'VT record not found for this user.',
       });
     }
 
     return res.status(200).json({
       status: true,
-      message: 'Attendance record deleted successfully.',
+      message: 'VT record deleted successfully.',
     });
   } catch (err) {
     next(err);

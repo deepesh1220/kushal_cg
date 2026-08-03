@@ -409,7 +409,7 @@ const markVtAttendance = async (req, res, next) => {
     if (vtCheck.rows[0].udise_code != udiseCode) {
       return res.status(403).json({
         status: 'error',
-        message: 'Unauthorized: You can only mark attendance for VTs in your own school.',
+        message: 'Unauthorized: You can only mark VT status for VTs in your own school.',
       });
     }
 
@@ -463,7 +463,7 @@ const markVtAttendance = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      message: `Attendance marked as ${status} successfully.`,
+      message: `VT status marked as ${status} successfully.`,
       data: {
         ...record,
         total_working_hour: workingHours,
@@ -498,7 +498,7 @@ const updateVtAttendance = async (req, res, next) => {
     `, [id]);
 
     if (existingResult.rows.length === 0) {
-      return res.status(404).json({ status: 'error', message: 'Attendance record not found.' });
+      return res.status(404).json({ status: 'error', message: 'VT record not found.' });
     }
 
     const existing = existingResult.rows[0];
@@ -572,7 +572,7 @@ const updateVtAttendance = async (req, res, next) => {
 
     res.json({
       success: true,
-      message: 'Attendance record updated successfully',
+      message: 'VT record updated successfully',
       data: {
         ...record,
         total_working_hour: workingHours,

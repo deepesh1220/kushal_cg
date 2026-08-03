@@ -450,40 +450,42 @@ class Leave {
   }
 
   // ─── Update status by Principal/HM ───────────────────────────────────────────
-  static async updatePrincipalStatus(id, { status, reviewerId }) {
+  static async updatePrincipalStatus(id, { status, reviewerId, remarks = null }) {
     const result = await pool.query(`
       UPDATE leave_requests
       SET 
         status = $1,
         reviewed_by = $2,
         reviewed_at = NOW(),
+        principal_remarks = $4,
         principal_updated_at = NOW(),
         updated_at = NOW(),
         leave_approved = CASE WHEN $3 = 'approved' AND vtp_status = 'approved' THEN TRUE ELSE FALSE END
-      WHERE id = $4
+      WHERE id = $5
       RETURNING *
-    `, [status, reviewerId, status, id]);
+    `, [status, reviewerId, status, remarks, id]);
     return result.rows[0] || null;
   }
 
   // ─── Update status by VTP ───────────────────────────────────────────────────
-  static async updateVtpStatus(id, { status, reviewerId }) {
+  static async updateVtpStatus(id, { status, reviewerId, remarks = null }) {
     const result = await pool.query(`
       UPDATE leave_requests
       SET 
         vtp_status = $1,
+        vtp_remarks = $3,
         vtp_updated_at = NOW(),
         updated_at = NOW(),
         leave_approved = CASE WHEN status = 'approved' AND $2 = 'approved' THEN TRUE ELSE FALSE END
-      WHERE id = $3
+      WHERE id = $4
       RETURNING *
-    `, [status, status, id]);
+    `, [status, status, remarks, id]);
     return result.rows[0] || null;
   }
 
   // ─── Legacy Update Status (for backward compatibility if needed) ────────────
-  static async updateStatus(id, { status, reviewerId }) {
-    return await this.updatePrincipalStatus(id, { status, reviewerId });
+  static async updateStatus(id, { status, reviewerId, remarks = null }) {
+    return await this.updatePrincipalStatus(id, { status, reviewerId, remarks });
   }
 
   // ─── Delete a leave request (before approval) ───────────────────────────────
@@ -661,7 +663,7 @@ const excessLeave = excessResult.rows.length > 0
   }
 
   // ─── Approve leave with balance deduction ─────────────────────────────────
-  static async approveWithDeduction(leaveId, { reviewerId, status }) {
+  static async approveWithDeduction(leaveId, { reviewerId, status, remarks = null }) {
     const client = await pool.connect();
 
     try {
@@ -693,13 +695,14 @@ const excessLeave = excessResult.rows.length > 0
         SET 
           status = $1, 
           reviewed_by = $2, 
+          principal_remarks = $4,
           reviewed_at = NOW(), 
           principal_updated_at = NOW(),
           updated_at = NOW(),
           leave_approved = CASE WHEN $3 = 'approved' AND vtp_status = 'approved' THEN TRUE ELSE FALSE END
-        WHERE id = $4
+        WHERE id = $5
         RETURNING *
-      `, [status, reviewerId, status, leaveId]);
+      `, [status, reviewerId, status, remarks, leaveId]);
 
       // Deduct leave balance
       const deductionResult = await LeaveBalance.deductLeave(

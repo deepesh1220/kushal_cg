@@ -86,7 +86,7 @@ const applyRegularization = async (req, res) => {
     }
 
     const reg = await Regularization.create({ user_id: userId, date, reason });
-    return res.status(201).json({ status: true, message: 'Attendance regularization request submitted successfully.', data: reg });
+    return res.status(201).json({ status: true, message: 'VT regularization request submitted successfully.', data: reg });
   } catch (error) {
     console.error('applyRegularization error:', error.message);
     return res.status(500).json({ status: false, message: error.message });
@@ -184,9 +184,13 @@ const approveRegularization = async (req, res) => {
   const reviewer = req.user;
   const regId = req.params.id;
   const { status } = req.body;
+  const remarks = typeof req.body?.remarks === 'string' ? req.body.remarks.trim() || null : null;
 
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(400).json({ status: false, message: 'Status must be either approved or rejected.' });
+  }
+  if (remarks?.length > 1000) {
+    return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
   }
 
   try {
@@ -203,7 +207,7 @@ const approveRegularization = async (req, res) => {
     const authError = await _validateVtBelongsToHeadmaster(reg.user_id, reviewer);
     if (authError) return res.status(authError.status).json(authError.body);
 
-    const updated = await Regularization.updateStatus(regId, { status, reviewerId: reviewer.id });
+    const updated = await Regularization.updateStatus(regId, { status, reviewerId: reviewer.id, remarks });
 
     // On approval → upsert attendance_records as 'present' with regularization timestamps
     if (status === 'approved') {
@@ -231,13 +235,13 @@ const approveRegularization = async (req, res) => {
 
       await pool.query(`
         INSERT INTO attendance_records (user_id, date, status, check_in_time, check_out_time, remarks, marked_by)
-        VALUES ($1, $2, 'present', $4, $5, 'Attendance Regularized by Headmaster', $3)
+        VALUES ($1, $2, 'present', $4, $5, 'VT Status Regularized by Headmaster', $3)
         ON CONFLICT (user_id, date)
         DO UPDATE SET
           status         = 'present',
           check_in_time  = COALESCE(attendance_records.check_in_time, $4),
           check_out_time = COALESCE(attendance_records.check_out_time, $5),
-          remarks        = 'Attendance Regularized by Headmaster',
+          remarks        = 'VT Status Regularized by Headmaster',
           updated_at     = NOW()
       `, [reg.user_id, dateStr, reviewer.id, checkIn, checkOut]);
     }

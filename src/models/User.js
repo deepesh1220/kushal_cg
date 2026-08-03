@@ -109,11 +109,12 @@ const User = {
 
   // ─── Update PRINCIPAL/HM approval status for a VT ──────────────────────────
   // is_active is true ONLY when BOTH layers (vt + vtp) are 'accepted'
-  async updateApprovalStatus(userId, status, reviewedBy) {
+  async updateApprovalStatus(userId, status, reviewedBy, remarks = null) {
     const result = await pool.query(`
       UPDATE users
       SET
         vt_approval_status = $1::varchar,
+        vt_approval_remarks = $3,
         is_active          = (
           $1::varchar = 'accepted'
           AND COALESCE(vtp_approval_status, 'pending') = 'accepted'
@@ -123,18 +124,20 @@ const User = {
       WHERE id = $2
         AND vt_approval_status IS NOT NULL
       RETURNING id, name, email, phone, vt_approval_status, vtp_approval_status,
+                vt_approval_remarks, vtp_approval_remarks,
                 is_active, principal_updated_at, vtp_updated_at
-    `, [status, userId]);
+    `, [status, userId, remarks]);
     return result.rows[0] || null;
   },
 
   // ─── Update VTP approval status for a VT ───────────────────────────────────
   // is_active is true ONLY when BOTH layers (vt + vtp) are 'accepted'
-  async updateVtpApprovalStatus(userId, status, reviewedBy) {
+  async updateVtpApprovalStatus(userId, status, reviewedBy, remarks = null) {
     const result = await pool.query(`
       UPDATE users
       SET
         vtp_approval_status = $1::varchar,
+        vtp_approval_remarks = $3,
         is_active           = (
           $1::varchar = 'accepted'
           AND COALESCE(vt_approval_status, 'pending') = 'accepted'
@@ -144,8 +147,9 @@ const User = {
       WHERE id = $2
         AND vtp_approval_status IS NOT NULL
       RETURNING id, name, email, phone, vt_approval_status, vtp_approval_status,
+                vt_approval_remarks, vtp_approval_remarks,
                 is_active, principal_updated_at, vtp_updated_at
-    `, [status, userId]);
+    `, [status, userId, remarks]);
     return result.rows[0] || null;
   },
 
@@ -155,7 +159,8 @@ const User = {
     const result = await pool.query(`
       SELECT
         u.id, u.name, u.email, u.phone,
-        u.vt_approval_status, u.vtp_approval_status, u.is_active, u.created_at,
+        u.vt_approval_status, u.vtp_approval_status, u.vt_approval_remarks,
+        u.vtp_approval_remarks, u.is_active, u.created_at,
         v.district_name, v.block_name, v.school_name,
         v.vtp_name, v.trade, v.vt_aadhar, v.udise_code, v.vtp_id
       FROM users u
@@ -172,7 +177,8 @@ const User = {
     const result = await pool.query(`
       SELECT
         u.id, u.name, u.email, u.phone,
-        u.vt_approval_status, u.vtp_approval_status, u.is_active, u.created_at,
+        u.vt_approval_status, u.vtp_approval_status, u.vt_approval_remarks,
+        u.vtp_approval_remarks, u.is_active, u.created_at,
         v.district_name, v.block_name, v.school_name,
         v.vtp_name, v.trade, v.vt_aadhar, v.udise_code, v.vtp_id
       FROM users u
@@ -189,7 +195,8 @@ const User = {
     const result = await pool.query(`
       SELECT
         u.id, u.name, u.email, u.phone,
-        u.vt_approval_status, u.vtp_approval_status, u.is_active, u.created_at,
+        u.vt_approval_status, u.vtp_approval_status, u.vt_approval_remarks,
+        u.vtp_approval_remarks, u.is_active, u.created_at,
         v.district_name, v.block_name, v.school_name,
         v.vtp_name, v.trade, v.vt_aadhar, v.udise_code, v.vtp_id
       FROM users u
@@ -205,7 +212,8 @@ const User = {
     let query = `
       SELECT
         u.id, u.name, u.email, u.phone,
-        u.vt_approval_status, u.vtp_approval_status, u.is_active, u.created_at,
+        u.vt_approval_status, u.vtp_approval_status, u.vt_approval_remarks,
+        u.vtp_approval_remarks, u.is_active, u.created_at,
         v.district_name, v.block_name, v.school_name,
         v.vtp_name, v.trade, v.udise_code, v.vtp_id
       FROM users u

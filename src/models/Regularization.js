@@ -132,17 +132,18 @@ class Regularization {
   }
 
   // ─── Update status (approve / reject) ───────────────────────────────────────
-  static async updateStatus(id, { status, reviewerId }) {
+  static async updateStatus(id, { status, reviewerId, remarks = null }) {
     const result = await pool.query(`
       UPDATE regularization_requests
       SET
         status      = $1,
         reviewed_by = $2,
+        review_remarks = $3,
         reviewed_at = NOW(),
         updated_at  = NOW()
-      WHERE id = $3
+      WHERE id = $4
       RETURNING *
-    `, [status, reviewerId, id]);
+    `, [status, reviewerId, remarks, id]);
     return result.rows[0] || null;
   }
 }

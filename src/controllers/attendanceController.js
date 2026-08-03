@@ -44,7 +44,7 @@ const checkIn = async (req, res) => {
     if (existing) {
       return res.status(409).json({
         status: false,
-        message: `Attendance already marked for today (${today}). Status: ${existing.status}`,
+        message: `VT status is already marked for today (${today}). Status: ${existing.status}`,
         data: existing,
       });
     }
@@ -105,7 +105,7 @@ const checkIn = async (req, res) => {
           if (currentMins > lateCutoffMins) {
             return res.status(403).json({
               status: false,
-              message: `You are late. School opening time was ${school.sch_open_time} with a grace period of ${graceMins} minutes. Please apply for regularization to mark your attendance.`,
+              message: `You are late. School opening time was ${school.sch_open_time} with a grace period of ${graceMins} minutes. Please apply for regularization to update your status.`,
             });
           }
           if (closeTotalMins && currentMins > closeTotalMins) {
@@ -363,7 +363,7 @@ const markAttendance = async (req, res) => {
     if (existing) {
       return res.status(409).json({
         status: false,
-        message: `Attendance already exists for this user on ${date}.`,
+        message: `A VT status already exists for this user on ${date}.`,
         data: existing,
       });
     }
@@ -382,7 +382,7 @@ const markAttendance = async (req, res) => {
 
     return res.status(201).json({
       status: true,
-      message: 'Attendance marked successfully.',
+      message: 'VT status marked successfully.',
       data: record,
     });
   } catch (error) {
@@ -469,10 +469,10 @@ const updateAttendance = async (req, res) => {
     const updated = await Attendance.update(id, { check_in_time, check_out_time, status, remarks, photo_path });
 
     if (!updated) {
-      return res.status(404).json({ status: false, message: 'Attendance record not found.' });
+      return res.status(404).json({ status: false, message: 'VT record not found.' });
     }
 
-    return res.status(200).json({ status: true, message: 'Attendance updated.', data: updated });
+    return res.status(200).json({ status: true, message: 'VT record updated.', data: updated });
   } catch (error) {
     return res.status(500).json({ status: false, message: error.message });
   }
@@ -485,9 +485,9 @@ const deleteAttendance = async (req, res) => {
   try {
     const deleted = await Attendance.delete(id);
     if (!deleted) {
-      return res.status(404).json({ status: false, message: 'Attendance record not found.' });
+      return res.status(404).json({ status: false, message: 'VT record not found.' });
     }
-    return res.status(200).json({ status: true, message: 'Attendance record deleted.' });
+    return res.status(200).json({ status: true, message: 'VT record deleted.' });
   } catch (error) {
     return res.status(500).json({ status: false, message: error.message });
   }
