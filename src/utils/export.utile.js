@@ -766,7 +766,7 @@ const sendNSQFPdf = (data, res) => {
   };
 
   let apY = y;
-  drawApprovalRow('Principal/HOS :', hmA, LIGHT_BLUE, apY); apY += apLineH;
+  drawApprovalRow('Principal/HM (Head Master) :', hmA, LIGHT_BLUE, apY); apY += apLineH;
   fillRect(ap3X, apY, ap3W, apLineH, WHITE, '#C0C0C0');
   cellText(`Date: ${fmtDate(hmA.approvedAt)}`, ap3X, apY, ap3W, apLineH, '#555', 6, false);
   apY += apLineH;

@@ -707,14 +707,14 @@ const approveMonthlyReport = async (req, res) => {
           await client.query('ROLLBACK');
           return res.status(400).json({
             status: false,
-            message: `Report for user ${uid} has not been approved by Principal/HOS yet.`,
+            message: `Report for user ${uid} has not been approved by Principal/HM (Head Master) yet.`,
           });
         }
 
         if ((role_name === 'vocational_teacher_provider' || role_name === 'vtp')) {
           if (rec?.hm_approval_status !== 'approved') {
             await client.query('ROLLBACK');
-            return res.status(400).json({ status: false, message: 'Not approved by Principal/HOS yet.' });
+            return res.status(400).json({ status: false, message: 'Not approved by Principal/HM (Head Master) yet.' });
           }
           if (rec?.deo_approval_status !== 'approved') {
             await client.query('ROLLBACK');
@@ -919,13 +919,13 @@ const approveMonthlyReportBulk = async (req, res) => {
 
         if (role_name === 'deo' && rec?.hm_approval_status !== 'approved') {
           await client.query('ROLLBACK');
-          return res.status(400).json({ status: false, message: `School ${udiseCode} has VT report pending HOS approval.` });
+          return res.status(400).json({ status: false, message: `School ${udiseCode} has VT report pending HM (Head Master) approval.` });
         }
 
         if ((role_name === 'vocational_teacher_provider' || role_name === 'vtp')) {
           if (rec?.hm_approval_status !== 'approved') {
             await client.query('ROLLBACK');
-            return res.status(400).json({ status: false, message: `School ${udiseCode} is pending HOS approval.` });
+            return res.status(400).json({ status: false, message: `School ${udiseCode} is pending HM (Head Master) approval.` });
           }
           if (rec?.deo_approval_status !== 'approved') {
             await client.query('ROLLBACK');
