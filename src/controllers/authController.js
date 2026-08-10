@@ -19,6 +19,7 @@ const {
 } = require('../utils/jwtUtils');
 const { toIST } = require('../utils/timeUtils');
 const { validateDeviceId, hashDeviceId } = require('../utils/deviceUtils');
+const { SCHOOL_RADIUS_METERS, parseCoordinates, getDistanceInMeters, isTrue } = require('../utils/locationUtils');
 const { extractDescriptorFromFile, encryptDescriptor } = require('../utils/faceUtils');
 
 const VT_ROLE_NAME = 'vocational_teacher';
@@ -48,6 +49,60 @@ const deviceMismatchResponse = (res, token) => res.status(403).json({
   message: 'Different Device ID Detected, unable to login.',
   can_request_device_change: true, device_change_token: token,
 });
+
+const validateVtRegistrationLocation = async ({ phone, latitude, longitude, isFakeGPS } = {}) => {
+  if (!phone || latitude === undefined || longitude === undefined || isFakeGPS === undefined) {
+    return { httpStatus: 400, body: { status: false, code: 'MISSING_LOCATION_FIELDS', message: 'phone, latitude, longitude and isFakeGPS are required.' } };
+  }
+  if (isTrue(isFakeGPS)) {
+    return { httpStatus: 403, body: { status: false, code: 'FAKE_GPS_DETECTED', message: 'Fake GPS is not allowed. Please disable fake GPS and try again.' } };
+  }
+  const coordinates = parseCoordinates(latitude, longitude);
+  if (!coordinates) {
+    return { httpStatus: 400, body: { status: false, code: 'INVALID_COORDINATES', message: 'Valid latitude and longitude are required.' } };
+  }
+  const vtStaff = await VtStaffDetail.findByMobile(phone);
+  if (!vtStaff) {
+    return { httpStatus: 404, body: { status: false, code: 'VT_NOT_FOUND', message: 'Your mobile number is not found in the approved Vocational Teacher list.' } };
+  }
+  if (!vtStaff.udise_code) {
+    return { httpStatus: 400, body: { status: false, code: 'UDISE_NOT_MAPPED', message: 'Your school UDISE code is not mapped. Contact administrator.' } };
+  }
+  const school = await VtStaffDetail.findSchoolLocationByUdise(vtStaff.udise_code);
+  if (!school) {
+    return { httpStatus: 404, body: { status: false, code: 'SCHOOL_NOT_FOUND', message: 'School information was not found for your UDISE code.' } };
+  }
+  const schoolCoordinates = parseCoordinates(school.latitude, school.longitude);
+  if (!schoolCoordinates) {
+    return { httpStatus: 400, body: { status: false, code: 'SCHOOL_LOCATION_NOT_CONFIGURED', message: 'School location is not configured. Contact administrator.' } };
+  }
+  const distance = Math.round(getDistanceInMeters(
+    coordinates.latitude, coordinates.longitude,
+    schoolCoordinates.latitude, schoolCoordinates.longitude
+  ));
+  if (distance > SCHOOL_RADIUS_METERS) {
+    return { httpStatus: 403, body: {
+      status: false, code: 'OUTSIDE_SCHOOL_RADIUS',
+      message: `You are ${distance} meters away from the school location. Please come inside the school location within ${SCHOOL_RADIUS_METERS} meters to complete registration.`,
+      data: { within_radius: false, distance_in_meters: distance, allowed_radius_in_meters: SCHOOL_RADIUS_METERS },
+    } };
+  }
+  return { httpStatus: 200, vtStaff, coordinates, body: {
+    status: true, message: 'You are inside the school location radius. You can proceed with registration.',
+    data: { within_radius: true, distance_in_meters: distance, allowed_radius_in_meters: SCHOOL_RADIUS_METERS,
+      udise_code: vtStaff.udise_code, school_name: school.school_name || vtStaff.school_name },
+  } };
+};
+
+const validateRegistrationLocation = async (req, res) => {
+  try {
+    const result = await validateVtRegistrationLocation(req.body);
+    return res.status(result.httpStatus).json(result.body);
+  } catch (error) {
+    console.error('Registration location validation error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error while validating registration location.' });
+  }
+};
 
 // ─── POST /api/auth/register ──────────────────────────────────────────────────
 const register = async (req, res) => {
@@ -188,6 +243,14 @@ const register = async (req, res) => {
     if (isVt && !validateDeviceId(device_id)) {
       return res.status(400).json({ status: false, message: 'A valid device_id (8-255 characters) is required for VT registration.' });
     }
+    let registrationCoordinates = null;
+    if (isVt) {
+      const locationValidation = await validateVtRegistrationLocation({ phone, latitude, longitude, isFakeGPS });
+      if (locationValidation.httpStatus !== 200) {
+        return res.status(locationValidation.httpStatus).json(locationValidation.body);
+      }
+      registrationCoordinates = locationValidation.coordinates;
+    }
     const vtApprovalStatus = isVt ? 'pending' : null;
     const vtpApprovalStatus = isVt ? 'pending' : null;
     const isActiveOnRegister = isVt ? false : true;
@@ -246,8 +309,8 @@ const register = async (req, res) => {
       vtp_id: vtStaff?.vtp_id,
       udise_code: finalUdise || null,
       profile_photo: profile_photo,
-      latitude: latitude ? parseFloat(latitude) : null,
-      longitude: longitude ? parseFloat(longitude) : null,
+      latitude: isVt ? registrationCoordinates.latitude : (latitude ? parseFloat(latitude) : null),
+      longitude: isVt ? registrationCoordinates.longitude : (longitude ? parseFloat(longitude) : null),
       school_open_time: roleName === 'headmaster' ? school_open_time : null,
       school_close_time: roleName === 'headmaster' ? school_close_time : null,
       vt_approval_status: vtApprovalStatus,
@@ -985,4 +1048,4 @@ const getRoles = async (req, res) => {
   }
 };
 
-module.exports = { register, login, loginVT, refreshToken, logout, getMe, getRoles };
+module.exports = { register, validateRegistrationLocation, login, loginVT, refreshToken, logout, getMe, getRoles };

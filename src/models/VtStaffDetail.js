@@ -16,6 +16,16 @@ const VtStaffDetail = {
     return result.rows[0] || null;
   },
 
+  async findSchoolLocationByUdise(udiseCode) {
+    const result = await pool.query(`
+      SELECT udise_sch_code AS udise_code, school_name, latitude, longitude
+      FROM mst_schools
+      WHERE TRIM(CAST(udise_sch_code AS TEXT)) = TRIM(CAST($1 AS TEXT))
+      LIMIT 1
+    `, [udiseCode]);
+    return result.rows[0] || null;
+  },
+
   // ─── Find VT staff record by ID ─────────────────────────────────────────────
   async findById(id) {
     const result = await pool.query(`

@@ -2,19 +2,7 @@ const Attendance = require('../models/Attendance');
 const { formatAttendanceRecord, toIST } = require('../utils/timeUtils');
 const { extractDescriptorFromBase64, compareFaces, saveBase64Image } = require('../utils/faceUtils'); // Temporarily unused while face verification is disabled.
 const { pool } = require('../config/db');
-
-// Haversine formula to calculate distance in meters
-const getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
-  const R = 6371e3; // Earth radius in meters
-  const toRadians = (deg) => deg * (Math.PI / 180);
-  const dLat = toRadians(lat2 - lat1);
-  const dLon = toRadians(lon2 - lon1);
-  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-};
+const { getDistanceInMeters } = require('../utils/locationUtils');
 
 // ─── POST /api/attendance/check-in ───────────────────────────────────────────
 // VT marks their own attendance (GPS required; face verification temporarily disabled)
