@@ -10,6 +10,7 @@ const User = {
         u.vt_approval_status, u.vtp_approval_status,
         u.udise_code, u.organization_name, u.vtp_id,
         u.latitude, u.longitude, u.school_open_time, u.school_close_time,
+        u.device_id_hash, u.device_bound_at, u.device_updated_at,
         r.id   AS role_id,
         r.name AS role_name
       FROM users u
@@ -28,6 +29,7 @@ const User = {
         u.vt_approval_status, u.vtp_approval_status,
         u.udise_code, u.organization_name, u.vtp_id,
         u.latitude, u.longitude, u.school_open_time, u.school_close_time,
+        u.device_id_hash, u.device_bound_at, u.device_updated_at,
         r.id   AS role_id,
         r.name AS role_name
       FROM users u
@@ -46,6 +48,7 @@ const User = {
         u.vt_approval_status, u.vtp_approval_status,
         u.udise_code, u.organization_name, u.vtp_id,
         u.latitude, u.longitude, u.school_open_time, u.school_close_time,
+        u.device_id_hash, u.device_bound_at, u.device_updated_at,
         r.id   AS role_id,
         r.name AS role_name
       FROM users u
@@ -72,13 +75,13 @@ const User = {
   },
 
   // ─── Create a new user ──────────────────────────────────────────────────────
-  async create({ name, email, phone, password_hash, role_id, vt_staff_id = null, organization_name = null, udise_code = null, profile_photo = null, latitude = null, longitude = null, school_open_time = null, school_close_time = null, vt_approval_status = null, vtp_approval_status = null, is_active = true ,vtp_id=null}) {
+  async create({ name, email, phone, password_hash, role_id, vt_staff_id = null, organization_name = null, udise_code = null, profile_photo = null, latitude = null, longitude = null, school_open_time = null, school_close_time = null, vt_approval_status = null, vtp_approval_status = null, is_active = true, vtp_id = null, device_id_hash = null }) {
     const result = await pool.query(`
       INSERT INTO users
-        (name, email, phone, password_hash, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, vtp_approval_status, is_active,vtp_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,$17)
+        (name, email, phone, password_hash, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, vtp_approval_status, is_active, vtp_id, device_id_hash, device_bound_at, device_updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::VARCHAR, CASE WHEN $18::VARCHAR IS NULL THEN NULL ELSE NOW() END, CASE WHEN $18::VARCHAR IS NULL THEN NULL ELSE NOW() END)
       RETURNING id, name, email, phone, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, vtp_approval_status, is_active, vtp_id,created_at
-    `, [name, email, phone || null, password_hash, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, vtp_approval_status, is_active,vtp_id]);
+    `, [name, email, phone || null, password_hash, role_id, vt_staff_id, organization_name, udise_code, profile_photo, latitude, longitude, school_open_time, school_close_time, vt_approval_status, vtp_approval_status, is_active, vtp_id, device_id_hash]);
     return result.rows[0];
   },
 

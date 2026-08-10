@@ -60,14 +60,10 @@ const _validateVtBelongsToHeadmaster = async (vtUserId, headmaster) => {
 // Vocational teacher applies for leave
 const applyLeave = async (req, res) => {
   const userId = req.user.id;
-  let { from_date, to_date, reason, leave_type } = req.body;
+  let { from_date, to_date, reason } = req.body;
 
   if (!from_date || !to_date) {
     return res.status(400).json({ status: false, message: 'from_date and to_date are required.' });
-  }
-
-  if (leave_type && !['full-day', 'first-half', 'second-half'].includes(leave_type)) {
-    return res.status(400).json({ status: false, message: "leave_type must be 'full-day', 'first-half', or 'second-half'." });
   }
 
   from_date = parseDateStr(from_date);
@@ -92,13 +88,13 @@ const applyLeave = async (req, res) => {
 
     // Pre-validate balance so VT is warned up-front
     const LeaveBalance = require('../models/LeaveBalance');
-    const reqType = leave_type || 'full-day';
+    const reqType = 'full-day';
     // Lazy-credit annual EL so first-time applicants see correct balance
     await LeaveBalance.ensureAnnualCredit(userId);
     const check = await LeaveBalance.checkSufficientBalance(userId, reqType);
     // VT can apply for leave even with insufficient balance; excess is tracked separately
 
-    const leave = await Leave.create({ user_id: userId, from_date, to_date, reason, leave_type });
+    const leave = await Leave.create({ user_id: userId, from_date, to_date, reason });
     return res.status(201).json({ status: true, message: 'Leave request submitted successfully.', data: leave });
   } catch (error) {
     console.error('Apply leave error:', error.message);
@@ -279,7 +275,7 @@ const approveRejectLeave = async (req, res) => {
 const updateLeave = async (req, res) => {
   const userId = req.user.id;
   const leaveId = req.params.id;
-  let { from_date, to_date, reason, leave_type } = req.body;
+  let { from_date, to_date, reason } = req.body;
 
   try {
     const leave = await Leave.findById(leaveId);
@@ -293,10 +289,6 @@ const updateLeave = async (req, res) => {
 
     if (leave.status !== 'pending') {
       return res.status(400).json({ status: false, message: 'You cannot edit a leave request that has already been approved or rejected.' });
-    }
-
-    if (leave_type && !['full-day', 'first-half', 'second-half'].includes(leave_type)) {
-      return res.status(400).json({ status: false, message: "leave_type must be 'full-day', 'first-half', or 'second-half'." });
     }
 
     if (from_date) from_date = parseDateStr(from_date);
@@ -320,7 +312,7 @@ const updateLeave = async (req, res) => {
       // }
     }
 
-    const updated = await Leave.update(leaveId, { from_date, to_date, reason, leave_type });
+    const updated = await Leave.update(leaveId, { from_date, to_date, reason });
     return res.status(200).json({ status: true, message: 'Leave request updated.', data: updated });
   } catch (error) {
     return res.status(500).json({ status: false, message: error.message });

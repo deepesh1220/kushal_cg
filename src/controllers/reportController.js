@@ -348,7 +348,8 @@ const downloadVtMonthlyReportPdf = async (req, res) => {
     const approvalRow = await pool.query(
       `SELECT is_locked, hm_approval_status, hm_approved_at,
               deo_approval_status, deo_approved_at,
-              vtp_approval_status, vtp_approved_at
+              vtp_approval_status, vtp_approved_at,
+              hm_approval_type, deo_approval_type, vtp_approval_type
        FROM monthly_school_reports
        WHERE user_id = $1 AND report_month = $2 AND report_year = $3 LIMIT 1`,
       [user_id, monthInt, yearInt]
@@ -375,9 +376,9 @@ const downloadVtMonthlyReportPdf = async (req, res) => {
     }
 
     snapshotData.approvals = {
-      hm: { status: ar.hm_approval_status || 'pending', approvedAt: ar.hm_approved_at || null },
-      deo: { status: ar.deo_approval_status || 'pending', approvedAt: ar.deo_approved_at || null },
-      vtp: { status: ar.vtp_approval_status || 'pending', approvedAt: ar.vtp_approved_at || null },
+      hm: { status: ar.hm_approval_status || 'pending', approvedAt: ar.hm_approved_at || null, type: ar.hm_approval_type || null },
+      deo: { status: ar.deo_approval_status || 'pending', approvedAt: ar.deo_approved_at || null, type: ar.deo_approval_type || null },
+      vtp: { status: ar.vtp_approval_status || 'pending', approvedAt: ar.vtp_approved_at || null, type: ar.vtp_approval_type || null },
     };
 
     return sendNSQFPdf(snapshotData, res);
@@ -500,6 +501,8 @@ const getMonthlyVtReportsList = async (req, res) => {
          COALESCE(msr.vtp_approval_status, 'pending') AS vtp_approval_status,
          msr.hm_remarks, msr.deo_remarks, msr.vtp_remarks,
          msr.hm_approved_at, msr.deo_approved_at, msr.vtp_approved_at,
+         msr.hm_approval_type, msr.deo_approval_type, msr.vtp_approval_type,
+         COALESCE(msr.is_auto_approved, FALSE) AS is_auto_approved,
          msr.is_locked,
          (snap.id IS NOT NULL) AS has_snapshot
        ${baseQuery}
@@ -633,28 +636,34 @@ const approveMonthlyReport = async (req, res) => {
     }
 
     // Map role → DB columns
-    let statusCol, remarksCol, approvedByCol, approvedAtCol;
+    let statusCol, remarksCol, approvedByCol, approvedAtCol, approvalTypeCol;
     if (role_name === 'headmaster') {
       statusCol = 'hm_approval_status'; remarksCol = 'hm_remarks';
       approvedByCol = 'hm_approved_by'; approvedAtCol = 'hm_approved_at';
+      approvalTypeCol = 'hm_approval_type';
     } else if (role_name === 'vocational_teacher_provider' || role_name === 'vtp') {
       statusCol = 'vtp_approval_status'; remarksCol = 'vtp_remarks';
       approvedByCol = 'vtp_approved_by'; approvedAtCol = 'vtp_approved_at';
+      approvalTypeCol = 'vtp_approval_type';
     } else if (role_name === 'deo') {
       statusCol = 'deo_approval_status'; remarksCol = 'deo_remarks';
       approvedByCol = 'deo_approved_by'; approvedAtCol = 'deo_approved_at';
+      approvalTypeCol = 'deo_approval_type';
     } else if (['admin', 'super_admin'].includes(role_name)) {
       // Admin must specify which layer via an optional 'layer' body field
       const layer = req.body.layer || 'hm';
       if (layer === 'deo') {
         statusCol = 'deo_approval_status'; remarksCol = 'deo_remarks';
         approvedByCol = 'deo_approved_by'; approvedAtCol = 'deo_approved_at';
+        approvalTypeCol = 'deo_approval_type';
       } else if (layer === 'vtp') {
         statusCol = 'vtp_approval_status'; remarksCol = 'vtp_remarks';
         approvedByCol = 'vtp_approved_by'; approvedAtCol = 'vtp_approved_at';
+        approvalTypeCol = 'vtp_approval_type';
       } else {
         statusCol = 'hm_approval_status'; remarksCol = 'hm_remarks';
         approvedByCol = 'hm_approved_by'; approvedAtCol = 'hm_approved_at';
+        approvalTypeCol = 'hm_approval_type';
       }
     } else {
       return res.status(403).json({ status: false, message: `Role '${role_name}' is not authorized to approve monthly reports.` });
@@ -727,8 +736,8 @@ const approveMonthlyReport = async (req, res) => {
           const ins = await client.query(
             `INSERT INTO monthly_school_reports
                (udise_code, user_id, report_month, report_year,
-                ${statusCol}, ${remarksCol}, ${approvedByCol}, ${approvedAtCol}, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW()) RETURNING *`,
+                ${statusCol}, ${remarksCol}, ${approvedByCol}, ${approvedAtCol}, ${approvalTypeCol}, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), CASE WHEN $5 = 'pending' THEN NULL ELSE 'manual' END, NOW()) RETURNING *`,
             [queryUdiseCode, uid, month, year, status, remarks || '', req.user.id]
           );
           processedUsers.push(ins.rows[0]);
@@ -745,6 +754,7 @@ const approveMonthlyReport = async (req, res) => {
                  ${remarksCol}   = $2,
                  ${approvedByCol}= $3,
                  ${approvedAtCol}= NOW(),
+                 ${approvalTypeCol}= CASE WHEN $1 = 'pending' THEN NULL ELSE 'manual' END,
                  is_locked       = $4,
                  updated_at      = NOW()
              WHERE user_id = $5 AND report_month = $6 AND report_year = $7
@@ -822,27 +832,33 @@ const approveMonthlyReportBulk = async (req, res) => {
       return res.status(400).json({ status: false, message: 'Invalid status. Must be approved, rejected, or pending.' });
     }
 
-    let statusCol; let remarksCol; let approvedByCol; let approvedAtCol;
+    let statusCol; let remarksCol; let approvedByCol; let approvedAtCol; let approvalTypeCol;
     if (role_name === 'headmaster') {
       statusCol = 'hm_approval_status'; remarksCol = 'hm_remarks';
       approvedByCol = 'hm_approved_by'; approvedAtCol = 'hm_approved_at';
+      approvalTypeCol = 'hm_approval_type';
     } else if (role_name === 'vocational_teacher_provider' || role_name === 'vtp') {
       statusCol = 'vtp_approval_status'; remarksCol = 'vtp_remarks';
       approvedByCol = 'vtp_approved_by'; approvedAtCol = 'vtp_approved_at';
+      approvalTypeCol = 'vtp_approval_type';
     } else if (role_name === 'deo') {
       statusCol = 'deo_approval_status'; remarksCol = 'deo_remarks';
       approvedByCol = 'deo_approved_by'; approvedAtCol = 'deo_approved_at';
+      approvalTypeCol = 'deo_approval_type';
     } else if (['admin', 'super_admin'].includes(role_name)) {
       const layer = req.body.layer || 'hm';
       if (layer === 'deo') {
         statusCol = 'deo_approval_status'; remarksCol = 'deo_remarks';
         approvedByCol = 'deo_approved_by'; approvedAtCol = 'deo_approved_at';
+        approvalTypeCol = 'deo_approval_type';
       } else if (layer === 'vtp') {
         statusCol = 'vtp_approval_status'; remarksCol = 'vtp_remarks';
         approvedByCol = 'vtp_approved_by'; approvedAtCol = 'vtp_approved_at';
+        approvalTypeCol = 'vtp_approval_type';
       } else {
         statusCol = 'hm_approval_status'; remarksCol = 'hm_remarks';
         approvedByCol = 'hm_approved_by'; approvedAtCol = 'hm_approved_at';
+        approvalTypeCol = 'hm_approval_type';
       }
     } else {
       return res.status(403).json({ status: false, message: `Role '${role_name}' is not authorized to approve monthly reports.` });
@@ -937,8 +953,8 @@ const approveMonthlyReportBulk = async (req, res) => {
           const ins = await client.query(
             `INSERT INTO monthly_school_reports
               (udise_code, user_id, report_month, report_year,
-               ${statusCol}, ${remarksCol}, ${approvedByCol}, ${approvedAtCol}, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW()) RETURNING *`,
+               ${statusCol}, ${remarksCol}, ${approvedByCol}, ${approvedAtCol}, ${approvalTypeCol}, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), CASE WHEN $5 = 'pending' THEN NULL ELSE 'manual' END, NOW()) RETURNING *`,
             [udiseCode, uid, monthInt, yearInt, status, remarks || '', req.user.id]
           );
           processedUsers.push(ins.rows[0]);
@@ -954,6 +970,7 @@ const approveMonthlyReportBulk = async (req, res) => {
                  ${remarksCol} = $2,
                  ${approvedByCol} = $3,
                  ${approvedAtCol} = NOW(),
+                 ${approvalTypeCol} = CASE WHEN $1 = 'pending' THEN NULL ELSE 'manual' END,
                  is_locked = $4,
                  updated_at = NOW()
              WHERE user_id = $5 AND report_month = $6 AND report_year = $7

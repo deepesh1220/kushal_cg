@@ -51,15 +51,10 @@ const _validateVtBelongsToHeadmaster = async (vtUserId, headmaster) => {
 // req.body: { from_date, to_date, reason }
 const applyOnDuty = async (req, res) => {
   const userId = req.user.id;
-  let { from_date, to_date, reason, onDuty_type } = req.body;
+  let { from_date, to_date, reason } = req.body;
 
   if (!from_date || !to_date) {
     return res.status(400).json({ status: false, message: 'from_date and to_date are required.' });
-  }
-
-  const validTypes = ['full-day', 'first-half', 'second-half'];
-  if (!onDuty_type || !validTypes.includes(onDuty_type)) {
-    return res.status(400).json({ status: false, message: "onDuty_type must be 'full-day', 'first-half', or 'second-half'." });
   }
 
   from_date = parseDateStr(from_date);
@@ -82,7 +77,7 @@ const applyOnDuty = async (req, res) => {
       return res.status(400).json({ status: false, message: 'You already have a pending or approved OD request during this period.' });
     }
 
-    const od = await OnDuty.create({ user_id: userId, from_date, to_date, od_type: onDuty_type, reason });
+    const od = await OnDuty.create({ user_id: userId, from_date, to_date, reason });
     return res.status(201).json({ status: true, message: 'On Duty request submitted successfully.', data: od });
   } catch (error) {
     console.error('applyOnDuty error:', error.message);

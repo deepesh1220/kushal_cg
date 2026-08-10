@@ -761,7 +761,7 @@ const sendNSQFPdf = (data, res) => {
     fillRect(ap3X, yPos, ap3W, apLineH, bgColor, '#C0C0C0');
     cellText(`${label}`, ap3X, yPos, ap3W * 0.5, apLineH, DARK_BLUE, 6, true);
     doc.save().fillColor(apColor(apObj.status)).font('Helvetica-Bold').fontSize(6)
-      .text(apStatus(apObj.status), ap3X + ap3W * 0.5, yPos + 3, { width: ap3W * 0.5 - 4 });
+      .text(`${apStatus(apObj.status)}${apObj.type ? ` (${apObj.type.toUpperCase()})` : ''}`, ap3X + ap3W * 0.5, yPos + 3, { width: ap3W * 0.5 - 4 });
     doc.restore();
   };
 

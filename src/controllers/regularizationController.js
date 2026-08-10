@@ -24,6 +24,37 @@ const parseDateStr = (dateStr) => {
   return dateStr;
 };
 
+const VTP_ROLE_NAME = 'vocational_teacher_provider';
+
+const parsePagination = ({ limit, page }) => {
+  const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
+  const parsedPage = Math.max(parseInt(page, 10) || 1, 1);
+  return { parsedLimit, parsedPage, parsedOffset: (parsedPage - 1) * parsedLimit };
+};
+
+const upsertRegularizedAttendance = async (reg, markedBy) => {
+  const dateStr = new Date(reg.date).toISOString().split('T')[0];
+  const timeStr = new Date(reg.created_at).toTimeString().split(' ')[0];
+  const schoolResult = await pool.query(`
+    SELECT ms.sch_close_time FROM users u
+    JOIN mst_schools ms ON COALESCE(u.udise_code, (
+      SELECT v.udise_code FROM vt_staff_details v WHERE v.id = u.vt_staff_id
+    )) = ms.udise_sch_code
+    WHERE u.id = $1 LIMIT 1
+  `, [reg.user_id]);
+  const closeTime = schoolResult.rows[0]?.sch_close_time;
+  await pool.query(`
+    INSERT INTO attendance_records
+      (user_id, date, status, check_in_time, check_out_time, remarks, marked_by)
+    VALUES ($1, $2, 'present', $3, $4, 'VT Status Regularized by Headmaster & VTP', $5)
+    ON CONFLICT (user_id, date) DO UPDATE SET
+      status = 'present',
+      check_in_time = COALESCE(attendance_records.check_in_time, EXCLUDED.check_in_time),
+      check_out_time = COALESCE(attendance_records.check_out_time, EXCLUDED.check_out_time),
+      remarks = EXCLUDED.remarks, marked_by = EXCLUDED.marked_by, updated_at = NOW()
+  `, [reg.user_id, dateStr, `${dateStr} ${timeStr}`, closeTime ? `${dateStr} ${closeTime}` : null, markedBy]);
+};
+
 // ─── Shared helper: validate VT belongs to headmaster's school ─────────────────
 const _validateVtBelongsToHeadmaster = async (vtUserId, headmaster) => {
   if (['super_admin', 'admin'].includes(headmaster.role_name)) return null;
@@ -54,6 +85,25 @@ const _validateVtBelongsToHeadmaster = async (vtUserId, headmaster) => {
     };
   }
 
+  return null;
+};
+
+const _validateVtBelongsToVtp = async (vtUserId, vtpUser) => {
+  if (['super_admin', 'admin'].includes(vtpUser.role_name)) return null;
+  if (vtpUser.role_name !== VTP_ROLE_NAME) {
+    return { status: 403, body: { status: false, message: 'Only VTP users can access this resource.' } };
+  }
+  if (!vtpUser.vtp_id) {
+    return { status: 400, body: { status: false, message: 'Your account is not linked to a VTP ID. Contact administrator.' } };
+  }
+  const result = await pool.query(`
+    SELECT TRIM(COALESCE(u.vtp_id, v.vtp_id)) AS vtp_id
+    FROM users u LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id WHERE u.id = $1
+  `, [vtUserId]);
+  if (!result.rows.length) return { status: 404, body: { status: false, message: 'Vocational Teacher not found.' } };
+  if (String(result.rows[0].vtp_id || '').trim() !== String(vtpUser.vtp_id).trim()) {
+    return { status: 403, body: { status: false, message: 'You are not authorized to approve regularization requests for this VT.' } };
+  }
   return null;
 };
 
@@ -199,18 +249,21 @@ const approveRegularization = async (req, res) => {
       return res.status(404).json({ status: false, message: 'Regularization request not found.' });
     }
 
-    if (reg.status !== 'pending') {
-      return res.status(400).json({ status: false, message: `Request is already ${reg.status}.` });
+    if (reg.hm_status !== 'pending') {
+      return res.status(400).json({ status: false, message: `Headmaster has already ${reg.hm_status} this request.` });
+    }
+    if (reg.status === 'rejected') {
+      return res.status(400).json({ status: false, message: 'This request has already been rejected.' });
     }
 
     // Validate headmaster can act on this VT
     const authError = await _validateVtBelongsToHeadmaster(reg.user_id, reviewer);
     if (authError) return res.status(authError.status).json(authError.body);
 
-    const updated = await Regularization.updateStatus(regId, { status, reviewerId: reviewer.id, remarks });
+    const updated = await Regularization.updateHmStatus(regId, { status, reviewerId: reviewer.id, remarks });
 
     // On approval → upsert attendance_records as 'present' with regularization timestamps
-    if (status === 'approved') {
+    if (updated.regularization_approved === true) {
       const d = new Date(reg.date);
       const dateStr = d.toISOString().split('T')[0];
 
@@ -235,18 +288,23 @@ const approveRegularization = async (req, res) => {
 
       await pool.query(`
         INSERT INTO attendance_records (user_id, date, status, check_in_time, check_out_time, remarks, marked_by)
-        VALUES ($1, $2, 'present', $4, $5, 'VT Status Regularized by Headmaster', $3)
+        VALUES ($1, $2, 'present', $4, $5, 'VT Status Regularized by Headmaster & VTP', $3)
         ON CONFLICT (user_id, date)
         DO UPDATE SET
           status         = 'present',
           check_in_time  = COALESCE(attendance_records.check_in_time, $4),
           check_out_time = COALESCE(attendance_records.check_out_time, $5),
-          remarks        = 'VT Status Regularized by Headmaster',
+          remarks        = 'VT Status Regularized by Headmaster & VTP',
           updated_at     = NOW()
       `, [reg.user_id, dateStr, reviewer.id, checkIn, checkOut]);
     }
 
-    return res.status(200).json({ status: true, message: `Regularization request successfully ${status}.`, data: updated });
+    const message = updated.regularization_approved
+      ? 'Regularization request fully approved (Headmaster + VTP). Attendance updated.'
+      : status === 'rejected'
+        ? 'Regularization request rejected by Headmaster.'
+        : 'Regularization request approved by Headmaster. Awaiting VTP approval.';
+    return res.status(200).json({ status: true, message, data: updated });
   } catch (error) {
     console.error('approveRegularization error:', error.message);
     return res.status(500).json({ status: false, message: error.message });
@@ -296,9 +354,13 @@ const getAllRegularizations = async (req, res) => {
   let { udise_code, user_id, status, from_date, to_date, limit, page } = req.body;
 
   try {
-    const parsedLimit = limit ? parseInt(limit, 10) : 10;
-    const parsedPage = page ? parseInt(page, 10) : 1;
-    const parsedOffset = (parsedPage - 1) * parsedLimit;
+    if (!['super_admin', 'admin'].includes(req.user.role_name)) {
+      if (!req.user.udise_code) {
+        return res.status(400).json({ status: false, message: 'Your account is not linked to a school UDISE code.' });
+      }
+      udise_code = req.user.udise_code;
+    }
+    const { parsedLimit, parsedPage, parsedOffset } = parsePagination({ limit, page });
 
     if (from_date) from_date = parseDateStr(from_date);
     if (to_date) to_date = parseDateStr(to_date);
@@ -329,10 +391,90 @@ const getAllRegularizations = async (req, res) => {
   }
 };
 
+// VTP views regularization requests scoped to its linked VTs.
+const getVtpRegularizations = async (req, res) => {
+  try {
+    if (!['super_admin', 'admin'].includes(req.user.role_name)) {
+      if (req.user.role_name !== VTP_ROLE_NAME) {
+        return res.status(403).json({ status: false, message: 'Only VTP users can access this resource.' });
+      }
+      if (!req.user.vtp_id) {
+        return res.status(400).json({ status: false, message: 'Your account is not linked to a VTP ID. Contact administrator.' });
+      }
+    }
+    const { status, from_date, to_date } = req.body;
+    const { parsedLimit, parsedPage, parsedOffset } = parsePagination(req.body);
+    const filters = {
+      status,
+      from_date: from_date ? parseDateStr(from_date) : undefined,
+      to_date: to_date ? parseDateStr(to_date) : undefined,
+      limit: parsedLimit,
+      offset: parsedOffset,
+    };
+    const data = ['super_admin', 'admin'].includes(req.user.role_name)
+      ? await Regularization.findAll({ ...filters, approval_status_column: 'vtp_status' })
+      : await Regularization.findAllByVtpId(req.user.vtp_id, filters);
+    return res.status(200).json({
+      status: true,
+      pagination: {
+        totalRecords: data.totalRecords,
+        totalPages: Math.ceil(data.totalRecords / parsedLimit),
+        currentPage: parsedPage,
+        limit: parsedLimit,
+      },
+      data: data.data,
+    });
+  } catch (error) {
+    console.error('getVtpRegularizations error:', error.message);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+};
+
+// VTP approves or rejects one regularization request in its organization.
+const actionRegularizationByVtp = async (req, res) => {
+  const requestId = parseInt(req.params.requestId, 10);
+  const { status } = req.body;
+  const remarks = typeof req.body?.remarks === 'string' ? req.body.remarks.trim() || null : null;
+  if (!Number.isInteger(requestId)) return res.status(400).json({ status: false, message: 'Invalid request ID.' });
+  if (!['approved', 'rejected'].includes(status)) {
+    return res.status(400).json({ status: false, message: "status must be 'approved' or 'rejected'." });
+  }
+  if (remarks?.length > 1000) return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
+
+  try {
+    const reg = await Regularization.findById(requestId);
+    if (!reg) return res.status(404).json({ status: false, message: 'Regularization request not found.' });
+    if (reg.vtp_status !== 'pending') {
+      return res.status(400).json({ status: false, message: `VTP has already ${reg.vtp_status} this request.` });
+    }
+    if (reg.status === 'rejected') {
+      return res.status(400).json({ status: false, message: 'This request has already been rejected.' });
+    }
+    const authError = await _validateVtBelongsToVtp(reg.user_id, req.user);
+    if (authError) return res.status(authError.status).json(authError.body);
+
+    const updated = await Regularization.updateVtpStatus(requestId, {
+      status, reviewerId: req.user.id, remarks,
+    });
+    if (updated.regularization_approved === true) await upsertRegularizedAttendance(reg, req.user.id);
+    const message = updated.regularization_approved
+      ? 'Regularization request fully approved (Headmaster + VTP). Attendance updated.'
+      : status === 'rejected'
+        ? 'Regularization request rejected by VTP.'
+        : 'Regularization request approved by VTP. Awaiting Headmaster approval.';
+    return res.status(200).json({ status: true, message, data: updated });
+  } catch (error) {
+    console.error('actionRegularizationByVtp error:', error.message);
+    return res.status(500).json({ status: false, message: error.message });
+  }
+};
+
 module.exports = {
   applyRegularization,
   applyRegularizationWithLocation,
   approveRegularization,
   getMyRegularizationRequests,
-  getAllRegularizations
+  getAllRegularizations,
+  getVtpRegularizations,
+  actionRegularizationByVtp,
 };

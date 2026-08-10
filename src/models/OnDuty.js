@@ -22,13 +22,13 @@ class OnDuty {
   }
 
   // ─── Create a new OD request ─────────────────────────────────────────────────
-  static async create({ user_id, from_date, to_date, od_type, reason }) {
+  static async create({ user_id, from_date, to_date, reason }) {
     const result = await pool.query(`
-      INSERT INTO od_requests (user_id, from_date, to_date, od_type, reason, status,
+      INSERT INTO od_requests (user_id, from_date, to_date, reason, status,
                                hm_status, vtp_status, od_approved)
-      VALUES ($1, $2, $3, $4, $5, 'pending', 'pending', 'pending', FALSE)
+      VALUES ($1, $2, $3, $4, 'pending', 'pending', 'pending', FALSE)
       RETURNING *
-    `, [user_id, from_date, to_date, od_type, reason]);
+    `, [user_id, from_date, to_date, reason]);
     return result.rows[0];
   }
 
@@ -173,7 +173,7 @@ class OnDuty {
   //   HM rejects                     → status = 'rejected'
   //   HM approves + VTP pending      → status stays 'pending'
   //   HM approves + VTP approves     → status = 'approved', od_approved = TRUE
-  static async updateHmStatus(id, { status, reviewerId, remarks }) {
+  static async updateHmStatus(id, { status, reviewerId, remarks, approvalType = 'manual' }) {
     const result = await pool.query(`
       UPDATE od_requests
       SET
@@ -190,10 +190,12 @@ class OnDuty {
           WHEN $1::varchar = 'approved' AND vtp_status = 'approved' THEN TRUE
           ELSE FALSE
         END,
+        hm_approval_type = $4,
+        is_auto_approved = is_auto_approved OR $4 = 'auto',
         updated_at = NOW()
-      WHERE id = $4
+      WHERE id = $5 AND hm_status = 'pending' AND status <> 'rejected'
       RETURNING *
-    `, [status, reviewerId, remarks || null, id]);
+    `, [status, reviewerId, remarks || null, approvalType, id]);
     return result.rows[0] || null;
   }
 
@@ -202,7 +204,7 @@ class OnDuty {
   //   VTP rejects                      → status = 'rejected'
   //   VTP approves + HM pending        → status stays 'pending'
   //   VTP approves + HM approved       → status = 'approved', od_approved = TRUE
-  static async updateVtpStatus(id, { status, reviewerId, remarks }) {
+  static async updateVtpStatus(id, { status, reviewerId, remarks, approvalType = 'manual' }) {
     const result = await pool.query(`
       UPDATE od_requests
       SET
@@ -219,10 +221,12 @@ class OnDuty {
           WHEN $1::varchar = 'approved' AND hm_status = 'approved' THEN TRUE
           ELSE FALSE
         END,
+        vtp_approval_type = $4,
+        is_auto_approved = is_auto_approved OR $4 = 'auto',
         updated_at = NOW()
-      WHERE id = $4
+      WHERE id = $5 AND vtp_status = 'pending' AND status <> 'rejected'
       RETURNING *
-    `, [status, reviewerId, remarks || null, id]);
+    `, [status, reviewerId, remarks || null, approvalType, id]);
     return result.rows[0] || null;
   }
 

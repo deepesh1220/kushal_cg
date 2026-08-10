@@ -7,6 +7,8 @@ const {
   approveRegularization,
   getMyRegularizationRequests,
   getAllRegularizations,
+  getVtpRegularizations,
+  actionRegularizationByVtp,
 } = require('../controllers/regularizationController');
 
 // All regularization routes require authentication
@@ -28,6 +30,10 @@ router.get('/my', authorize('leave:view_own'), getMyRegularizationRequests);
 // Get all regularizations (filtered by udise_code or user_id via POST body)
 // POST /api/regularization/list
 router.post('/list', authorize('leave:approve'), getAllRegularizations);
+
+// VTP-scoped dual approval routes
+router.post('/vtp', authorize('vt:approve_vtp'), getVtpRegularizations);
+router.patch('/vtp/:requestId/status', authorize('vt:approve_vtp'), actionRegularizationByVtp);
 
 // Approve or reject a regularization request
 // PATCH /api/regularization/:id/status   body: { status }

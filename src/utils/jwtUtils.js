@@ -33,10 +33,26 @@ const getRefreshTokenExpiry = () => {
   return date;
 };
 
+const generateDeviceChangeToken = (payload) => jwt.sign(
+  { ...payload, token_type: 'device_change' },
+  process.env.JWT_SECRET,
+  { expiresIn: process.env.DEVICE_CHANGE_TOKEN_EXPIRES_IN || '10m' }
+);
+
+const verifyDeviceChangeToken = (token) => {
+  const decoded = jwt.verify(token, process.env.JWT_SECRET);
+  if (decoded.token_type !== 'device_change') {
+    throw new jwt.JsonWebTokenError('Invalid device change token.');
+  }
+  return decoded;
+};
+
 module.exports = {
   generateAccessToken,
   generateRefreshToken,
   verifyAccessToken,
   verifyRefreshToken,
   getRefreshTokenExpiry,
+  generateDeviceChangeToken,
+  verifyDeviceChangeToken,
 };

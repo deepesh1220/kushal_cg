@@ -24,12 +24,12 @@ class Leave {
   }
 
   // ─── Create a new leave request ─────────────────────────────────────────────
-  static async create({ user_id, from_date, to_date, reason, leave_type = 'full-day' }) {
+  static async create({ user_id, from_date, to_date, reason }) {
     const result = await pool.query(`
-      INSERT INTO leave_requests (user_id, from_date, to_date, reason, leave_type, status)
-      VALUES ($1, $2, $3, $4, $5, 'pending')
+      INSERT INTO leave_requests (user_id, from_date, to_date, reason, status)
+      VALUES ($1, $2, $3, $4, 'pending')
       RETURNING *
-    `, [user_id, from_date, to_date, reason, leave_type]);
+    `, [user_id, from_date, to_date, reason]);
     return result.rows[0];
   }
 
@@ -410,6 +410,9 @@ class Leave {
          l.to_date,
          l.status       AS principal_status,
          l.vtp_status   AS status,
+         l.principal_approval_type,
+         l.vtp_approval_type,
+         l.is_auto_approved,
          l.leave_approved,
          l.reason,
          l.created_at   AS applied_at,
@@ -434,23 +437,22 @@ class Leave {
 
 
   // ─── Update leave request (before approval) ─────────────────────────────────
-  static async update(id, { from_date, to_date, reason, leave_type }) {
+  static async update(id, { from_date, to_date, reason }) {
     const result = await pool.query(`
       UPDATE leave_requests
       SET 
         from_date  = COALESCE($1, from_date),
         to_date    = COALESCE($2, to_date),
         reason     = COALESCE($3, reason),
-        leave_type = COALESCE($4, leave_type),
         updated_at = NOW()
-      WHERE id = $5 AND status = 'pending'
+      WHERE id = $4 AND status = 'pending'
       RETURNING *
-    `, [from_date, to_date, reason, leave_type, id]);
+    `, [from_date, to_date, reason, id]);
     return result.rows[0] || null;
   }
 
   // ─── Update status by Principal/HM ───────────────────────────────────────────
-  static async updatePrincipalStatus(id, { status, reviewerId, remarks = null }) {
+  static async updatePrincipalStatus(id, { status, reviewerId, remarks = null, approvalType = 'manual' }) {
     const result = await pool.query(`
       UPDATE leave_requests
       SET 
@@ -460,15 +462,17 @@ class Leave {
         principal_remarks = $4,
         principal_updated_at = NOW(),
         updated_at = NOW(),
-        leave_approved = CASE WHEN $3 = 'approved' AND vtp_status = 'approved' THEN TRUE ELSE FALSE END
-      WHERE id = $5
+        leave_approved = CASE WHEN $3 = 'approved' AND vtp_status = 'approved' THEN TRUE ELSE FALSE END,
+        principal_approval_type = $5,
+        is_auto_approved = is_auto_approved OR $5 = 'auto'
+      WHERE id = $6 AND status = 'pending'
       RETURNING *
-    `, [status, reviewerId, status, remarks, id]);
+    `, [status, reviewerId, status, remarks, approvalType, id]);
     return result.rows[0] || null;
   }
 
   // ─── Update status by VTP ───────────────────────────────────────────────────
-  static async updateVtpStatus(id, { status, reviewerId, remarks = null }) {
+  static async updateVtpStatus(id, { status, reviewerId, remarks = null, approvalType = 'manual' }) {
     const result = await pool.query(`
       UPDATE leave_requests
       SET 
@@ -476,10 +480,12 @@ class Leave {
         vtp_remarks = $3,
         vtp_updated_at = NOW(),
         updated_at = NOW(),
-        leave_approved = CASE WHEN status = 'approved' AND $2 = 'approved' THEN TRUE ELSE FALSE END
-      WHERE id = $4
+        leave_approved = CASE WHEN status = 'approved' AND $2 = 'approved' THEN TRUE ELSE FALSE END,
+        vtp_approval_type = $4,
+        is_auto_approved = is_auto_approved OR $4 = 'auto'
+      WHERE id = $5 AND vtp_status = 'pending' AND status <> 'rejected'
       RETURNING *
-    `, [status, status, remarks, id]);
+    `, [status, status, remarks, approvalType, id]);
     return result.rows[0] || null;
   }
 
