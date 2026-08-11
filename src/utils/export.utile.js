@@ -35,6 +35,10 @@ const sendExcel = async (report, res) => {
     employeeName = "Employee",
     employeeEmail = "",
     udiseCode = "",
+    districtName = "",
+    blockName = "",
+    trade = "",
+    vtpName = "",
     totalEarned = 0,
     remainingBalance = 0,
     excessLeave = 0, 
@@ -60,12 +64,12 @@ const sendExcel = async (report, res) => {
   // ── Row 2: Info bar ───────────────────────────────────────────────────────
   ws.mergeCells(2, 1, 2, sumCol);
   const infoCell = ws.getCell(2, 1);
-  infoCell.value = `Employee: ${employeeName}   |   UDISE: ${udiseCode}   |   Month: ${monthLabel}`;
+  infoCell.value = `VT Name: ${employeeName}   |   Email: ${employeeEmail}   |   District: ${districtName}   |   Block: ${blockName}   |   Trade: ${trade}   |   VTP: ${vtpName}   |   UDISE: ${udiseCode}`;
   infoCell.font = { name: "Arial", bold: true, size: 9, color: { argb: "FF1F3864" } };
   infoCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD6E4F0" } };
   infoCell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
   infoCell.border = allBorder();
-  ws.getRow(2).height = 18;
+  ws.getRow(2).height = 36;
 
   // ── Row 3: Day headers ────────────────────────────────────────────────────
   const hdrStyle = {
@@ -231,6 +235,10 @@ const sendPDF = (report, res) => {
     employeeName = "Employee",
     employeeEmail = "",
     udiseCode = "",
+    districtName = "",
+    blockName = "",
+    trade = "",
+    vtpName = "",
     totalEarned = 0,
     remainingBalance = 0,
      excessLeave = 0,  
@@ -256,13 +264,17 @@ const sendPDF = (report, res) => {
   y += 28;
 
   // Info bar
-  doc.rect(20, y, W, 16).fill("#D6E4F0");
+  doc.rect(20, y, W, 28).fill("#D6E4F0");
   doc.fillColor("#1F3864").font("Helvetica-Bold").fontSize(8)
     .text(
-      `Employee: ${employeeName}   |   UDISE: ${udiseCode}   |   Month: ${monthLabel}`,
-      20, y + 4, { width: W, align: "center" }
+      `VT Name: ${employeeName}   |   Email: ${employeeEmail}   |   District: ${districtName}   |   Block: ${blockName}`,
+      22, y + 4, { width: W - 4, align: "center" }
+    )
+    .text(
+      `Trade: ${trade}   |   VTP: ${vtpName}   |   UDISE: ${udiseCode}   |   Month: ${monthLabel}`,
+      22, y + 16, { width: W - 4, align: "center" }
     );
-  y += 20;
+  y += 32;
 
   // Table header
   const nameW = 100;
