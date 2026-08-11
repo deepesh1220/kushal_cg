@@ -951,7 +951,7 @@ const loginVT = async (req, res) => {
         hm_approval: user.vt_approval_status,
         vtp_approval: user.vtp_approval_status,
         vtp_mobile: vtpMobile,
-        code: 'VT_PENDING_APPROVAL',
+        code: 'HM_PENDING_APPROVAL',
         message: 'Your registration is pending approval from your school Headmaster. Please wait.',
       });
     }
@@ -962,7 +962,7 @@ const loginVT = async (req, res) => {
         hm_approval: user.vt_approval_status,
         vtp_approval: user.vtp_approval_status,
         vtp_mobile: vtpMobile,
-        code: 'VT_REJECTED',
+        code: 'HM_REJECTED',
         message: 'Your registration was rejected by the Headmaster. Contact your school or administrator.',
       });
     }
