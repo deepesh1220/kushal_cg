@@ -2,17 +2,45 @@ const DeviceChangeRequest = require('../models/DeviceChangeRequest');
 const User = require('../models/User');
 const { verifyDeviceChangeToken } = require('../utils/jwtUtils');
 
+const pendingResponse = (res, request) => res.status(409).json({
+  status: false,
+  code: 'DEVICE_CHANGE_REQUEST_PENDING',
+  message: 'Your Device ID change request is already pending for HM and VTP approval.',
+  data: {
+    request_id: request.id,
+    status: request.status,
+    hm_status: request.hm_status,
+    vtp_status: request.vtp_status,
+    requested_at: request.created_at,
+  },
+});
+
 const submitRequest = async (req, res) => {
   try {
     const { device_change_token, reason } = req.body;
     if (!device_change_token) return res.status(400).json({ status: false, message: 'device_change_token is required.' });
+    const normalizedReason = typeof reason === 'string' ? reason.trim() || null : null;
+    if (normalizedReason?.length > 1000) return res.status(400).json({ status: false, message: 'Reason cannot exceed 1000 characters.' });
     const proof = verifyDeviceChangeToken(device_change_token);
     const user = await User.findById(proof.id);
     if (!user || user.role_name !== 'vocational_teacher') return res.status(403).json({ status: false, message: 'Invalid VT device change request.' });
     if (!proof.requested_device_hash || proof.requested_device_hash === user.device_id_hash) {
       return res.status(400).json({ status: false, message: 'The requested device is already registered.' });
     }
-    const request = await DeviceChangeRequest.createOrGet(user.id, proof.requested_device_hash, reason);
+    const pending = await DeviceChangeRequest.findPendingByUser(user.id);
+    if (pending) return pendingResponse(res, pending);
+
+    let request;
+    try {
+      request = await DeviceChangeRequest.create(user.id, proof.requested_device_hash, normalizedReason);
+    } catch (error) {
+      // The partial unique index protects against simultaneous duplicate taps/requests.
+      if (error.code === '23505') {
+        const concurrentPending = await DeviceChangeRequest.findPendingByUser(user.id);
+        if (concurrentPending) return pendingResponse(res, concurrentPending);
+      }
+      throw error;
+    }
     return res.status(201).json({ status: true, message: 'Device ID change request sent to HM and VTP.', data: request });
   } catch (error) {
     if (['TokenExpiredError', 'JsonWebTokenError'].includes(error.name)) {
@@ -38,6 +66,7 @@ const action = (layer) => async (req, res) => {
   try {
     const { decision, remarks } = req.body;
     if (!['approved', 'rejected'].includes(decision)) return res.status(400).json({ status: false, message: 'decision must be approved or rejected.' });
+    if (typeof remarks === 'string' && remarks.trim().length > 1000) return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
     const scope = layer === 'hm' ? req.user.udise_code : req.user.vtp_id;
     if (!scope) return res.status(400).json({ status: false, message: 'Approver mapping is missing.' });
     const result = await DeviceChangeRequest.action(req.params.requestId, layer, req.user.id, decision, remarks, scope);

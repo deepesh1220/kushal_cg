@@ -2,6 +2,7 @@ const Report = require('../models/Report');
 const { sendExcel, sendPDF, sendNSQFPdf } = require('../utils/export.utile');
 const { pool } = require('../config/db');
 const dayjs = require('dayjs');
+const ExcelJS = require('exceljs');
 
 // ─── Internal: fetch DEO profile by logged-in user ────────────────────────────
 const _getDeoProfile = async (user) => {
@@ -32,7 +33,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
 
   // VT details
   const vtRow = await pool.query(
-    `SELECT u.id, u.name, u.email, u.phone, u.udise_code,
+    `SELECT u.id, u.name, u.email, u.phone, COALESCE(u.udise_code, v.udise_code) AS udise_code,
             v.vt_name, v.vt_mob, v.vt_email, v.trade, v.vtp_name,
             v.school_name, v.district_name, v.block_name, s.cluster_name
      FROM users u
@@ -384,6 +385,120 @@ const downloadVtMonthlyReportPdf = async (req, res) => {
     return sendNSQFPdf(snapshotData, res);
   } catch (err) {
     console.error('downloadVtMonthlyReportPdf error:', err.message);
+    return res.status(500).json({ status: false, message: err.message });
+  }
+};
+
+// GET /api/reports/download-vtp-vt-excel?month=&year=
+// Exports every active VT belonging to the logged-in VTP. Scope is always
+// derived from the authenticated account; client-provided VTP/user IDs are ignored.
+const downloadVtpVtMonthlyExcel = async (req, res) => {
+  try {
+    const monthInt = Number.parseInt(req.query.month, 10);
+    const yearInt = Number.parseInt(req.query.year, 10);
+    if (!Number.isInteger(monthInt) || monthInt < 1 || monthInt > 12
+      || !Number.isInteger(yearInt) || yearInt < 2000 || yearInt > 2100) {
+      return res.status(400).json({ status: false, message: 'A valid month (1-12) and year are required.' });
+    }
+    if (req.user.role_name !== 'vocational_teacher_provider') {
+      return res.status(403).json({ status: false, message: 'Only VTP users can export this report.' });
+    }
+
+    const params = [];
+    let scopeWhere;
+    if (req.user.vtp_id) {
+      params.push(String(req.user.vtp_id).trim());
+      scopeWhere = `COALESCE(NULLIF(TRIM(CAST(u.vtp_id AS TEXT)), ''), TRIM(CAST(v.vtp_id AS TEXT))) = $1`;
+    } else if (req.user.organization_name) {
+      params.push(String(req.user.organization_name).trim());
+      scopeWhere = `TRIM(v.vtp_name) ILIKE $1`;
+    } else {
+      return res.status(400).json({ status: false, message: 'Your account is not linked to a VTP.' });
+    }
+
+    const vtResult = await pool.query(`
+      SELECT u.id
+      FROM users u
+      JOIN roles r ON r.id = u.role_id AND r.name = 'vocational_teacher'
+      JOIN vt_staff_details v ON v.id = u.vt_staff_id
+      WHERE u.is_active = TRUE AND ${scopeWhere}
+      ORDER BY v.school_name, v.vt_name
+    `, params);
+    if (!vtResult.rows.length) {
+      return res.status(404).json({ status: false, message: 'No Vocational Teachers found for the selected VTP.' });
+    }
+
+    // Keep DB load bounded while reusing the exact per-VT calculation used by the PDF.
+    const snapshots = [];
+    const concurrency = 8;
+    for (let index = 0; index < vtResult.rows.length; index += concurrency) {
+      const chunk = vtResult.rows.slice(index, index + concurrency);
+      const results = await Promise.all(chunk.map(({ id }) => _buildSnapshotData(id, monthInt, yearInt)));
+      snapshots.push(...results);
+    }
+
+    const monthName = new Date(yearInt, monthInt - 1, 1).toLocaleString('en-IN', { month: 'long' });
+    const totalDays = new Date(yearInt, monthInt, 0).getDate();
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Kushal Panel';
+    workbook.created = new Date();
+    const worksheet = workbook.addWorksheet('VT Monthly Attendance', {
+      views: [{ state: 'frozen', ySplit: 1 }],
+    });
+    worksheet.columns = [
+      { header: 'Sr. No.', key: 'serial', width: 10 },
+      { header: 'UDISE', key: 'udise', width: 18 },
+      { header: 'Schools', key: 'school', width: 34 },
+      { header: 'VT Name', key: 'vtName', width: 25 },
+      { header: 'Mobile', key: 'mobile', width: 16 },
+      { header: 'VTP Name', key: 'vtpName', width: 30 },
+      { header: 'Trade Name', key: 'trade', width: 24 },
+      { header: 'Month/Year', key: 'period', width: 18 },
+      { header: 'Total Days', key: 'totalDays', width: 13 },
+      { header: 'Total Present', key: 'present', width: 15 },
+      { header: 'Total Absent', key: 'absent', width: 14 },
+      { header: 'Total Leaves', key: 'leaves', width: 14 },
+      { header: 'Govt Holidays', key: 'govtHolidays', width: 15 },
+      { header: 'Total Sundays', key: 'sundays', width: 15 },
+      { header: 'School Holidays', key: 'schoolHolidays', width: 16 },
+    ];
+
+    snapshots.forEach((snapshot, index) => {
+      const details = snapshot.vtDetails || {};
+      const summary = snapshot.summary || {};
+      worksheet.addRow({
+        serial: index + 1, udise: String(details.udise_code || ''), school: details.school_name || '',
+        vtName: details.vt_name || '', mobile: String(details.vt_mob || ''), vtpName: details.vtp_name || '',
+        trade: details.trade || '', period: `${monthName} ${yearInt}`, totalDays,
+        present: summary.totalPresent || 0, absent: summary.totalAbsent || 0, leaves: summary.totalLeaves || 0,
+        govtHolidays: summary.totalHolidays || 0, sundays: summary.totalSundays || 0,
+        schoolHolidays: summary.totalSchoolHolidays || 0,
+      });
+    });
+
+    const header = worksheet.getRow(1);
+    header.height = 28;
+    header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    header.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+    header.eachCell(cell => { cell.border = { bottom: { style: 'thin', color: { argb: 'FFFFFFFF' } } }; });
+    worksheet.autoFilter = { from: 'A1', to: 'O1' };
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber > 1 && rowNumber % 2 === 0) row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F6FA' } };
+      row.eachCell(cell => {
+        cell.alignment = { vertical: 'middle', wrapText: true };
+        cell.border = { top: { style: 'thin', color: { argb: 'FFD9E2F3' } }, bottom: { style: 'thin', color: { argb: 'FFD9E2F3' } }, left: { style: 'thin', color: { argb: 'FFD9E2F3' } }, right: { style: 'thin', color: { argb: 'FFD9E2F3' } } };
+      });
+    });
+
+    const fileName = `VTP_VT_Attendance_${monthName}_${yearInt}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    await workbook.xlsx.write(res);
+    return res.end();
+  } catch (err) {
+    console.error('downloadVtpVtMonthlyExcel error:', err.message);
+    if (res.headersSent) return res.end();
     return res.status(500).json({ status: false, message: err.message });
   }
 };
@@ -1103,6 +1218,7 @@ module.exports = {
   approveMonthlyReportBulk,
   generateMonthlyVtReport,
   downloadVtMonthlyReportPdf,
+  downloadVtpVtMonthlyExcel,
   getMonthlyVtReportsList,
   getDashboardPendingCounts,
   getLocationMasterData,

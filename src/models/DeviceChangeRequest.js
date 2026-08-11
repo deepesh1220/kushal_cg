@@ -10,13 +10,21 @@ const baseSelect = `
   LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id`;
 
 const DeviceChangeRequest = {
-  async createOrGet(userId, requestedHash, reason) {
+  async findPendingByUser(userId) {
+    const result = await pool.query(`
+      SELECT id, user_id, reason, status, hm_status, vtp_status, created_at, updated_at
+      FROM device_change_requests
+      WHERE user_id = $1 AND status = 'pending'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `, [userId]);
+    return result.rows[0] || null;
+  },
+
+  async create(userId, requestedHash, reason) {
     const result = await pool.query(`
       INSERT INTO device_change_requests (user_id, requested_device_id_hash, reason)
       VALUES ($1, $2, $3)
-      ON CONFLICT (user_id) WHERE status = 'pending'
-      DO UPDATE SET requested_device_id_hash = EXCLUDED.requested_device_id_hash,
-                    reason = COALESCE(EXCLUDED.reason, device_change_requests.reason), updated_at = NOW()
       RETURNING id, user_id, reason, status, hm_status, vtp_status, created_at, updated_at
     `, [userId, requestedHash, reason || null]);
     return result.rows[0];
@@ -24,7 +32,7 @@ const DeviceChangeRequest = {
 
   async listForHm(udiseCode, status) {
     const params = [String(udiseCode).trim()];
-    let filter = `TRIM(COALESCE(u.udise_code, v.udise_code)) = $1`;
+    let filter = `COALESCE(NULLIF(TRIM(CAST(u.udise_code AS TEXT)), ''), TRIM(CAST(v.udise_code AS TEXT))) = $1`;
     if (status) { params.push(status); filter += ` AND d.status = $2`; }
     const result = await pool.query(`${baseSelect} WHERE ${filter} ORDER BY d.created_at DESC`, params);
     return result.rows;
@@ -32,7 +40,7 @@ const DeviceChangeRequest = {
 
   async listForVtp(vtpId, status) {
     const params = [String(vtpId).trim()];
-    let filter = `TRIM(COALESCE(u.vtp_id, v.vtp_id)) = $1`;
+    let filter = `COALESCE(NULLIF(TRIM(CAST(u.vtp_id AS TEXT)), ''), TRIM(CAST(v.vtp_id AS TEXT))) = $1`;
     if (status) { params.push(status); filter += ` AND d.status = $2`; }
     const result = await pool.query(`${baseSelect} WHERE ${filter} ORDER BY d.created_at DESC`, params);
     return result.rows;
@@ -43,8 +51,8 @@ const DeviceChangeRequest = {
     try {
       await client.query('BEGIN');
       const scopeSql = layer === 'hm'
-        ? `TRIM(COALESCE(u.udise_code, v.udise_code)) = $2`
-        : `TRIM(COALESCE(u.vtp_id, v.vtp_id)) = $2`;
+        ? `COALESCE(NULLIF(TRIM(CAST(u.udise_code AS TEXT)), ''), TRIM(CAST(v.udise_code AS TEXT))) = $2`
+        : `COALESCE(NULLIF(TRIM(CAST(u.vtp_id AS TEXT)), ''), TRIM(CAST(v.vtp_id AS TEXT))) = $2`;
       const locked = await client.query(`
         SELECT d.*, u.device_id_hash FROM device_change_requests d
         JOIN users u ON u.id = d.user_id LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
@@ -62,9 +70,9 @@ const DeviceChangeRequest = {
         : request[`${otherLayer}_status`] === 'approved' ? 'approved' : 'pending';
       const updated = await client.query(`
         UPDATE device_change_requests SET
-          ${layer}_status = $2, ${layer}_approved_by = $3, ${layer}_approved_at = NOW(),
-          ${layer}_remarks = $4, status = $5,
-          completed_at = CASE WHEN $5 <> 'pending' THEN NOW() ELSE completed_at END, updated_at = NOW()
+          ${layer}_status = $2::VARCHAR, ${layer}_approved_by = $3, ${layer}_approved_at = NOW(),
+          ${layer}_remarks = $4, status = $5::VARCHAR,
+          completed_at = CASE WHEN $5::VARCHAR <> 'pending' THEN NOW() ELSE completed_at END, updated_at = NOW()
         WHERE id = $1 RETURNING *
       `, [id, decision, approverId, remarks || null, finalStatus]);
 

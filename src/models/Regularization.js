@@ -117,8 +117,8 @@ class Regularization {
           ELSE 'pending'
         END,
         regularization_approved = ($1::varchar = 'approved' AND ${otherStatus} = 'approved'),
-        ${typeColumn} = $4,
-        is_auto_approved = is_auto_approved OR $4 = 'auto',
+        ${typeColumn} = $4::VARCHAR,
+        is_auto_approved = is_auto_approved OR $4::VARCHAR = 'auto',
         updated_at = NOW()
       WHERE id = $5 AND ${ownStatus} = 'pending' AND status <> 'rejected'
       RETURNING *
