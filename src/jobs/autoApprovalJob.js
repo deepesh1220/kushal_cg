@@ -6,13 +6,23 @@ const OnDuty = require('../models/OnDuty');
 const Regularization = require('../models/Regularization');
 
 const LOCK_ID = 47204811;
-const AUTO_REMARKS = 'Automatically approved after 48 hours without manual action.';
 let isRunning = false;
+let runMetrics = null;
 
 const configuredHours = () => {
-  const hours = Number(process.env.AUTO_APPROVAL_AFTER_HOURS || 48);
-  return Number.isFinite(hours) && hours > 0 ? hours : 48;
+  const hours = Number.parseInt(process.env.AUTO_APPROVAL_AFTER_HOURS, 10);
+  return Number.isInteger(hours) && hours > 0 ? hours : 48;
 };
+
+const autoRemarks = () => `Automatically approved after ${configuredHours()} hours without manual action.`;
+
+const configuredCheckIntervalHours = () => {
+  const hours = Number.parseInt(process.env.AUTO_APPROVAL_CHECK_INTERVAL_HOURS, 10);
+  // node-cron hour-step syntax supports a predictable hourly cadence from 1-23.
+  return Number.isInteger(hours) && hours >= 1 && hours <= 23 ? hours : 1;
+};
+
+const isAutoApprovalEnabled = () => String(process.env.AUTO_APPROVAL_ENABLED || 'true').toLowerCase() !== 'false';
 
 const logResult = async (entityType, entityId, layer, eligibleAt, status, error = null) => {
   await pool.query(`
@@ -90,6 +100,7 @@ const processRows = async (entityType, layer, rows, approve, afterApprove) => {
       await logResult(entityType, row.id, layer, row.eligible_at, 'success');
       approved += 1;
     } catch (error) {
+      if (runMetrics) runMetrics.failed += 1;
       console.error(`[AutoApproval] ${entityType} ${row.id} ${layer}:`, error.message);
       await logResult(entityType, row.id, layer, row.eligible_at, 'failed', error.message).catch(() => {});
     }
@@ -97,53 +108,57 @@ const processRows = async (entityType, layer, rows, approve, afterApprove) => {
   return approved;
 };
 
-const dueRows = async (table, where, deadlineExpression = 'created_at') => {
+const dueRows = async (table, where, deadlineExpression = 'created_at', metricName = table) => {
   const hours = configuredHours();
   const result = await pool.query(`
-    SELECT *, (${deadlineExpression} + ($1 * INTERVAL '1 hour')) AS eligible_at
+    SELECT *, (${deadlineExpression} + make_interval(hours => $1::INTEGER)) AS eligible_at
     FROM ${table}
     WHERE ${where}
-      AND ${deadlineExpression} <= NOW() - ($1 * INTERVAL '1 hour')
+      AND ${deadlineExpression} <= NOW() - make_interval(hours => $1::INTEGER)
     ORDER BY ${deadlineExpression}, id
   `, [hours]);
+  if (runMetrics) {
+    runMetrics.eligible += result.rowCount;
+    runMetrics.byType[metricName] = (runMetrics.byType[metricName] || 0) + result.rowCount;
+  }
   return result.rows;
 };
 
 const processLeaves = async () => {
   let count = 0;
-  const hmRows = await dueRows('leave_requests', "status = 'pending' AND vtp_status <> 'rejected'");
+  const hmRows = await dueRows('leave_requests', "status = 'pending' AND vtp_status <> 'rejected'", 'created_at', 'leave');
   count += await processRows('leave', 'hm', hmRows,
-    row => Leave.updatePrincipalStatus(row.id, { status: 'approved', reviewerId: null, remarks: AUTO_REMARKS, approvalType: 'auto' }),
+    row => Leave.updatePrincipalStatus(row.id, { status: 'approved', reviewerId: null, remarks: autoRemarks(), approvalType: 'auto' }),
     deductLeaveOnce);
-  const vtpRows = await dueRows('leave_requests', "vtp_status = 'pending' AND status <> 'rejected'");
+  const vtpRows = await dueRows('leave_requests', "vtp_status = 'pending' AND status <> 'rejected'", 'created_at', 'leave');
   count += await processRows('leave', 'vtp', vtpRows,
-    row => Leave.updateVtpStatus(row.id, { status: 'approved', reviewerId: null, remarks: AUTO_REMARKS, approvalType: 'auto' }),
+    row => Leave.updateVtpStatus(row.id, { status: 'approved', reviewerId: null, remarks: autoRemarks(), approvalType: 'auto' }),
     deductLeaveOnce);
   return count;
 };
 
 const processOnDuty = async () => {
   let count = 0;
-  const hmRows = await dueRows('od_requests', "hm_status = 'pending' AND status <> 'rejected'");
+  const hmRows = await dueRows('od_requests', "hm_status = 'pending' AND status <> 'rejected'", 'created_at', 'on_duty');
   count += await processRows('on_duty', 'hm', hmRows,
-    row => OnDuty.updateHmStatus(row.id, { status: 'approved', reviewerId: null, remarks: AUTO_REMARKS, approvalType: 'auto' }),
+    row => OnDuty.updateHmStatus(row.id, { status: 'approved', reviewerId: null, remarks: autoRemarks(), approvalType: 'auto' }),
     upsertOdAttendance);
-  const vtpRows = await dueRows('od_requests', "vtp_status = 'pending' AND status <> 'rejected'");
+  const vtpRows = await dueRows('od_requests', "vtp_status = 'pending' AND status <> 'rejected'", 'created_at', 'on_duty');
   count += await processRows('on_duty', 'vtp', vtpRows,
-    row => OnDuty.updateVtpStatus(row.id, { status: 'approved', reviewerId: null, remarks: AUTO_REMARKS, approvalType: 'auto' }),
+    row => OnDuty.updateVtpStatus(row.id, { status: 'approved', reviewerId: null, remarks: autoRemarks(), approvalType: 'auto' }),
     upsertOdAttendance);
   return count;
 };
 
 const processRegularizations = async () => {
   let count = 0;
-  const hmRows = await dueRows('regularization_requests', "hm_status = 'pending' AND status <> 'rejected'");
+  const hmRows = await dueRows('regularization_requests', "hm_status = 'pending' AND status <> 'rejected'", 'created_at', 'regularization');
   count += await processRows('regularization', 'hm', hmRows,
-    row => Regularization.updateHmStatus(row.id, { status: 'approved', reviewerId: null, remarks: AUTO_REMARKS, approvalType: 'auto' }),
+    row => Regularization.updateHmStatus(row.id, { status: 'approved', reviewerId: null, remarks: autoRemarks(), approvalType: 'auto' }),
     upsertRegularizationAttendance);
-  const vtpRows = await dueRows('regularization_requests', "vtp_status = 'pending' AND status <> 'rejected'");
+  const vtpRows = await dueRows('regularization_requests', "vtp_status = 'pending' AND status <> 'rejected'", 'created_at', 'regularization');
   count += await processRows('regularization', 'vtp', vtpRows,
-    row => Regularization.updateVtpStatus(row.id, { status: 'approved', reviewerId: null, remarks: AUTO_REMARKS, approvalType: 'auto' }),
+    row => Regularization.updateVtpStatus(row.id, { status: 'approved', reviewerId: null, remarks: autoRemarks(), approvalType: 'auto' }),
     upsertRegularizationAttendance);
   return count;
 };
@@ -167,7 +182,7 @@ const approveReportLayer = async (row, layer) => {
       updated_at = NOW()
     WHERE id = $3 AND ${statusCol} = 'pending'
     RETURNING *
-  `, [AUTO_REMARKS, layer, row.id]);
+  `, [autoRemarks(), layer, row.id]);
   return result.rows[0] || null;
 };
 
@@ -179,7 +194,7 @@ const processReports = async () => {
     ['vtp', "hm_approval_status = 'approved' AND deo_approval_status = 'approved' AND vtp_approval_status = 'pending'", 'deo_approved_at'],
   ];
   for (const [layer, where, deadline] of stages) {
-    const rows = await dueRows('monthly_school_reports', `${where} AND is_locked = FALSE`, deadline);
+    const rows = await dueRows('monthly_school_reports', `${where} AND is_locked = FALSE`, deadline, 'monthly_report');
     count += await processRows('monthly_report', layer, rows, row => approveReportLayer(row, layer));
   }
   return count;
@@ -219,35 +234,43 @@ const reconcileFinalSideEffects = async () => {
 };
 
 const runAutoApprovalJob = async () => {
-  if (isRunning || process.env.AUTO_APPROVAL_ENABLED === 'false') return { skipped: true, approved: 0 };
+  if (isRunning || !isAutoApprovalEnabled()) return { skipped: true, approved: 0 };
   isRunning = true;
+  runMetrics = { eligible: 0, failed: 0, byType: {} };
   const lockClient = await pool.connect();
   try {
     const lock = await lockClient.query('SELECT pg_try_advisory_lock($1) AS acquired', [LOCK_ID]);
     if (!lock.rows[0].acquired) return { skipped: true, approved: 0 };
+    console.log(`[AutoApproval] Started. Threshold: ${configuredHours()} hours.`);
     const approved = await processLeaves() + await processOnDuty() +
       await processRegularizations() + await processReports();
     await reconcileFinalSideEffects();
-    console.log(`[AutoApproval] Completed. Approved layers: ${approved}`);
-    return { skipped: false, approved };
+    console.log(`[AutoApproval] Eligible layers: ${runMetrics.eligible} (${JSON.stringify(runMetrics.byType)}).`);
+    console.log(`[AutoApproval] Completed. Approved layers: ${approved}, failed: ${runMetrics.failed}.`);
+    return { skipped: false, approved, failed: runMetrics.failed };
   } finally {
     await lockClient.query('SELECT pg_advisory_unlock($1)', [LOCK_ID]).catch(() => {});
     lockClient.release();
     isRunning = false;
+    runMetrics = null;
   }
 };
 
 const initAutoApprovalCronJob = () => {
-  if (process.env.AUTO_APPROVAL_ENABLED === 'false') {
+  if (!isAutoApprovalEnabled()) {
     console.log('[AutoApproval] Disabled by configuration.');
     return null;
   }
-  const expression = process.env.AUTO_APPROVAL_CRON || '0 * * * *';
+  const intervalHours = configuredCheckIntervalHours();
+  const expression = `0 */${intervalHours} * * *`;
   const job = cron.schedule(expression, () => runAutoApprovalJob().catch(error => {
     console.error('[AutoApproval] Job failed:', error.message);
   }), { timezone: 'Asia/Kolkata' });
   setImmediate(() => runAutoApprovalJob().catch(error => console.error('[AutoApproval] Initial run failed:', error.message)));
-  console.log(`[AutoApproval] Scheduled (${expression}), threshold ${configuredHours()} hours.`);
+  console.log('[AutoApproval] Enabled.');
+  console.log(`[AutoApproval] Approval threshold: ${configuredHours()} hours.`);
+  console.log(`[AutoApproval] Check interval: every ${intervalHours} hour(s) (${expression}).`);
+  console.log('[AutoApproval] Timezone: Asia/Kolkata.');
   return job;
 };
 

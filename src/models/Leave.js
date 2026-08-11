@@ -463,8 +463,8 @@ class Leave {
         principal_updated_at = NOW(),
         updated_at = NOW(),
         leave_approved = CASE WHEN $3 = 'approved' AND vtp_status = 'approved' THEN TRUE ELSE FALSE END,
-        principal_approval_type = $5,
-        is_auto_approved = is_auto_approved OR $5 = 'auto'
+        principal_approval_type = $5::VARCHAR,
+        is_auto_approved = is_auto_approved OR $5::VARCHAR = 'auto'
       WHERE id = $6 AND status = 'pending'
       RETURNING *
     `, [status, reviewerId, status, remarks, approvalType, id]);
@@ -481,8 +481,8 @@ class Leave {
         vtp_updated_at = NOW(),
         updated_at = NOW(),
         leave_approved = CASE WHEN status = 'approved' AND $2 = 'approved' THEN TRUE ELSE FALSE END,
-        vtp_approval_type = $4,
-        is_auto_approved = is_auto_approved OR $4 = 'auto'
+        vtp_approval_type = $4::VARCHAR,
+        is_auto_approved = is_auto_approved OR $4::VARCHAR = 'auto'
       WHERE id = $5 AND vtp_status = 'pending' AND status <> 'rejected'
       RETURNING *
     `, [status, status, remarks, approvalType, id]);

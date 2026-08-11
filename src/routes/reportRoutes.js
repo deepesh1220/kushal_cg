@@ -9,6 +9,7 @@ const {
   approveMonthlyReportBulk,
   generateMonthlyVtReport,
   downloadVtMonthlyReportPdf,
+  downloadVtpVtMonthlyExcel,
   getMonthlyVtReportsList,
   getDashboardPendingCounts,
   getLocationMasterData,
@@ -33,6 +34,7 @@ router.post('/generate-monthly-vt-report', generateMonthlyVtReport);
 
 // ── New: Download NSQF PDF for a VT ──────────────────────────────────────────
 router.get('/download-vt-pdf', downloadVtMonthlyReportPdf);
+router.get('/download-vtp-vt-excel', downloadVtpVtMonthlyExcel);
 
 // ── New: List monthly VT reports (role-scoped) ────────────────────────────────
 router.get('/monthly-vt-reports', getMonthlyVtReportsList);

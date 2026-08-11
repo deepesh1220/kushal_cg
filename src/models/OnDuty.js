@@ -190,8 +190,8 @@ class OnDuty {
           WHEN $1::varchar = 'approved' AND vtp_status = 'approved' THEN TRUE
           ELSE FALSE
         END,
-        hm_approval_type = $4,
-        is_auto_approved = is_auto_approved OR $4 = 'auto',
+        hm_approval_type = $4::VARCHAR,
+        is_auto_approved = is_auto_approved OR $4::VARCHAR = 'auto',
         updated_at = NOW()
       WHERE id = $5 AND hm_status = 'pending' AND status <> 'rejected'
       RETURNING *
@@ -221,8 +221,8 @@ class OnDuty {
           WHEN $1::varchar = 'approved' AND hm_status = 'approved' THEN TRUE
           ELSE FALSE
         END,
-        vtp_approval_type = $4,
-        is_auto_approved = is_auto_approved OR $4 = 'auto',
+        vtp_approval_type = $4::VARCHAR,
+        is_auto_approved = is_auto_approved OR $4::VARCHAR = 'auto',
         updated_at = NOW()
       WHERE id = $5 AND vtp_status = 'pending' AND status <> 'rejected'
       RETURNING *
