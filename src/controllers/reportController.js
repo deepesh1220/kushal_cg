@@ -160,6 +160,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
       udise_code: vtDetails.udise_code || '',
       district_name: vtDetails.district_name || '',
       block_name: vtDetails.block_name || '',
+      cluster_name: vtDetails.cluster_name || '',
     },
     attendance,
     summary: { totalPresent, totalAbsent, totalHolidays, totalSundays, totalLeaves, totalSchoolHolidays },
@@ -449,6 +450,8 @@ const downloadVtpVtMonthlyExcel = async (req, res) => {
       { header: 'Sr. No.', key: 'serial', width: 10 },
       { header: 'UDISE', key: 'udise', width: 18 },
       { header: 'Schools', key: 'school', width: 34 },
+      { header: 'Block', key: 'block', width: 22 },
+      { header: 'Cluster', key: 'cluster', width: 22 },
       { header: 'VT Name', key: 'vtName', width: 25 },
       { header: 'Mobile', key: 'mobile', width: 16 },
       { header: 'VTP Name', key: 'vtpName', width: 30 },
@@ -468,6 +471,7 @@ const downloadVtpVtMonthlyExcel = async (req, res) => {
       const summary = snapshot.summary || {};
       worksheet.addRow({
         serial: index + 1, udise: String(details.udise_code || ''), school: details.school_name || '',
+        block: details.block_name || '', cluster: details.cluster_name || '',
         vtName: details.vt_name || '', mobile: String(details.vt_mob || ''), vtpName: details.vtp_name || '',
         trade: details.trade || '', period: `${monthName} ${yearInt}`, totalDays,
         present: summary.totalPresent || 0, absent: summary.totalAbsent || 0, leaves: summary.totalLeaves || 0,
@@ -482,7 +486,7 @@ const downloadVtpVtMonthlyExcel = async (req, res) => {
     header.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
     header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
     header.eachCell(cell => { cell.border = { bottom: { style: 'thin', color: { argb: 'FFFFFFFF' } } }; });
-    worksheet.autoFilter = { from: 'A1', to: 'O1' };
+    worksheet.autoFilter = { from: 'A1', to: 'Q1' };
     worksheet.eachRow((row, rowNumber) => {
       if (rowNumber > 1 && rowNumber % 2 === 0) row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F6FA' } };
       row.eachCell(cell => {
@@ -498,6 +502,95 @@ const downloadVtpVtMonthlyExcel = async (req, res) => {
     return res.end();
   } catch (err) {
     console.error('downloadVtpVtMonthlyExcel error:', err.message);
+    if (res.headersSent) return res.end();
+    return res.status(500).json({ status: false, message: err.message });
+  }
+};
+
+const _streamMonthlyVtExcel = async ({ vtRows, month, year, prefix, res }) => {
+  const snapshots = [];
+  const concurrency = 8;
+  for (let index = 0; index < vtRows.length; index += concurrency) {
+    const chunk = vtRows.slice(index, index + concurrency);
+    snapshots.push(...await Promise.all(chunk.map(({ id }) => _buildSnapshotData(id, month, year))));
+  }
+  const monthName = new Date(year, month - 1, 1).toLocaleString('en-IN', { month: 'long' });
+  const totalDays = new Date(year, month, 0).getDate();
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Kushal Panel';
+  workbook.created = new Date();
+  const worksheet = workbook.addWorksheet('VT Monthly Attendance', { views: [{ state: 'frozen', ySplit: 1 }] });
+  worksheet.columns = [
+    { header: 'Sr. No.', key: 'serial', width: 10 }, { header: 'UDISE', key: 'udise', width: 18 },
+    { header: 'Schools', key: 'school', width: 34 }, { header: 'Block', key: 'block', width: 22 },
+    { header: 'Cluster', key: 'cluster', width: 22 }, { header: 'VT Name', key: 'vtName', width: 25 },
+    { header: 'Mobile', key: 'mobile', width: 16 }, { header: 'VTP Name', key: 'vtpName', width: 30 },
+    { header: 'Trade Name', key: 'trade', width: 24 }, { header: 'Month/Year', key: 'period', width: 18 },
+    { header: 'Total Days', key: 'totalDays', width: 13 }, { header: 'Total Present', key: 'present', width: 15 },
+    { header: 'Total Absent', key: 'absent', width: 14 }, { header: 'Total Leaves', key: 'leaves', width: 14 },
+    { header: 'Govt Holidays', key: 'govtHolidays', width: 15 }, { header: 'Total Sundays', key: 'sundays', width: 15 },
+    { header: 'School Holidays', key: 'schoolHolidays', width: 16 },
+  ];
+  snapshots.forEach((snapshot, index) => {
+    const details = snapshot.vtDetails || {};
+    const summary = snapshot.summary || {};
+    worksheet.addRow({
+      serial: index + 1, udise: String(details.udise_code || ''), school: details.school_name || '',
+      block: details.block_name || '', cluster: details.cluster_name || '', vtName: details.vt_name || '',
+      mobile: String(details.vt_mob || ''), vtpName: details.vtp_name || '', trade: details.trade || '',
+      period: `${monthName} ${year}`, totalDays, present: summary.totalPresent || 0,
+      absent: summary.totalAbsent || 0, leaves: summary.totalLeaves || 0,
+      govtHolidays: summary.totalHolidays || 0, sundays: summary.totalSundays || 0,
+      schoolHolidays: summary.totalSchoolHolidays || 0,
+    });
+  });
+  const header = worksheet.getRow(1);
+  header.height = 28;
+  header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  header.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+  worksheet.autoFilter = { from: 'A1', to: 'Q1' };
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber > 1 && rowNumber % 2 === 0) row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F6FA' } };
+    row.eachCell(cell => {
+      cell.alignment = { vertical: 'middle', wrapText: true };
+      cell.border = { top: { style: 'thin', color: { argb: 'FFD9E2F3' } }, bottom: { style: 'thin', color: { argb: 'FFD9E2F3' } }, left: { style: 'thin', color: { argb: 'FFD9E2F3' } }, right: { style: 'thin', color: { argb: 'FFD9E2F3' } } };
+    });
+  });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${prefix}_VT_Attendance_${monthName}_${year}.xlsx"`);
+  await workbook.xlsx.write(res);
+  return res.end();
+};
+
+// GET /api/reports/download-deo-vt-excel?month=&year=
+const downloadDeoVtMonthlyExcel = async (req, res) => {
+  try {
+    const month = Number.parseInt(req.query.month, 10);
+    const year = Number.parseInt(req.query.year, 10);
+    if (!Number.isInteger(month) || month < 1 || month > 12
+      || !Number.isInteger(year) || year < 2000 || year > 2100) {
+      return res.status(400).json({ status: false, message: 'A valid month (1-12) and year are required.' });
+    }
+    if (req.user.role_name !== 'deo') {
+      return res.status(403).json({ status: false, message: 'Only DEO users can export this report.' });
+    }
+    const deo = await _getDeoProfile(req.user);
+    if (!deo?.district_cd) return res.status(403).json({ status: false, message: 'DEO profile or district mapping not found.' });
+    const vtResult = await pool.query(`
+      SELECT u.id FROM users u
+      JOIN roles r ON r.id = u.role_id AND r.name = 'vocational_teacher'
+      JOIN vt_staff_details v ON v.id = u.vt_staff_id
+      JOIN mst_schools s ON s.udise_sch_code = v.udise_code
+      WHERE u.is_active = TRUE AND s.district_cd = $1
+      ORDER BY v.school_name, v.vt_name
+    `, [deo.district_cd]);
+    if (!vtResult.rows.length) {
+      return res.status(404).json({ status: false, message: 'No Vocational Teachers found for your district.' });
+    }
+    return _streamMonthlyVtExcel({ vtRows: vtResult.rows, month, year, prefix: 'DEO', res });
+  } catch (err) {
+    console.error('downloadDeoVtMonthlyExcel error:', err.message);
     if (res.headersSent) return res.end();
     return res.status(500).json({ status: false, message: err.message });
   }
@@ -1219,6 +1312,7 @@ module.exports = {
   generateMonthlyVtReport,
   downloadVtMonthlyReportPdf,
   downloadVtpVtMonthlyExcel,
+  downloadDeoVtMonthlyExcel,
   getMonthlyVtReportsList,
   getDashboardPendingCounts,
   getLocationMasterData,
