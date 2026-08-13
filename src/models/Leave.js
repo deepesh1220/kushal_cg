@@ -519,9 +519,18 @@ class Leave {
 
     const userResult = await pool.query(
       `
-  SELECT id, name, email, udise_code
-  FROM users
-  WHERE id = $1
+  SELECT
+    u.id,
+    u.name,
+    COALESCE(v.vt_email, u.email) AS email,
+    COALESCE(v.udise_code, u.udise_code) AS udise_code,
+    v.district_name,
+    v.block_name,
+    v.trade,
+    v.vtp_name
+  FROM users u
+  LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
+  WHERE u.id = $1
   `,
       [userId]
     );
@@ -654,6 +663,10 @@ const excessLeave = excessResult.rows.length > 0
       employeeName: user.name,
       employeeEmail: user.email,
       udiseCode: user.udise_code,
+      districtName: user.district_name,
+      blockName: user.block_name,
+      trade: user.trade,
+      vtpName: user.vtp_name,
       month,
       totalDays: lastDay,
       attendance: attendanceMap,

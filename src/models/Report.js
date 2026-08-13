@@ -240,6 +240,30 @@ class Report {
 
     const today = dayjs();
 
+    const userResult = await pool.query(
+      `
+      SELECT
+        u.id,
+        u.name,
+        COALESCE(v.vt_email, u.email) AS email,
+        COALESCE(v.udise_code, u.udise_code) AS udise_code,
+        v.district_name,
+        v.block_name,
+        v.trade,
+        v.vtp_name
+      FROM users u
+      LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
+      WHERE u.id = $1
+      `,
+      [userId]
+    );
+
+    if (userResult.rows.length === 0) {
+      throw new Error("User not found");
+    }
+
+    const user = userResult.rows[0];
+
     // 🔴 Prevent future month
     if (startDate.isAfter(today, "month")) {
       throw new Error("Future month not allowed");
@@ -312,6 +336,13 @@ class Report {
 
     return {
       userId,
+      employeeName: user.name,
+      employeeEmail: user.email,
+      udiseCode: user.udise_code,
+      districtName: user.district_name,
+      blockName: user.block_name,
+      trade: user.trade,
+      vtpName: user.vtp_name,
       month,
       totalDays: lastDay,
       attendance: attendanceMap,
