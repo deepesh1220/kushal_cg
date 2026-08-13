@@ -2,6 +2,13 @@ const express = require('express');
 const router = express.Router();
 const {
   getVtpScopedVts,
+  getVtStaffOptions,
+  getVtpStaffList,
+  getVtpDashboardCounts,
+  getVtStaffById,
+  createVtStaff,
+  updateVtStaff,
+  deleteVtStaff,
   approveVtByVtp,
   rejectVtByVtp,
   getVtpScopedLeaves,
@@ -14,6 +21,15 @@ router.use(authenticate);
 
 // VTP & admin — view VTs scoped to their organization (?status=all|pending|accepted|rejected)
 router.get('/vts', authorize('vt:approve_vtp'), getVtpScopedVts);
+router.get('/dashboard/counts', authorize('vt:approve_vtp'), getVtpDashboardCounts);
+
+// VTP-scoped VT master CRUD and cascading form options
+router.get('/vt-staff/options', authorize('vt:approve_vtp'), getVtStaffOptions);
+router.get('/vt-staff', authorize('vt:approve_vtp'), getVtpStaffList);
+router.get('/vt-staff/:staffId', authorize('vt:approve_vtp'), getVtStaffById);
+router.post('/vt-staff', authorize('vt:approve_vtp'), createVtStaff);
+router.patch('/vt-staff/:staffId', authorize('vt:approve_vtp'), updateVtStaff);
+router.delete('/vt-staff/:staffId', authorize('vt:approve_vtp'), deleteVtStaff);
 
 // VTP & admin — approve a VT (VTP layer)
 router.patch('/:userId/approve', authorize('vt:approve_vtp'), approveVtByVtp);
