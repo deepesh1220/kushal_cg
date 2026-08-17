@@ -3,6 +3,7 @@ const { pool } = require('../config/db');
 const { sendExcel, sendPDF } = require("../utils/export.utile");
 const ExcelJS = require("exceljs");
 const PDFDocument = require("pdfkit");
+const { getISTDate } = require('../utils/timeUtils');
 
 const parseDateStr = (dateStr) => {
   if (!dateStr) return dateStr;
@@ -346,6 +347,71 @@ const deleteLeave = async (req, res) => {
   }
 };
 
+// VT requests cancellation of today's portion of a fully-approved leave.
+const applyLeaveCancellation = async (req, res) => {
+  const userId = Number.parseInt(req.body?.user_id, 10);
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  const today = getISTDate();
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ status: false, message: 'A valid user_id is required.' });
+  }
+  if (userId !== req.user.id) {
+    return res.status(403).json({ status: false, message: 'You can only cancel your own leave.' });
+  }
+  if (!reason) return res.status(400).json({ status: false, message: 'Reason is required.' });
+  if (reason.length > 1000) return res.status(400).json({ status: false, message: 'Reason cannot exceed 1000 characters.' });
+
+  try {
+    const leaveResult = await pool.query(`
+      SELECT id, user_id, from_date::text AS from_date, to_date::text AS to_date, leave_approved
+      FROM leave_requests
+      WHERE user_id = $1 AND leave_approved = TRUE
+        AND $2::date BETWEEN from_date AND to_date
+      ORDER BY created_at DESC
+    `, [userId, today]);
+    if (leaveResult.rows.length === 0) {
+      return res.status(404).json({ status: false, message: 'No fully approved leave found for today.' });
+    }
+    if (leaveResult.rows.length > 1) {
+      return res.status(409).json({ status: false, message: 'Multiple approved leaves found for today. Contact administrator.' });
+    }
+    const leave = leaveResult.rows[0];
+    const leaveId = leave.id;
+    const attendance = await pool.query(
+      'SELECT id FROM attendance_records WHERE user_id = $1 AND date = $2 LIMIT 1',
+      [userId, today]
+    );
+    if (attendance.rows.length) {
+      return res.status(409).json({ status: false, message: 'Attendance is already marked for today.' });
+    }
+
+    const result = await pool.query(`
+      INSERT INTO leave_cancellation_requests (leave_request_id, user_id, cancel_date, reason)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (leave_request_id, cancel_date) DO NOTHING
+      RETURNING *
+    `, [leaveId, userId, today, reason]);
+    if (!result.rows.length) {
+      return res.status(409).json({ status: false, message: 'A cancellation request already exists for this leave and date.' });
+    }
+    return res.status(201).json({
+      status: true,
+      message: 'Leave cancellation request submitted successfully.',
+      data: {
+        cancellation_request_id: result.rows[0].id,
+        leave_id: leaveId,
+        user_id: userId,
+        cancel_date: today,
+        status: 'pending',
+      },
+    });
+  } catch (error) {
+    console.error('Apply leave cancellation error:', error.message);
+    return res.status(500).json({ status: false, message: 'Unable to submit leave cancellation request.' });
+  }
+};
+
 // ─── POST /api/leaves/report ─────────────────────────────────────────────────
 // Per-time-period leave report (resembles getDailyReport for attendance)
 const getLeaveReport = async (req, res) => {
@@ -493,6 +559,7 @@ module.exports = {
   approveRejectLeave,
   updateLeave,
   deleteLeave,
+  applyLeaveCancellation,
   getLeaveReport,
   downloadMonthlyAttendance,
   applyOnDuty,

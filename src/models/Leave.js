@@ -383,6 +383,13 @@ class Leave {
       JOIN  vt_staff_details v ON v.id  = u.vt_staff_id
       LEFT JOIN users        r ON r.id  = l.reviewed_by
       LEFT JOIN leave_excess_records ler ON ler.leave_request_id = l.id
+      LEFT JOIN LATERAL (
+        SELECT id, cancel_date, reason, status, reviewer_remarks, refunded_amount, created_at
+        FROM leave_cancellation_requests
+        WHERE leave_request_id = l.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) lcr ON TRUE
       WHERE v.vtp_name = $1
       ${filterClauses}
     `;
@@ -419,7 +426,13 @@ class Leave {
          r.name         AS reviewed_by_name,
          l.reviewed_at,
          ler.approved_leave_days,
-         ler.excess_leave
+         ler.excess_leave,
+         lcr.id              AS cancellation_request_id,
+         lcr.cancel_date     AS cancellation_date,
+         lcr.reason          AS cancellation_reason,
+         lcr.status          AS cancellation_status,
+         lcr.reviewer_remarks AS cancellation_reviewer_remarks,
+         lcr.refunded_amount AS cancellation_refunded_amount
        ${baseWhere}
        ORDER BY l.created_at DESC
        LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
@@ -573,7 +586,7 @@ class Leave {
     // ─────────── Fetch leaves ───────────
     const leaveResult = await pool.query(
       `
-      SELECT from_date, to_date
+      SELECT id, from_date, to_date
       FROM leave_requests
       WHERE user_id = $1
       AND leave_approved = TRUE
@@ -581,6 +594,14 @@ class Leave {
       AND to_date >= $2
     `,
       [userId, startDate.format("YYYY-MM-DD"), endDate.format("YYYY-MM-DD")]
+    );
+
+    const cancellationResult = await pool.query(`
+      SELECT leave_request_id, cancel_date FROM leave_cancellation_requests
+      WHERE user_id = $1 AND status = 'approved' AND cancel_date BETWEEN $2 AND $3
+    `, [userId, startDate.format("YYYY-MM-DD"), endDate.format("YYYY-MM-DD")]);
+    const cancelledLeaveDates = new Set(
+      cancellationResult.rows.map((row) => `${row.leave_request_id}:${dayjs(row.cancel_date).format("YYYY-MM-DD")}`)
     );
 
     // Expand leave dates
@@ -591,7 +612,8 @@ class Leave {
       const end = dayjs(leave.to_date);
 
       while (current.isBefore(end) || current.isSame(end)) {
-        leaveSet.add(current.format("YYYY-MM-DD"));
+        const date = current.format("YYYY-MM-DD");
+        if (!cancelledLeaveDates.has(`${leave.id}:${date}`)) leaveSet.add(date);
         current = current.add(1, "day");
       }
     });

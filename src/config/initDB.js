@@ -41,7 +41,16 @@ const initDB = async () => {
         ADD COLUMN IF NOT EXISTS educational_qualification VARCHAR(200),
         ADD COLUMN IF NOT EXISTS date_of_joining          DATE,
         ADD COLUMN IF NOT EXISTS vtp_id                   CHAR(2),
+        ADD COLUMN IF NOT EXISTS old_mobile_number        BIGINT,
+        ADD COLUMN IF NOT EXISTS mobile_number_approved_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS vtp_mobile_approved_status VARCHAR(20) DEFAULT 'approved',
         ADD COLUMN IF NOT EXISTS updated_at               TIMESTAMPTZ DEFAULT NOW();
+
+      ALTER TABLE vt_staff_details DROP CONSTRAINT IF EXISTS vt_staff_details_mobile_approval_status_check;
+      ALTER TABLE vt_staff_details ADD CONSTRAINT vt_staff_details_mobile_approval_status_check
+        CHECK (vtp_mobile_approved_status IN ('pending','approved','rejected'));
+      UPDATE vt_staff_details SET vtp_mobile_approved_status = 'approved'
+        WHERE vtp_mobile_approved_status IS NULL;
     `);
 
     // ─────────────────────────────────────────────────────────
@@ -319,6 +328,30 @@ const initDB = async () => {
         created_at                         TIMESTAMPTZ DEFAULT NOW(),
         updated_at                         TIMESTAMPTZ DEFAULT NOW()
       );
+    `);
+
+    // Current-day cancellation requests for already approved leaves.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS leave_cancellation_requests (
+        id               SERIAL PRIMARY KEY,
+        leave_request_id INTEGER NOT NULL REFERENCES leave_requests(id) ON DELETE CASCADE,
+        user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        cancel_date       DATE NOT NULL,
+        reason            TEXT NOT NULL,
+        status            VARCHAR(20) NOT NULL DEFAULT 'pending'
+                            CHECK (status IN ('pending','approved','rejected')),
+        reviewed_by       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        reviewer_remarks  TEXT,
+        reviewed_at       TIMESTAMPTZ,
+        refunded_amount   DECIMAL(5,2) NOT NULL DEFAULT 0,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (leave_request_id, cancel_date)
+      );
+      CREATE INDEX IF NOT EXISTS idx_leave_cancellation_user_date
+        ON leave_cancellation_requests(user_id, cancel_date);
+      CREATE INDEX IF NOT EXISTS idx_leave_cancellation_status
+        ON leave_cancellation_requests(status);
     `);
 
     // Indexes for leave balance tables

@@ -7,6 +7,7 @@ const {
   rejectVt,
   getVtByMobile,
   updateVtProfile,
+  requestMobileUpdate,
 } = require('../controllers/vtApprovalController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
 
@@ -15,6 +16,7 @@ const { authenticate, authorize } = require('../middleware/authMiddleware');
 router.post('/by-mobile', getVtByMobile);
 
 router.use(authenticate);
+router.post('/mobile-update-request', authorize('attendance:create'), requestMobileUpdate);
 
 // Headmaster & admin — view pending VTs for their school
 router.get('/list', authorize('vt:approve'), getPendingVts);
