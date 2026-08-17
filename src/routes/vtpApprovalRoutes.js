@@ -13,7 +13,10 @@ const {
   rejectVtByVtp,
   getVtpScopedLeaves,
   approveLeaveByVtp,
-  rejectLeaveByVtp
+  rejectLeaveByVtp,
+  approveLeaveCancellationByVtp,
+  getVtMobileUpdateRequests,
+  updateVtMobileRequestStatus
 } = require('../controllers/vtpApprovalController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
 
@@ -30,6 +33,8 @@ router.get('/vt-staff/:staffId', authorize('vt:approve_vtp'), getVtStaffById);
 router.post('/vt-staff', authorize('vt:approve_vtp'), createVtStaff);
 router.patch('/vt-staff/:staffId', authorize('vt:approve_vtp'), updateVtStaff);
 router.delete('/vt-staff/:staffId', authorize('vt:approve_vtp'), deleteVtStaff);
+router.get('/vt-mobile-update-requests', authorize('vt:approve_vtp'), getVtMobileUpdateRequests);
+router.patch('/vt-mobile-update-requests/:staffId/status', authorize('vt:approve_vtp'), updateVtMobileRequestStatus);
 
 // VTP & admin — approve a VT (VTP layer)
 router.patch('/:userId/approve', authorize('vt:approve_vtp'), approveVtByVtp);
@@ -47,5 +52,6 @@ router.patch('/leave/:leaveId/approve', authorize('vt:approve_vtp'), approveLeav
 
 // VTP — reject a leave request
 router.patch('/leave/:leaveId/reject', authorize('vt:approve_vtp'), rejectLeaveByVtp);
+router.patch('/leave-cancellation/:cancellationRequestId/approve', authorize('vt:approve_vtp'), approveLeaveCancellationByVtp);
 
 module.exports = router;

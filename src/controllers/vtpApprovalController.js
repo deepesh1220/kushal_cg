@@ -1,6 +1,8 @@
 const User = require('../models/User');
 const Leave = require('../models/Leave');
+const LeaveBalance = require('../models/LeaveBalance');
 const { pool } = require('../config/db');
+const { getISTDate } = require('../utils/timeUtils');
 
 const VTP_ROLE_NAME = 'vocational_teacher_provider';
 const normalizeVtpName = (value) => String(value ?? '').trim().toLowerCase();
@@ -183,13 +185,24 @@ const saveVtStaff = async (req, res, isUpdate) => {
     const schoolResult = await client.query(`SELECT school_name, district_name, block_name FROM mst_schools
       WHERE TRIM(CAST(udise_sch_code AS text))=TRIM($1::text) LIMIT 1`, [String(req.body.udise_code)]);
     if (!schoolResult.rows.length) { await client.query('ROLLBACK'); return res.status(400).json({ status: false, message: 'Selected school/UDISE is invalid.' }); }
-    const duplicate = await client.query(`SELECT id FROM vt_staff_details WHERE (vt_mob=$1 OR LOWER(vt_email)=LOWER($2)) AND ($3::int IS NULL OR id<>$3::int) LIMIT 1`, [req.body.vt_mob, clean(req.body.vt_email), existing?.id || null]);
+    const duplicate = await client.query(`
+      SELECT id FROM vt_staff_details
+      WHERE (vt_mob=$1 OR (vtp_mobile_approved_status='pending' AND old_mobile_number=$1) OR LOWER(vt_email)=LOWER($2))
+        AND ($3::int IS NULL OR id<>$3::int)
+      UNION ALL
+      SELECT id FROM users WHERE phone=$1 AND ($3::int IS NULL OR vt_staff_id IS NULL OR vt_staff_id<>$3::int)
+      LIMIT 1
+    `, [req.body.vt_mob, clean(req.body.vt_email), existing?.id || null]);
     if (duplicate.rows.length) { await client.query('ROLLBACK'); return res.status(409).json({ status: false, message: 'A different VT already uses this mobile or email.' }); }
     const school = schoolResult.rows[0];
     const values = [school.district_name, school.block_name, school.school_name, req.body.udise_code, identity.vtp_name, clean(req.body.vt_name), clean(req.body.trade), req.body.vt_mob, clean(req.body.vtp_pan)?.toUpperCase() || null, req.body.vt_aadhar || null, clean(req.body.vt_email).toLowerCase(), identity.vtp_id, clean(req.body.remarks) || null];
     let result;
     if (isUpdate) {
-      result = await client.query(`UPDATE vt_staff_details SET district_name=$1,block_name=$2,school_name=$3,udise_code=$4,vtp_name=$5,vt_name=$6,trade=$7,vt_mob=$8,vtp_pan=$9,vt_aadhar=$10,vt_email=$11,vtp_id=$12,remarks=$13,updated_at=NOW() WHERE id=$14 RETURNING *`, [...values, existing.id]);
+      result = await client.query(`UPDATE vt_staff_details SET district_name=$1,block_name=$2,school_name=$3,udise_code=$4,vtp_name=$5,vt_name=$6,trade=$7,
+        old_mobile_number=CASE WHEN vt_mob IS DISTINCT FROM $8::bigint THEN vt_mob ELSE old_mobile_number END,
+        mobile_number_approved_at=CASE WHEN vt_mob IS DISTINCT FROM $8::bigint THEN NOW() ELSE mobile_number_approved_at END,
+        vtp_mobile_approved_status=CASE WHEN vt_mob IS DISTINCT FROM $8::bigint THEN 'approved' ELSE vtp_mobile_approved_status END,
+        vt_mob=$8,vtp_pan=$9,vt_aadhar=$10,vt_email=$11,vtp_id=$12,remarks=$13,updated_at=NOW() WHERE id=$14 RETURNING *`, [...values, existing.id]);
       await client.query('UPDATE users SET name=$1,email=$2,phone=$3,vtp_id=$4,updated_at=NOW() WHERE vt_staff_id=$5', [values[5], values[10], values[7], identity.vtp_id, existing.id]);
     } else {
       await client.query('SELECT pg_advisory_xact_lock(731904)');
@@ -223,6 +236,113 @@ const deleteVtStaff = async (req, res) => {
     console.error('deleteVtStaff error:', error.message);
     return res.status(409).json({ status: false, message: 'This VT cannot be deleted because related records exist.' });
   } finally { client.release(); }
+};
+
+const getVtMobileUpdateRequests = async (req, res) => {
+  try {
+    const requestedPage = Number.parseInt(req.query.page, 10);
+    const requestedLimit = Number.parseInt(req.query.limit, 10);
+    const page = Number.isInteger(requestedPage) ? Math.max(requestedPage, 1) : 1;
+    const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 10;
+    const search = String(req.query.search || '').trim();
+    const isAdmin = ['admin', 'super_admin'].includes(req.user.role_name);
+    if (!isAdmin && !req.user.vtp_id) {
+      return res.status(400).json({ status: false, message: 'Your account is not linked to a VTP ID.' });
+    }
+    const params = [];
+    let where = `WHERE v.vtp_mobile_approved_status = 'pending'`;
+    if (!isAdmin) {
+      params.push(String(req.user.vtp_id));
+      where += ` AND TRIM(v.vtp_id) = TRIM($${params.length}::text)`;
+    }
+    if (search) {
+      params.push(`%${search}%`);
+      where += ` AND (v.vt_name ILIKE $${params.length} OR v.school_name ILIKE $${params.length}
+        OR CAST(v.vt_mob AS text) ILIKE $${params.length} OR CAST(v.old_mobile_number AS text) ILIKE $${params.length})`;
+    }
+    const count = await pool.query(`SELECT COUNT(*)::int AS total FROM vt_staff_details v ${where}`, params);
+    const totalItems = count.rows[0]?.total || 0;
+    const totalPages = Math.max(Math.ceil(totalItems / limit), 1);
+    const currentPage = Math.min(page, totalPages);
+    const dataParams = [...params, limit, (currentPage - 1) * limit];
+    const result = await pool.query(`
+      SELECT v.id AS vt_staff_id, u.id AS user_id, v.vt_name, v.school_name, v.udise_code,
+        v.vt_mob AS current_mobile_number, v.old_mobile_number AS requested_mobile_number,
+        v.vtp_mobile_approved_status AS status, v.updated_at AS requested_at
+      FROM vt_staff_details v
+      LEFT JOIN users u ON u.vt_staff_id = v.id
+      ${where}
+      ORDER BY v.updated_at DESC, v.id DESC
+      LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}
+    `, dataParams);
+    return res.json({
+      status: true,
+      data: result.rows,
+      pagination: { currentPage, pageSize: limit, totalItems, totalPages },
+    });
+  } catch (error) {
+    console.error('getVtMobileUpdateRequests error:', error.message);
+    return res.status(500).json({ status: false, message: 'Unable to load mobile update requests.' });
+  }
+};
+
+const updateVtMobileRequestStatus = async (req, res) => {
+  const staffId = Number.parseInt(req.params.staffId, 10);
+  const status = String(req.body?.status || '').trim().toLowerCase();
+  if (!Number.isInteger(staffId) || staffId <= 0) return res.status(400).json({ status: false, message: 'Invalid VT staff ID.' });
+  if (!['approved', 'rejected'].includes(status)) {
+    return res.status(400).json({ status: false, message: 'Status must be approved or rejected.' });
+  }
+  const ownership = await validateStaffOwnership(staffId, req.user);
+  if (!ownership.staff) return res.status(ownership.status).json({ status: false, message: ownership.message });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const staffResult = await client.query(
+      'SELECT * FROM vt_staff_details WHERE id = $1 FOR UPDATE', [staffId]
+    );
+    const staff = staffResult.rows[0];
+    if (staff.vtp_mobile_approved_status !== 'pending' || !staff.old_mobile_number) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ status: false, message: 'No pending mobile update request exists for this VT.' });
+    }
+    const userResult = await client.query('SELECT id FROM users WHERE vt_staff_id = $1 FOR UPDATE', [staffId]);
+    const userId = userResult.rows[0]?.id || null;
+
+    if (status === 'approved') {
+      const duplicate = await client.query(`
+        SELECT 1 FROM vt_staff_details WHERE id <> $1 AND vt_mob = $2
+        UNION ALL SELECT 1 FROM users WHERE ($3::int IS NULL OR id <> $3) AND phone = $2 LIMIT 1
+      `, [staffId, staff.old_mobile_number, userId]);
+      if (duplicate.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ status: false, message: 'Requested mobile number is already in use.' });
+      }
+      const updated = await client.query(`
+        UPDATE vt_staff_details SET vt_mob = old_mobile_number, old_mobile_number = vt_mob,
+          vtp_mobile_approved_status = 'approved', mobile_number_approved_at = NOW(), updated_at = NOW()
+        WHERE id = $1 RETURNING *
+      `, [staffId]);
+      if (userId) await client.query('UPDATE users SET phone = $1, updated_at = NOW() WHERE id = $2', [staff.old_mobile_number, userId]);
+      await client.query('COMMIT');
+      return res.json({ status: true, message: 'Mobile update request approved successfully.', data: updated.rows[0] });
+    }
+
+    const updated = await client.query(`
+      UPDATE vt_staff_details SET old_mobile_number = NULL,
+        vtp_mobile_approved_status = 'rejected', mobile_number_approved_at = NULL, updated_at = NOW()
+      WHERE id = $1 RETURNING *
+    `, [staffId]);
+    await client.query('COMMIT');
+    return res.json({ status: true, message: 'Mobile update request rejected.', data: updated.rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('updateVtMobileRequestStatus error:', error.message);
+    return res.status(500).json({ status: false, message: 'Unable to update mobile request status.' });
+  } finally {
+    client.release();
+  }
 };
 
 // ─── Internal helper ──────────────────────────────────────────────────────────
@@ -579,6 +699,131 @@ const rejectLeaveByVtp = async (req, res) => {
   }
 };
 
+// Approves a VT's request to cancel only today's portion of an approved leave.
+const approveLeaveCancellationByVtp = async (req, res) => {
+  const cancellationRequestId = Number.parseInt(req.params.cancellationRequestId, 10);
+  const remarks = typeof req.body?.remarks === 'string' ? req.body.remarks.trim() || null : null;
+  if (!Number.isInteger(cancellationRequestId) || cancellationRequestId <= 0) {
+    return res.status(400).json({ status: false, message: 'Invalid cancellation request ID.' });
+  }
+  if (remarks?.length > 1000) {
+    return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
+  }
+
+  const client = await pool.connect();
+  try {
+    const requestLookup = await pool.query(
+      'SELECT leave_request_id FROM leave_cancellation_requests WHERE id = $1',
+      [cancellationRequestId]
+    );
+    if (!requestLookup.rows.length) {
+      return res.status(404).json({ status: false, message: 'Leave cancellation request not found.' });
+    }
+    const validationError = await _validateLeaveBelongsToVtp(requestLookup.rows[0].leave_request_id, req.user);
+    if (validationError) return res.status(validationError.status).json(validationError.body);
+
+    await client.query('BEGIN');
+    const requestResult = await client.query(`
+      SELECT lcr.*, l.leave_type, l.leave_approved
+      FROM leave_cancellation_requests lcr
+      JOIN leave_requests l ON l.id = lcr.leave_request_id
+      WHERE lcr.id = $1
+      FOR UPDATE OF lcr, l
+    `, [cancellationRequestId]);
+    const cancellation = requestResult.rows[0];
+    if (cancellation.status !== 'pending') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ status: false, message: `Cancellation request is already ${cancellation.status}.` });
+    }
+    if (!cancellation.leave_approved) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ status: false, message: 'The related leave is no longer fully approved.' });
+    }
+    if (getISTDate(cancellation.cancel_date) !== getISTDate()) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ status: false, message: 'A leave cancellation can only be approved on its requested date.' });
+    }
+
+    const attendance = await client.query(
+      'SELECT id FROM attendance_records WHERE user_id = $1 AND date = $2 LIMIT 1',
+      [cancellation.user_id, cancellation.cancel_date]
+    );
+    if (attendance.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ status: false, message: 'Attendance is already marked for the cancellation date.' });
+    }
+
+    const cancellationAmount = LeaveBalance.getDeductionAmount(cancellation.leave_type);
+    let amountLeft = cancellationAmount;
+    let refundedAmount = 0;
+
+    const excessResult = await client.query(
+      'SELECT * FROM leave_excess_records WHERE leave_request_id = $1 FOR UPDATE',
+      [cancellation.leave_request_id]
+    );
+    if (excessResult.rows.length && amountLeft > 0) {
+      const excess = excessResult.rows[0];
+      const excessReduction = Math.min(amountLeft, Number(excess.excess_leave) || 0);
+      amountLeft -= excessReduction;
+      await client.query(`
+        UPDATE leave_excess_records
+        SET approved_leave_days = GREATEST(0, approved_leave_days - $1),
+            excess_leave = GREATEST(0, excess_leave - $2), updated_at = NOW()
+        WHERE id = $3
+      `, [cancellationAmount, excessReduction, excess.id]);
+    }
+
+    const deductionResult = await client.query(
+      'SELECT * FROM leave_deduction_log WHERE leave_request_id = $1 FOR UPDATE',
+      [cancellation.leave_request_id]
+    );
+    if (deductionResult.rows.length && amountLeft > 0) {
+      const deduction = deductionResult.rows[0];
+      refundedAmount = Math.min(amountLeft, Number(deduction.deducted_amount) || 0);
+      if (refundedAmount > 0) {
+        const deductionYearResult = await client.query(
+          `SELECT year FROM leave_balance WHERE user_id = $1
+           AND year = CASE WHEN EXTRACT(MONTH FROM $2::timestamptz) >= 4
+             THEN EXTRACT(YEAR FROM $2::timestamptz) ELSE EXTRACT(YEAR FROM $2::timestamptz) - 1 END
+           FOR UPDATE`,
+          [cancellation.user_id, deduction.deducted_at]
+        );
+        const balanceYear = deductionYearResult.rows[0]?.year;
+        if (balanceYear !== undefined) {
+          await client.query(`
+            UPDATE leave_balance SET total_used = GREATEST(0, total_used - $1),
+              remaining_balance = remaining_balance + $1, updated_at = NOW()
+            WHERE user_id = $2 AND year = $3
+          `, [refundedAmount, cancellation.user_id, balanceYear]);
+        }
+        await client.query(
+          'UPDATE leave_deduction_log SET deducted_amount = GREATEST(0, deducted_amount - $1) WHERE id = $2',
+          [refundedAmount, deduction.id]
+        );
+      }
+    }
+
+    const updated = await client.query(`
+      UPDATE leave_cancellation_requests
+      SET status = 'approved', reviewed_by = $1, reviewer_remarks = $2,
+          reviewed_at = NOW(), refunded_amount = $3, updated_at = NOW()
+      WHERE id = $4 RETURNING *
+    `, [req.user.id, remarks, refundedAmount, cancellationRequestId]);
+    await client.query('COMMIT');
+    return res.json({
+      status: true,
+      message: 'Leave cancellation approved. Attendance is enabled for the cancellation date.',
+      data: { ...updated.rows[0], leave_id: cancellation.leave_request_id },
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('approveLeaveCancellationByVtp error:', error.message);
+    return res.status(500).json({ status: false, message: 'Unable to approve leave cancellation.' });
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   getVtpScopedVts,
   getVtStaffOptions,
@@ -592,6 +837,9 @@ module.exports = {
   rejectVtByVtp,
   getVtpScopedLeaves,
   approveLeaveByVtp,
-  rejectLeaveByVtp
+  rejectLeaveByVtp,
+  approveLeaveCancellationByVtp,
+  getVtMobileUpdateRequests,
+  updateVtMobileRequestStatus
 };
 

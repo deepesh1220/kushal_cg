@@ -1,4 +1,56 @@
 const User = require('../models/User');
+const { pool } = require('../config/db');
+
+const requestMobileUpdate = async (req, res) => {
+  const newMobile = String(req.body?.new_mobile_number ?? '').trim();
+  if (!/^\d{10}$/.test(newMobile)) {
+    return res.status(400).json({ status: false, message: 'new_mobile_number must contain exactly 10 digits.' });
+  }
+
+  try {
+    const staffResult = await pool.query(`
+      SELECT v.* FROM vt_staff_details v
+      JOIN users u ON u.vt_staff_id = v.id
+      WHERE u.id = $1 LIMIT 1
+    `, [req.user.id]);
+    const staff = staffResult.rows[0];
+    if (!staff) return res.status(404).json({ status: false, message: 'Your account is not linked to a VT staff record.' });
+    if (String(staff.vt_mob || '') === newMobile) {
+      return res.status(400).json({ status: false, message: 'New mobile number must be different from the current number.' });
+    }
+    if (staff.vtp_mobile_approved_status === 'pending') {
+      return res.status(409).json({ status: false, message: 'A mobile update request is already pending.' });
+    }
+    const duplicate = await pool.query(`
+      SELECT 1 FROM vt_staff_details
+      WHERE id <> $1 AND (vt_mob = $2 OR (vtp_mobile_approved_status = 'pending' AND old_mobile_number = $2))
+      UNION ALL
+      SELECT 1 FROM users WHERE id <> $3 AND phone = $2
+      LIMIT 1
+    `, [staff.id, newMobile, req.user.id]);
+    if (duplicate.rows.length) {
+      return res.status(409).json({ status: false, message: 'This mobile number is already in use or pending approval.' });
+    }
+    const result = await pool.query(`
+      UPDATE vt_staff_details SET old_mobile_number = $1,
+        vtp_mobile_approved_status = 'pending', mobile_number_approved_at = NULL, updated_at = NOW()
+      WHERE id = $2 RETURNING id, vt_mob, old_mobile_number, vtp_mobile_approved_status
+    `, [newMobile, staff.id]);
+    return res.status(201).json({
+      status: true,
+      message: 'Mobile update request submitted successfully.',
+      data: {
+        vt_staff_id: result.rows[0].id,
+        current_mobile_number: String(result.rows[0].vt_mob),
+        requested_mobile_number: String(result.rows[0].old_mobile_number),
+        status: result.rows[0].vtp_mobile_approved_status,
+      },
+    });
+  } catch (error) {
+    console.error('requestMobileUpdate error:', error.message);
+    return res.status(500).json({ status: false, message: 'Unable to submit mobile update request.' });
+  }
+};
 
 // ─── GET /api/vt/pending ──────────────────────────────────────────────────────
 // Headmaster views VTs for their school (matched by udise_code) with status filter
@@ -220,8 +272,6 @@ const getVtByMobile = async (req, res) => {
       return res.status(400).json({ status: false, message: 'mobile is required.' });
     }
 
-    const { pool } = require('../config/db');
-
     const result = await pool.query(
       `SELECT * FROM vt_staff_details WHERE vt_mob = $1 LIMIT 1`,
       [String(mobile)]
@@ -252,24 +302,9 @@ const getVtByMobile = async (req, res) => {
 //   vt_name, vt_email, vt_mob, vt_aadhar, vtp_pan,
 //   dob, educational_qualification, date_of_joining
 const updateVtProfile = async (req, res) => {
+  const client = await pool.connect();
   try {
     const userId = req.user.id;
-    const { pool } = require('../config/db');
-
-    // Resolve vt_staff_id from users table
-    const userRow = await pool.query(
-      `SELECT vt_staff_id FROM users WHERE id = $1 LIMIT 1`,
-      [userId]
-    );
-
-    const vtStaffId = userRow.rows[0]?.vt_staff_id;
-    if (!vtStaffId) {
-      return res.status(400).json({
-        status: false,
-        message: 'Your account is not linked to a VT staff record.',
-      });
-    }
-
     const {
       vt_name,
       vt_email,
@@ -278,6 +313,12 @@ const updateVtProfile = async (req, res) => {
       educational_qualification,
       date_of_joining,
     } = req.body;
+
+    const hasMobileField = Object.prototype.hasOwnProperty.call(req.body || {}, 'vt_mob');
+    const requestedMobile = hasMobileField ? String(vt_mob ?? '').trim() : null;
+    if (hasMobileField && !/^\d{10}$/.test(requestedMobile)) {
+      return res.status(400).json({ status: false, message: 'vt_mob must contain exactly 10 digits.' });
+    }
 
     // Helper: convert DD-MM-YYYY → YYYY-MM-DD (also accepts YYYY-MM-DD passthrough)
     const parseDate = (raw) => {
@@ -291,37 +332,96 @@ const updateVtProfile = async (req, res) => {
     const dobParsed = parseDate(dob);
     const dateOfJoiningParsed = parseDate(date_of_joining);
 
-    const result = await pool.query(
+    await client.query('BEGIN');
+    const staffResult = await client.query(`
+      SELECT v.* FROM vt_staff_details v
+      JOIN users u ON u.vt_staff_id = v.id
+      WHERE u.id = $1
+      FOR UPDATE OF v
+    `, [userId]);
+    const staff = staffResult.rows[0];
+    if (!staff) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ status: false, message: 'Your account is not linked to a VT staff record.' });
+    }
+
+    const currentMobile = String(staff.vt_mob || '');
+    const mobileChanged = hasMobileField && requestedMobile !== currentMobile;
+    let stageMobileRequest = false;
+    let mobileUpdatePending = false;
+
+    if (mobileChanged) {
+      if (staff.vtp_mobile_approved_status === 'pending') {
+        if (String(staff.old_mobile_number || '') !== requestedMobile) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({
+            status: false,
+            message: 'A different mobile update request is already pending. Wait for VTP approval or rejection.',
+          });
+        }
+        mobileUpdatePending = true;
+      } else {
+        const duplicate = await client.query(`
+          SELECT 1 FROM vt_staff_details
+          WHERE id <> $1 AND (vt_mob = $2 OR (vtp_mobile_approved_status = 'pending' AND old_mobile_number = $2))
+          UNION ALL
+          SELECT 1 FROM users WHERE id <> $3 AND phone = $2
+          LIMIT 1
+        `, [staff.id, requestedMobile, userId]);
+        if (duplicate.rows.length) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ status: false, message: 'This mobile number is already in use or pending approval.' });
+        }
+        stageMobileRequest = true;
+        mobileUpdatePending = true;
+      }
+    }
+
+    const result = await client.query(
       `UPDATE vt_staff_details SET
         vt_name                  = COALESCE($1,  vt_name),
         vt_email                 = COALESCE($2,  vt_email),
-        vt_mob                   = COALESCE($3,  vt_mob),
-        dob                      = COALESCE($4,  dob),
-        educational_qualification = COALESCE($5,  educational_qualification),
-        date_of_joining          = COALESCE($6,  date_of_joining),
+        dob                      = COALESCE($3,  dob),
+        educational_qualification = COALESCE($4,  educational_qualification),
+        date_of_joining          = COALESCE($5,  date_of_joining),
+        old_mobile_number        = CASE WHEN $7 THEN $8::bigint ELSE old_mobile_number END,
+        vtp_mobile_approved_status = CASE WHEN $7 THEN 'pending' ELSE vtp_mobile_approved_status END,
+        mobile_number_approved_at = CASE WHEN $7 THEN NULL ELSE mobile_number_approved_at END,
         updated_at               = NOW()
-      WHERE id = $7
+      WHERE id = $6
       RETURNING *`,
       [
         vt_name || null,
         vt_email || null,
-        vt_mob || null,
         dobParsed,
         educational_qualification || null,
         dateOfJoiningParsed,
-        vtStaffId,
+        staff.id,
+        stageMobileRequest,
+        requestedMobile,
       ]
     );
+    await client.query('COMMIT');
 
     return res.status(200).json({
       status: true,
-      message: 'VT profile updated successfully.',
-      data: result.rows[0],
+      message: stageMobileRequest
+        ? 'Profile updated and mobile update request submitted for VTP approval.'
+        : 'VT profile updated successfully.',
+      mobile_update_requested: stageMobileRequest,
+      mobile_update_pending: mobileUpdatePending,
+      data: {
+        ...result.rows[0],
+        requested_mobile_number: mobileUpdatePending ? requestedMobile : null,
+      },
     });
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error('updateVtProfile error:', err.message);
     return res.status(500).json({ status: false, message: 'Server error while updating VT profile.' });
+  } finally {
+    client.release();
   }
 };
 
-module.exports = { getPendingVts, getAllVts, approveVt, rejectVt, getVtByMobile, updateVtProfile };
+module.exports = { getPendingVts, getAllVts, approveVt, rejectVt, getVtByMobile, updateVtProfile, requestMobileUpdate };

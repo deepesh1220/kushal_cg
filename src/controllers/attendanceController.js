@@ -1,5 +1,5 @@
 const Attendance = require('../models/Attendance');
-const { formatAttendanceRecord, toIST } = require('../utils/timeUtils');
+const { formatAttendanceRecord, toIST, getISTDate } = require('../utils/timeUtils');
 const { extractDescriptorFromBase64, compareFaces, saveBase64Image } = require('../utils/faceUtils'); // Temporarily unused while face verification is disabled.
 const { pool } = require('../config/db');
 const { getDistanceInMeters } = require('../utils/locationUtils');
@@ -24,7 +24,7 @@ const checkIn = async (req, res) => {
     });
   }
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = getISTDate();
 
   try {
     // ── Prevent duplicate check-in ─────────────────────────────────────────────
@@ -151,6 +151,24 @@ const checkIn = async (req, res) => {
         data: { match_percent: matchPercent },
       });
     }
+
+    const activeLeave = await pool.query(`
+      SELECT l.id FROM leave_requests l
+      WHERE l.user_id = $1 AND l.leave_approved = TRUE
+        AND $2::date BETWEEN l.from_date AND l.to_date
+        AND NOT EXISTS (
+          SELECT 1 FROM leave_cancellation_requests lcr
+          WHERE lcr.leave_request_id = l.id AND lcr.cancel_date = $2::date
+            AND lcr.status = 'approved'
+        )
+      LIMIT 1
+    `, [userId, today]);
+    if (activeLeave.rows.length) {
+      return res.status(403).json({
+        status: false,
+        message: 'Check-in is not allowed while you are on approved leave. Submit a cancellation request and wait for VTP approval.',
+      });
+    }
     }
     // ── ──────────────────────────────────────────────────────────────────────
 
@@ -201,7 +219,7 @@ const checkOut = async (req, res) => {
     });
   }
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = getISTDate();
 
   try {
     // ── Pre-condition: must have checked in ───────────────────────────────────
@@ -590,10 +608,17 @@ const getDailyReport = async (req, res) => {
     const endStr = endDate.format('YYYY-MM-DD');
 
     const leaveRes = await pool.query(`
-      SELECT from_date, to_date, reason FROM leave_requests 
+      SELECT id, from_date, to_date, reason FROM leave_requests 
       WHERE user_id = $1 AND leave_approved = TRUE AND from_date <= $2 AND to_date >= $3
     `, [userId, endStr, startStr]);
     const leaves = leaveRes.rows;
+    const cancellationRes = await pool.query(`
+      SELECT leave_request_id, cancel_date FROM leave_cancellation_requests
+      WHERE user_id = $1 AND status = 'approved' AND cancel_date BETWEEN $2 AND $3
+    `, [userId, startStr, endStr]);
+    const cancelledLeaveDates = new Set(
+      cancellationRes.rows.map((row) => `${row.leave_request_id}:${dayjs(row.cancel_date).format('YYYY-MM-DD')}`)
+    );
 
     const odRes = await pool.query(`
       SELECT from_date, to_date FROM od_requests 
@@ -632,7 +657,7 @@ const getDailyReport = async (req, res) => {
         const foundLeave = leaves.find(l => {
           const lFrom = dayjs(l.from_date).format('YYYY-MM-DD');
           const lTo = dayjs(l.to_date).format('YYYY-MM-DD');
-          return d >= lFrom && d <= lTo;
+          return d >= lFrom && d <= lTo && !cancelledLeaveDates.has(`${l.id}:${d}`);
         });
 
         if (foundLeave) {

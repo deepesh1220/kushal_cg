@@ -8,6 +8,7 @@ const {
   approveRejectLeave,
   updateLeave,
   deleteLeave,
+  applyLeaveCancellation,
   getLeaveReport,
   downloadMonthlyAttendance,
   applyOnDuty,
@@ -25,6 +26,7 @@ router.use(authenticate);
 // ── VT routes ───────────────────────────────────────────────────────────────
 // Apply for a new leave
 router.post('/apply', authorize('leave:request'), applyLeave);
+router.post('/cancellation-request', authorize('leave:request'), applyLeaveCancellation);
 
 // Get my own leave requests
 router.get('/my', authorize('leave:view_own'), getMyLeaves);
