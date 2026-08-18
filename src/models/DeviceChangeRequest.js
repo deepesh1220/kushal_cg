@@ -33,16 +33,30 @@ const DeviceChangeRequest = {
   async listForHm(udiseCode, status) {
     const params = [String(udiseCode).trim()];
     let filter = `COALESCE(NULLIF(TRIM(CAST(u.udise_code AS TEXT)), ''), TRIM(CAST(v.udise_code AS TEXT))) = $1`;
-    if (status) { params.push(status); filter += ` AND d.status = $2`; }
-    const result = await pool.query(`${baseSelect} WHERE ${filter} ORDER BY d.created_at DESC`, params);
+    if (status && status !== 'all') {
+      params.push(status);
+      filter += ` AND d.hm_status = $${params.length}`;
+      if (status === 'pending') filter += ` AND d.status = 'pending'`;
+    }
+    const result = await pool.query(
+      `${baseSelect} WHERE ${filter} ORDER BY d.created_at DESC, d.id DESC`,
+      params
+    );
     return result.rows;
   },
 
   async listForVtp(vtpId, status) {
     const params = [String(vtpId).trim()];
     let filter = `COALESCE(NULLIF(TRIM(CAST(u.vtp_id AS TEXT)), ''), TRIM(CAST(v.vtp_id AS TEXT))) = $1`;
-    if (status) { params.push(status); filter += ` AND d.status = $2`; }
-    const result = await pool.query(`${baseSelect} WHERE ${filter} ORDER BY d.created_at DESC`, params);
+    if (status && status !== 'all') {
+      params.push(status);
+      filter += ` AND d.vtp_status = $${params.length}`;
+      if (status === 'pending') filter += ` AND d.status = 'pending'`;
+    }
+    const result = await pool.query(
+      `${baseSelect} WHERE ${filter} ORDER BY d.created_at DESC, d.id DESC`,
+      params
+    );
     return result.rows;
   },
 
