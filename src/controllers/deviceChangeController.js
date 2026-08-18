@@ -52,14 +52,32 @@ const submitRequest = async (req, res) => {
 };
 
 const listForHm = async (req, res) => {
-  if (!req.user.udise_code) return res.status(400).json({ status: false, message: 'Headmaster school is not mapped.' });
-  const data = await DeviceChangeRequest.listForHm(req.user.udise_code, req.body.status);
-  return res.json({ status: true, data });
+  try {
+    if (!req.user.udise_code) return res.status(400).json({ status: false, message: 'Headmaster school is not mapped.' });
+    const status = req.body?.status;
+    if (status && !['pending', 'approved', 'rejected', 'all'].includes(status)) {
+      return res.status(400).json({ status: false, message: 'Invalid status filter.' });
+    }
+    const data = await DeviceChangeRequest.listForHm(req.user.udise_code, status);
+    return res.json({ status: true, total: data.length, data });
+  } catch (error) {
+    console.error('HM device request listing error:', error.message);
+    return res.status(500).json({ status: false, message: 'Unable to load device change requests.' });
+  }
 };
 const listForVtp = async (req, res) => {
-  if (!req.user.vtp_id) return res.status(400).json({ status: false, message: 'VTP is not mapped.' });
-  const data = await DeviceChangeRequest.listForVtp(req.user.vtp_id, req.body.status);
-  return res.json({ status: true, data });
+  try {
+    if (!req.user.vtp_id) return res.status(400).json({ status: false, message: 'VTP is not mapped.' });
+    const status = req.body?.status;
+    if (status && !['pending', 'approved', 'rejected', 'all'].includes(status)) {
+      return res.status(400).json({ status: false, message: 'Invalid status filter.' });
+    }
+    const data = await DeviceChangeRequest.listForVtp(req.user.vtp_id, status);
+    return res.json({ status: true, total: data.length, data });
+  } catch (error) {
+    console.error('VTP device request listing error:', error.message);
+    return res.status(500).json({ status: false, message: 'Unable to load device change requests.' });
+  }
 };
 
 const action = (layer) => async (req, res) => {
