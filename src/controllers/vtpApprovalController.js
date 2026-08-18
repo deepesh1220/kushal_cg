@@ -560,24 +560,34 @@ const rejectVtByVtp = async (req, res) => {
 const getVtpScopedLeaves = async (req, res) => {
   try {
     const vtpUser = req.user;
-    const { status, from_date, to_date, teacher_code, page, limit } = req.query;
+    const { status, principal_status, vtp_status, from_date, to_date, teacher_code, page, limit } = req.query;
+    const allowedStatuses = ['pending', 'approved', 'rejected'];
+    const requestedPrincipalStatus = principal_status?.toLowerCase();
+    const requestedVtpStatus = (vtp_status || status)?.toLowerCase();
+    if (requestedPrincipalStatus && !allowedStatuses.includes(requestedPrincipalStatus)) {
+      return res.status(400).json({ status: false, message: 'Invalid principal_status filter.' });
+    }
+    if (requestedVtpStatus && !allowedStatuses.includes(requestedVtpStatus)) {
+      return res.status(400).json({ status: false, message: 'Invalid vtp_status filter.' });
+    }
 
     if (!['super_admin', 'admin'].includes(vtpUser.role_name)) {
       if (vtpUser.role_name !== VTP_ROLE_NAME) {
         return res.status(403).json({ status: false, message: 'Only VTP users can access this resource.' });
       }
-      if (!vtpUser.organization_name) {
+      if (!vtpUser.vtp_id) {
         return res.status(400).json({
           status: false,
-          message: 'Your account is not linked to a VTP organization name. Contact administrator.',
+          message: 'Your account is not linked to a VTP ID. Contact administrator.',
         });
       }
     }
 
-    const vtpName = ['super_admin', 'admin'].includes(vtpUser.role_name) ? null : vtpUser.organization_name;
+    const vtpId = ['super_admin', 'admin'].includes(vtpUser.role_name) ? null : vtpUser.vtp_id;
 
-    const result = await Leave.getVtpLeaves(vtpName, {
-      status,
+    const result = await Leave.getVtpLeaves(vtpId, {
+      principal_status: requestedPrincipalStatus,
+      vtp_status: requestedVtpStatus,
       from_date,
       to_date,
       teacher_code,
@@ -587,6 +597,7 @@ const getVtpScopedLeaves = async (req, res) => {
 
     return res.status(200).json({
       success: true,
+      scope: { vtp_id: vtpId },
       ...result,
     });
   } catch (error) {
