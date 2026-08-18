@@ -342,9 +342,11 @@ class Leave {
   }
   // ─── Get all leave requests for a VTP's organization ────────────────────────
   // Used by: GET /api/vtp/leaves
-  // Scoped to vtp_name so VTP only sees their organization's VTs.
-  static async getVtpLeaves(vtpName, {
-    status,
+  // Scoped to canonical VTP ID so the VTP sees the same VT leave stream as HM,
+  // with principal and VTP approval states returned independently.
+  static async getVtpLeaves(vtpId, {
+    principal_status,
+    vtp_status,
     from_date,
     to_date,
     teacher_code,
@@ -357,12 +359,16 @@ class Leave {
     const offset = (parsedPage - 1) * parsedLimit;
 
     // ── Build dynamic filter clauses (VTP-scoped) ─────────────────────────
-    const filterParams = [vtpName]; // $1 always = vtp_name
+    const filterParams = [vtpId]; // null for admin/super-admin, otherwise logged-in VTP ID
     let filterClauses = '';
 
-    if (status) {
-      filterParams.push(status.toLowerCase());
+    if (vtp_status) {
+      filterParams.push(vtp_status.toLowerCase());
       filterClauses += ` AND l.vtp_status = $${filterParams.length}`;
+    }
+    if (principal_status) {
+      filterParams.push(principal_status.toLowerCase());
+      filterClauses += ` AND l.status = $${filterParams.length}`;
     }
     if (from_date) {
       filterParams.push(from_date);
@@ -390,7 +396,10 @@ class Leave {
         ORDER BY created_at DESC
         LIMIT 1
       ) lcr ON TRUE
-      WHERE v.vtp_name = $1
+      WHERE (
+        $1::text IS NULL
+        OR TRIM(CAST(COALESCE(u.vtp_id, v.vtp_id) AS text)) = TRIM($1::text)
+      )
       ${filterClauses}
     `;
 
@@ -417,6 +426,7 @@ class Leave {
          l.to_date,
          l.status       AS principal_status,
          l.vtp_status   AS status,
+         l.vtp_status   AS vtp_status,
          l.principal_approval_type,
          l.vtp_approval_type,
          l.is_auto_approved,
