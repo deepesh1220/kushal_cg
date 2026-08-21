@@ -330,6 +330,15 @@ const initDB = async () => {
       );
     `);
 
+    // A fully-approved leave can later be cancelled for a particular date.
+    // Keep the request-level decision visible while the cancellation table
+    // remains the source of truth for the exact cancelled date(s).
+    await client.query(`
+      ALTER TABLE leave_requests DROP CONSTRAINT IF EXISTS leave_requests_status_check;
+      ALTER TABLE leave_requests ADD CONSTRAINT leave_requests_status_check
+        CHECK (status IN ('pending','approved','rejected','cancelled'));
+    `);
+
     // Current-day cancellation requests for already approved leaves.
     await client.query(`
       CREATE TABLE IF NOT EXISTS leave_cancellation_requests (

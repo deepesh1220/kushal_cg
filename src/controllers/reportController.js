@@ -67,17 +67,27 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
   const startOfMonth = `${year}-${String(month).padStart(2, '0')}-01`;
   const endOfMonth = `${year}-${String(month).padStart(2, '0')}-${String(totalDays).padStart(2, '0')}`;
   const leaveRows = await pool.query(
-    `SELECT from_date, to_date FROM leave_requests
+    `SELECT id, from_date, to_date FROM leave_requests
      WHERE user_id = $1 AND leave_approved = TRUE
        AND from_date <= $2 AND to_date >= $3`,
     [vtUserId, endOfMonth, startOfMonth]
   );
+  const cancellationRows = await pool.query(
+    `SELECT leave_request_id, cancel_date FROM leave_cancellation_requests
+     WHERE user_id = $1 AND status = 'approved'
+       AND cancel_date BETWEEN $2 AND $3`,
+    [vtUserId, startOfMonth, endOfMonth]
+  );
+  const cancelledLeaveDates = new Set(cancellationRows.rows.map(
+    (row) => `${row.leave_request_id}:${dayjs(row.cancel_date).format('YYYY-MM-DD')}`
+  ));
   const fullMonthLeaveDates = new Set();
   leaveRows.rows.forEach(l => {
     let cur = dayjs(l.from_date);
     const end = dayjs(l.to_date);
     while (!cur.isAfter(end)) {
-      fullMonthLeaveDates.add(cur.date());
+      const date = cur.format('YYYY-MM-DD');
+      if (!cancelledLeaveDates.has(`${l.id}:${date}`)) fullMonthLeaveDates.add(cur.date());
       cur = cur.add(1, 'day');
     }
   });

@@ -220,7 +220,7 @@ const getSchoolLeaves = async (req, res, next) => {
     }
 
     // ── 2. Extract & validate query params ───────────────────────────────────
-    const VALID_STATUSES = new Set(['pending', 'approved', 'rejected']);
+    const VALID_STATUSES = new Set(['pending', 'approved', 'rejected', 'cancelled']);
     const {
       status,
       fromDate,
@@ -233,7 +233,7 @@ const getSchoolLeaves = async (req, res, next) => {
     if (status && !VALID_STATUSES.has(status.toLowerCase())) {
       return res.status(400).json({
         success: false,
-        message: `Invalid status "${status}". Must be one of: pending, approved, rejected.`,
+        message: `Invalid status "${status}". Must be one of: pending, approved, rejected, cancelled.`,
       });
     }
 

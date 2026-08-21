@@ -28,7 +28,25 @@ const checkIn = async (req, res) => {
 
   try {
     // ── Prevent duplicate check-in ─────────────────────────────────────────────
-    const existing = await Attendance.findByUserAndDate(userId, today);
+    let existing = await Attendance.findByUserAndDate(userId, today);
+    if (existing?.status === 'on_leave' && !existing.check_in_time && !existing.check_out_time) {
+      const approvedCancellation = await pool.query(`
+        SELECT 1
+        FROM leave_cancellation_requests lcr
+        JOIN leave_requests l ON l.id = lcr.leave_request_id
+        WHERE lcr.user_id = $1 AND lcr.cancel_date = $2::date
+          AND lcr.status = 'approved' AND l.user_id = $1
+        LIMIT 1
+      `, [userId, today]);
+      if (approvedCancellation.rows.length) {
+        await pool.query(`
+          DELETE FROM attendance_records
+          WHERE id = $1 AND status = 'on_leave'
+            AND check_in_time IS NULL AND check_out_time IS NULL
+        `, [existing.id]);
+        existing = null;
+      }
+    }
     if (existing) {
       return res.status(409).json({
         status: false,
@@ -107,6 +125,24 @@ const checkIn = async (req, res) => {
     }
 
     // ── [FACE] Verify identity ─────────────────────────────────────────────────
+    const activeLeave = await pool.query(`
+      SELECT l.id FROM leave_requests l
+      WHERE l.user_id = $1 AND l.leave_approved = TRUE
+        AND $2::date BETWEEN l.from_date AND l.to_date
+        AND NOT EXISTS (
+          SELECT 1 FROM leave_cancellation_requests lcr
+          WHERE lcr.leave_request_id = l.id AND lcr.cancel_date = $2::date
+            AND lcr.status = 'approved'
+        )
+      LIMIT 1
+    `, [userId, today]);
+    if (activeLeave.rows.length) {
+      return res.status(403).json({
+        status: false,
+        message: 'Check-in is not allowed while you are on approved leave. Submit a cancellation request and wait for VTP approval.',
+      });
+    }
+
     let matchPercent = null;
     let isMatch = false;
     if (false) { // Temporarily disabled: check-in face verification.
@@ -152,23 +188,6 @@ const checkIn = async (req, res) => {
       });
     }
 
-    const activeLeave = await pool.query(`
-      SELECT l.id FROM leave_requests l
-      WHERE l.user_id = $1 AND l.leave_approved = TRUE
-        AND $2::date BETWEEN l.from_date AND l.to_date
-        AND NOT EXISTS (
-          SELECT 1 FROM leave_cancellation_requests lcr
-          WHERE lcr.leave_request_id = l.id AND lcr.cancel_date = $2::date
-            AND lcr.status = 'approved'
-        )
-      LIMIT 1
-    `, [userId, today]);
-    if (activeLeave.rows.length) {
-      return res.status(403).json({
-        status: false,
-        message: 'Check-in is not allowed while you are on approved leave. Submit a cancellation request and wait for VTP approval.',
-      });
-    }
     }
     // ── ──────────────────────────────────────────────────────────────────────
 
