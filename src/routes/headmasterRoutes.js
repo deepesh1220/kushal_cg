@@ -7,6 +7,7 @@ const {
   getByDistrict,
   getByBlock,
   getSchoolLeaves,
+  approveLeaveCancellationByHm,
   updateSchoolTime,
   getSchoolTiming,
   getSchoolDetails,
@@ -28,6 +29,7 @@ router.post('/school',    /* authenticate, */ getSchoolDetails);
 // GET /api/headmaster/leaves
 // Must be defined BEFORE /:teacher_code to prevent Express treating 'leaves' as a param
 router.get('/leaves', authenticate, authorize('leave:view_all'), getSchoolLeaves);
+router.patch('/leave-cancellation/:cancellationRequestId/approve', authenticate, authorize('leave:approve'), approveLeaveCancellationByHm);
 router.post('/vt-list', authenticate, getVtList);
 router.post('/mark-vt-attendance', authenticate, authorize('attendance:create_others'), markVtAttendance);
 router.put('/update-vt-attendance/:id', authenticate, authorize('attendance:create_others'), updateVtAttendance);

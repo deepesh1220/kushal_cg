@@ -1,8 +1,7 @@
 const User = require('../models/User');
 const Leave = require('../models/Leave');
-const LeaveBalance = require('../models/LeaveBalance');
 const { pool } = require('../config/db');
-const { getISTDate } = require('../utils/timeUtils');
+const { approveCancellationLayer } = require('../services/leaveCancellationService');
 
 const VTP_ROLE_NAME = 'vocational_teacher_provider';
 const normalizeVtpName = (value) => String(value ?? '').trim().toLowerCase();
@@ -727,7 +726,6 @@ const approveLeaveCancellationByVtp = async (req, res) => {
     return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
   }
 
-  const client = await pool.connect();
   try {
     const requestLookup = await pool.query(
       'SELECT leave_request_id FROM leave_cancellation_requests WHERE id = $1',
@@ -739,120 +737,23 @@ const approveLeaveCancellationByVtp = async (req, res) => {
     const validationError = await _validateLeaveBelongsToVtp(requestLookup.rows[0].leave_request_id, req.user);
     if (validationError) return res.status(validationError.status).json(validationError.body);
 
-    await client.query('BEGIN');
-    const requestResult = await client.query(`
-      SELECT lcr.*, l.leave_type, l.leave_approved
-      FROM leave_cancellation_requests lcr
-      JOIN leave_requests l ON l.id = lcr.leave_request_id
-      WHERE lcr.id = $1
-      FOR UPDATE OF lcr, l
-    `, [cancellationRequestId]);
-    const cancellation = requestResult.rows[0];
-    if (cancellation.status !== 'pending') {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ status: false, message: `Cancellation request is already ${cancellation.status}.` });
-    }
-    if (!cancellation.leave_approved) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ status: false, message: 'The related leave is no longer fully approved.' });
-    }
-    if (getISTDate(cancellation.cancel_date) !== getISTDate()) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ status: false, message: 'A leave cancellation can only be approved on its requested date.' });
-    }
-
-    const attendance = await client.query(`
-      SELECT id, status, check_in_time, check_out_time
-      FROM attendance_records
-      WHERE user_id = $1 AND date = $2
-      FOR UPDATE
-    `, [cancellation.user_id, cancellation.cancel_date]);
-    if (attendance.rows.length) {
-      const record = attendance.rows[0];
-      const isLeaveOnlyRecord = record.status === 'on_leave'
-        && !record.check_in_time
-        && !record.check_out_time;
-      if (!isLeaveOnlyRecord) {
-        await client.query('ROLLBACK');
-        return res.status(409).json({ status: false, message: 'Actual attendance is already marked for the cancellation date.' });
-      }
-      await client.query('DELETE FROM attendance_records WHERE id = $1', [record.id]);
-    }
-
-    const cancellationAmount = LeaveBalance.getDeductionAmount(cancellation.leave_type);
-    let amountLeft = cancellationAmount;
-    let refundedAmount = 0;
-
-    const excessResult = await client.query(
-      'SELECT * FROM leave_excess_records WHERE leave_request_id = $1 FOR UPDATE',
-      [cancellation.leave_request_id]
-    );
-    if (excessResult.rows.length && amountLeft > 0) {
-      const excess = excessResult.rows[0];
-      const excessReduction = Math.min(amountLeft, Number(excess.excess_leave) || 0);
-      amountLeft -= excessReduction;
-      await client.query(`
-        UPDATE leave_excess_records
-        SET approved_leave_days = GREATEST(0, approved_leave_days - $1),
-            excess_leave = GREATEST(0, excess_leave - $2), updated_at = NOW()
-        WHERE id = $3
-      `, [cancellationAmount, excessReduction, excess.id]);
-    }
-
-    const deductionResult = await client.query(
-      'SELECT * FROM leave_deduction_log WHERE leave_request_id = $1 FOR UPDATE',
-      [cancellation.leave_request_id]
-    );
-    if (deductionResult.rows.length && amountLeft > 0) {
-      const deduction = deductionResult.rows[0];
-      refundedAmount = Math.min(amountLeft, Number(deduction.deducted_amount) || 0);
-      if (refundedAmount > 0) {
-        const deductionYearResult = await client.query(
-          `SELECT year FROM leave_balance WHERE user_id = $1
-           AND year = CASE WHEN EXTRACT(MONTH FROM $2::timestamptz) >= 4
-             THEN EXTRACT(YEAR FROM $2::timestamptz) ELSE EXTRACT(YEAR FROM $2::timestamptz) - 1 END
-           FOR UPDATE`,
-          [cancellation.user_id, deduction.deducted_at]
-        );
-        const balanceYear = deductionYearResult.rows[0]?.year;
-        if (balanceYear !== undefined) {
-          await client.query(`
-            UPDATE leave_balance SET total_used = GREATEST(0, total_used - $1),
-              remaining_balance = remaining_balance + $1, updated_at = NOW()
-            WHERE user_id = $2 AND year = $3
-          `, [refundedAmount, cancellation.user_id, balanceYear]);
-        }
-        await client.query(
-          'UPDATE leave_deduction_log SET deducted_amount = GREATEST(0, deducted_amount - $1) WHERE id = $2',
-          [refundedAmount, deduction.id]
-        );
-      }
-
-    }
-
-    const updated = await client.query(`
-      UPDATE leave_cancellation_requests
-      SET status = 'approved', reviewed_by = $1, reviewer_remarks = $2,
-          reviewed_at = NOW(), refunded_amount = $3, updated_at = NOW()
-      WHERE id = $4 RETURNING *
-    `, [req.user.id, remarks, refundedAmount, cancellationRequestId]);
-    await client.query(`
-      UPDATE leave_requests
-      SET status = 'cancelled', updated_at = NOW()
-      WHERE id = $1
-    `, [cancellation.leave_request_id]);
-    await client.query('COMMIT');
+    const result = await approveCancellationLayer({
+      cancellationRequestId,
+      layer: 'vtp',
+      reviewerId: req.user.id,
+      remarks,
+    });
     return res.json({
       status: true,
-      message: 'Leave cancellation approved. Attendance is enabled for the cancellation date.',
-      data: { ...updated.rows[0], leave_id: cancellation.leave_request_id },
+      message: result.message,
+      data: result.cancellation,
     });
   } catch (error) {
-    await client.query('ROLLBACK');
     console.error('approveLeaveCancellationByVtp error:', error.message);
-    return res.status(500).json({ status: false, message: 'Unable to approve leave cancellation.' });
-  } finally {
-    client.release();
+    return res.status(error.statusCode || 500).json({
+      status: false,
+      message: error.statusCode ? error.message : 'Unable to approve leave cancellation.',
+    });
   }
 };
 
