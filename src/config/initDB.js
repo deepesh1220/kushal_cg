@@ -352,6 +352,14 @@ const initDB = async () => {
         reviewed_by       INTEGER REFERENCES users(id) ON DELETE SET NULL,
         reviewer_remarks  TEXT,
         reviewed_at       TIMESTAMPTZ,
+        hm_status         VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (hm_status IN ('pending','approved','rejected')),
+        hm_approved_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        hm_approved_at    TIMESTAMPTZ,
+        hm_remarks        TEXT,
+        vtp_status        VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (vtp_status IN ('pending','approved','rejected')),
+        vtp_approved_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        vtp_approved_at   TIMESTAMPTZ,
+        vtp_remarks       TEXT,
         refunded_amount   DECIMAL(5,2) NOT NULL DEFAULT 0,
         created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -361,6 +369,30 @@ const initDB = async () => {
         ON leave_cancellation_requests(user_id, cancel_date);
       CREATE INDEX IF NOT EXISTS idx_leave_cancellation_status
         ON leave_cancellation_requests(status);
+    `);
+
+    await client.query(`
+      ALTER TABLE leave_cancellation_requests
+        ADD COLUMN IF NOT EXISTS hm_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS hm_approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        ADD COLUMN IF NOT EXISTS hm_approved_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS hm_remarks TEXT,
+        ADD COLUMN IF NOT EXISTS vtp_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS vtp_approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        ADD COLUMN IF NOT EXISTS vtp_approved_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS vtp_remarks TEXT;
+      ALTER TABLE leave_cancellation_requests DROP CONSTRAINT IF EXISTS leave_cancellation_requests_hm_status_check;
+      ALTER TABLE leave_cancellation_requests ADD CONSTRAINT leave_cancellation_requests_hm_status_check
+        CHECK (hm_status IN ('pending','approved','rejected'));
+      ALTER TABLE leave_cancellation_requests DROP CONSTRAINT IF EXISTS leave_cancellation_requests_vtp_status_check;
+      ALTER TABLE leave_cancellation_requests ADD CONSTRAINT leave_cancellation_requests_vtp_status_check
+        CHECK (vtp_status IN ('pending','approved','rejected'));
+      UPDATE leave_cancellation_requests
+      SET hm_status = 'approved', vtp_status = 'approved'
+      WHERE status = 'approved';
+      UPDATE leave_cancellation_requests
+      SET hm_status = 'rejected', vtp_status = 'rejected'
+      WHERE status = 'rejected';
     `);
 
     // Indexes for leave balance tables

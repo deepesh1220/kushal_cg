@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const Headmaster = require('../models/Headmaster');
 const { pool } = require('../config/db');
 const Leave = require('../models/Leave');
+const { approveCancellationLayer } = require('../services/leaveCancellationService');
 
 // ─── GET  /api/headmaster/:teacher_code ───────────────────────────────────────
 const getHeadmaster = async (req, res, next) => {
@@ -270,6 +271,46 @@ const getSchoolLeaves = async (req, res, next) => {
     });
   } catch (err) {
     next(err); // Passed to global error handler in app.js
+  }
+};
+
+const approveLeaveCancellationByHm = async (req, res) => {
+  const cancellationRequestId = Number.parseInt(req.params.cancellationRequestId, 10);
+  const remarks = typeof req.body?.remarks === 'string' ? req.body.remarks.trim() || null : null;
+  if (!Number.isInteger(cancellationRequestId) || cancellationRequestId <= 0) {
+    return res.status(400).json({ status: false, message: 'Invalid cancellation request ID.' });
+  }
+  if (remarks?.length > 1000) {
+    return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
+  }
+
+  try {
+    const ownership = await pool.query(`
+      SELECT l.id
+      FROM leave_cancellation_requests lcr
+      JOIN leave_requests l ON l.id = lcr.leave_request_id
+      JOIN users u ON u.id = l.user_id
+      LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
+      WHERE lcr.id = $1
+        AND ($2::boolean = TRUE OR COALESCE(u.udise_code, v.udise_code)::text = $3::text)
+    `, [cancellationRequestId, ['admin', 'super_admin'].includes(req.user.role_name), req.user.udise_code || null]);
+    if (!ownership.rows.length) {
+      return res.status(403).json({ status: false, message: 'You cannot approve a cancellation request from another school.' });
+    }
+
+    const result = await approveCancellationLayer({
+      cancellationRequestId,
+      layer: 'hm',
+      reviewerId: req.user.id,
+      remarks,
+    });
+    return res.json({ status: true, message: result.message, data: result.cancellation });
+  } catch (error) {
+    console.error('approveLeaveCancellationByHm error:', error.message);
+    return res.status(error.statusCode || 500).json({
+      status: false,
+      message: error.statusCode ? error.message : 'Unable to approve leave cancellation.',
+    });
   }
 };
 
@@ -592,6 +633,7 @@ module.exports = {
   getByDistrict,
   getByBlock,
   getSchoolLeaves,
+  approveLeaveCancellationByHm,
   updateSchoolTime,
   getSchoolTiming,
   getSchoolDetails,

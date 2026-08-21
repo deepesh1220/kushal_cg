@@ -351,6 +351,14 @@ class Leave {
       JOIN  vt_staff_details v ON v.id  = u.vt_staff_id
       LEFT JOIN users        r ON r.id  = l.reviewed_by
       LEFT JOIN leave_excess_records ler ON ler.leave_request_id = l.id
+      LEFT JOIN LATERAL (
+        SELECT id, cancel_date, reason, status, hm_status, vtp_status,
+          hm_remarks, vtp_remarks, refunded_amount, created_at
+        FROM leave_cancellation_requests
+        WHERE leave_request_id = l.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) lcr ON TRUE
       WHERE v.udise_code = $1
       ${filterClauses}
     `;
@@ -380,7 +388,16 @@ class Leave {
          r.name         AS reviewed_by_name,
          l.reviewed_at,
          ler.approved_leave_days,
-         ler.excess_leave
+         ler.excess_leave,
+         lcr.id AS cancellation_request_id,
+         lcr.cancel_date AS cancellation_date,
+         lcr.reason AS cancellation_reason,
+         lcr.status AS cancellation_status,
+         lcr.hm_status AS cancellation_hm_status,
+         lcr.vtp_status AS cancellation_vtp_status,
+         lcr.hm_remarks AS cancellation_hm_remarks,
+         lcr.vtp_remarks AS cancellation_vtp_remarks,
+         lcr.refunded_amount AS cancellation_refunded_amount
        ${baseWhere}
        ORDER BY l.created_at DESC
        LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
@@ -445,7 +462,8 @@ class Leave {
       LEFT JOIN users        r ON r.id  = l.reviewed_by
       LEFT JOIN leave_excess_records ler ON ler.leave_request_id = l.id
       LEFT JOIN LATERAL (
-        SELECT id, cancel_date, reason, status, reviewer_remarks, refunded_amount, created_at
+        SELECT id, cancel_date, reason, status, reviewer_remarks, refunded_amount,
+          hm_status, vtp_status, hm_remarks, vtp_remarks, created_at
         FROM leave_cancellation_requests
         WHERE leave_request_id = l.id
         ORDER BY created_at DESC
@@ -496,6 +514,10 @@ class Leave {
          lcr.cancel_date     AS cancellation_date,
          lcr.reason          AS cancellation_reason,
          lcr.status          AS cancellation_status,
+         lcr.hm_status       AS cancellation_hm_status,
+         lcr.vtp_status      AS cancellation_vtp_status,
+         lcr.hm_remarks      AS cancellation_hm_remarks,
+         lcr.vtp_remarks     AS cancellation_vtp_remarks,
          lcr.reviewer_remarks AS cancellation_reviewer_remarks,
          lcr.refunded_amount AS cancellation_refunded_amount
        ${baseWhere}
