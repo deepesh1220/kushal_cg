@@ -660,6 +660,12 @@ const approveLeaveByVtp = async (req, res) => {
         console.error(`[Leave ${parsedLeaveId}] Deduction error (approval still succeeded):`, e.message);
         deductionInfo = { success: false, message: e.message };
       }
+
+      try {
+        await Leave.reconcileApprovedAttendance(updated);
+      } catch (attendanceError) {
+        console.error(`[Leave ${parsedLeaveId}] Attendance reconciliation error:`, attendanceError.message);
+      }
     }
 
     return res.status(200).json({
@@ -755,13 +761,22 @@ const approveLeaveCancellationByVtp = async (req, res) => {
       return res.status(409).json({ status: false, message: 'A leave cancellation can only be approved on its requested date.' });
     }
 
-    const attendance = await client.query(
-      'SELECT id FROM attendance_records WHERE user_id = $1 AND date = $2 LIMIT 1',
-      [cancellation.user_id, cancellation.cancel_date]
-    );
+    const attendance = await client.query(`
+      SELECT id, status, check_in_time, check_out_time
+      FROM attendance_records
+      WHERE user_id = $1 AND date = $2
+      FOR UPDATE
+    `, [cancellation.user_id, cancellation.cancel_date]);
     if (attendance.rows.length) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ status: false, message: 'Attendance is already marked for the cancellation date.' });
+      const record = attendance.rows[0];
+      const isLeaveOnlyRecord = record.status === 'on_leave'
+        && !record.check_in_time
+        && !record.check_out_time;
+      if (!isLeaveOnlyRecord) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ status: false, message: 'Actual attendance is already marked for the cancellation date.' });
+      }
+      await client.query('DELETE FROM attendance_records WHERE id = $1', [record.id]);
     }
 
     const cancellationAmount = LeaveBalance.getDeductionAmount(cancellation.leave_type);
@@ -812,6 +827,7 @@ const approveLeaveCancellationByVtp = async (req, res) => {
           [refundedAmount, deduction.id]
         );
       }
+
     }
 
     const updated = await client.query(`
@@ -820,6 +836,11 @@ const approveLeaveCancellationByVtp = async (req, res) => {
           reviewed_at = NOW(), refunded_amount = $3, updated_at = NOW()
       WHERE id = $4 RETURNING *
     `, [req.user.id, remarks, refundedAmount, cancellationRequestId]);
+    await client.query(`
+      UPDATE leave_requests
+      SET status = 'cancelled', updated_at = NOW()
+      WHERE id = $1
+    `, [cancellation.leave_request_id]);
     await client.query('COMMIT');
     return res.json({
       status: true,

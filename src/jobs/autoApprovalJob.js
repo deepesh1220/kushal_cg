@@ -47,6 +47,7 @@ const deductLeaveOnce = async (leave) => {
   if (!exists.rows.length) {
     await LeaveBalance.deductLeave(leave.id, leave.user_id, leave.leave_type, null);
   }
+  await Leave.reconcileApprovedAttendance(leave);
 };
 
 const upsertOdAttendance = async (request) => {

@@ -55,6 +55,31 @@ const normalizeReportStatus = (status) => (
   ['pending', 'approved', 'rejected'].includes(status) ? status : null
 );
 
+const normalizeVtpPayload = (body = {}) => ({
+  vtp_id: String(body.vtp_id || '').trim(),
+  vtp_name: String(body.vtp_name || '').trim(),
+  vc_name: String(body.vc_name || '').trim(),
+  mobile: String(body.mobile || '').trim(),
+  email: String(body.email || '').trim().toLowerCase(),
+  status: String(body.status || 'active').trim().toLowerCase(),
+});
+
+const validateVtpPayload = (payload) => {
+  if (!payload.vtp_id || !payload.vtp_name || !payload.vc_name || !payload.mobile || !payload.email) {
+    return 'VTP ID, VTP name, coordinator name, mobile, and email are required.';
+  }
+  if (!/^\d{2}$/.test(payload.vtp_id)) return 'VTP ID must be exactly 2 digits.';
+  if (!/^\d{10}$/.test(payload.mobile)) return 'Mobile number must be exactly 10 digits.';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) return 'Please enter a valid email address.';
+  if (!['active', 'inactive'].includes(payload.status)) return 'Status must be active or inactive.';
+  if (payload.vtp_name.length > 200 || payload.vc_name.length > 200 || payload.email.length > 200) {
+    return 'VTP name, coordinator name, and email must not exceed 200 characters.';
+  }
+  return null;
+};
+
+const isUniqueViolation = (error) => error?.code === '23505';
+
 // GET /api/admin/attendance-tracking
 const getAttendanceTracking = async (req, res) => {
   try {
@@ -339,6 +364,7 @@ const getVtpList = async (req, res) => {
     const dataResult = await pool.query(`
       SELECT
         id,
+        vtp_id,
         vc_name,
         vtp_name,
         mobile,
@@ -356,6 +382,234 @@ const getVtpList = async (req, res) => {
   } catch (error) {
     console.error('getVtpList error:', error.message);
     return res.status(500).json({ status: false, message: 'Server error fetching VTP list.' });
+  }
+};
+
+// GET /api/admin/vtp-options
+const getVtpOptions = async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT TRIM(vtp_id) AS vtp_id, vtp_name
+      FROM mst_vtp
+      ORDER BY vtp_name ASC
+    `);
+    return res.status(200).json({ status: true, data: result.rows });
+  } catch (error) {
+    console.error('getVtpOptions error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error fetching VTP options.' });
+  }
+};
+
+// POST /api/admin/vtp
+const createVtp = async (req, res) => {
+  const payload = normalizeVtpPayload(req.body);
+  const validationError = validateVtpPayload(payload);
+  if (validationError) return res.status(400).json({ status: false, message: validationError });
+
+  try {
+    const masterResult = await pool.query(
+      'SELECT vtp_name FROM mst_vtp WHERE TRIM(vtp_id) = $1 AND LOWER(vtp_name) = LOWER($2)',
+      [payload.vtp_id, payload.vtp_name]
+    );
+    if (!masterResult.rowCount) {
+      return res.status(400).json({ status: false, message: 'Selected VTP ID and VTP name do not match the VTP master.' });
+    }
+
+    const result = await pool.query(`
+      INSERT INTO vtp (vtp_id, vtp_name, vc_name, mobile, email, status)
+      VALUES ($1, $2, $3, $4::bigint, $5, $6)
+      RETURNING id, TRIM(vtp_id) AS vtp_id, vtp_name, vc_name, mobile, email, status, created_at, updated_at
+    `, [payload.vtp_id, masterResult.rows[0].vtp_name, payload.vc_name, payload.mobile, payload.email, payload.status]);
+
+    return res.status(201).json({ status: true, message: 'VTP provider created successfully.', data: result.rows[0] });
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      return res.status(409).json({ status: false, message: 'A VTP provider with this email or mobile already exists.' });
+    }
+    console.error('createVtp error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error creating VTP provider.' });
+  }
+};
+
+// PUT /api/admin/vtp/:id
+const updateVtp = async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id < 1) return res.status(400).json({ status: false, message: 'Invalid VTP provider ID.' });
+
+  const payload = normalizeVtpPayload(req.body);
+  const validationError = validateVtpPayload(payload);
+  if (validationError) return res.status(400).json({ status: false, message: validationError });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const existingResult = await client.query('SELECT * FROM vtp WHERE id = $1 FOR UPDATE', [id]);
+    if (!existingResult.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ status: false, message: 'VTP provider not found.' });
+    }
+
+    const masterResult = await client.query(
+      'SELECT vtp_name FROM mst_vtp WHERE TRIM(vtp_id) = $1 AND LOWER(vtp_name) = LOWER($2)',
+      [payload.vtp_id, payload.vtp_name]
+    );
+    if (!masterResult.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ status: false, message: 'Selected VTP ID and VTP name do not match the VTP master.' });
+    }
+
+    const existing = existingResult.rows[0];
+    const result = await client.query(`
+      UPDATE vtp
+      SET vtp_id = $1, vtp_name = $2, vc_name = $3, mobile = $4::bigint,
+          email = $5, status = $6, updated_at = NOW()
+      WHERE id = $7
+      RETURNING id, TRIM(vtp_id) AS vtp_id, vtp_name, vc_name, mobile, email, status, created_at, updated_at
+    `, [payload.vtp_id, masterResult.rows[0].vtp_name, payload.vc_name, payload.mobile, payload.email, payload.status, id]);
+
+    await client.query(`
+      UPDATE users u
+      SET name = $1, email = $2, phone = $3::bigint, organization_name = $4,
+          vtp_id = $5, is_active = $6, updated_at = NOW()
+      FROM roles r
+      WHERE u.role_id = r.id
+        AND r.name = 'vocational_teacher_provider'
+        AND (u.email = $7 OR u.phone = $8)
+    `, [payload.vc_name, payload.email, payload.mobile, masterResult.rows[0].vtp_name,
+      payload.vtp_id, payload.status === 'active', existing.email, existing.mobile]);
+
+    await client.query('COMMIT');
+    return res.status(200).json({ status: true, message: 'VTP provider updated successfully.', data: result.rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (isUniqueViolation(error)) {
+      return res.status(409).json({ status: false, message: 'A VTP provider with this email or mobile already exists.' });
+    }
+    console.error('updateVtp error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error updating VTP provider.' });
+  } finally {
+    client.release();
+  }
+};
+
+// DELETE /api/admin/vtp/:id
+const deleteVtp = async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id < 1) return res.status(400).json({ status: false, message: 'Invalid VTP provider ID.' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const existingResult = await client.query('SELECT * FROM vtp WHERE id = $1 FOR UPDATE', [id]);
+    if (!existingResult.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ status: false, message: 'VTP provider not found.' });
+    }
+
+    const existing = existingResult.rows[0];
+    await client.query(`
+      UPDATE users u
+      SET is_active = FALSE, updated_at = NOW()
+      FROM roles r
+      WHERE u.role_id = r.id
+        AND r.name = 'vocational_teacher_provider'
+        AND (u.email = $1 OR u.phone = $2)
+    `, [existing.email, existing.mobile]);
+    await client.query('DELETE FROM vtp WHERE id = $1', [id]);
+    await client.query('COMMIT');
+
+    return res.status(200).json({ status: true, message: 'VTP provider deleted successfully.' });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('deleteVtp error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error deleting VTP provider.' });
+  } finally {
+    client.release();
+  }
+};
+
+const normalizeDeoUpdatePayload = (body = {}) => ({
+  deo_name: String(body.deo_name || '').trim(),
+  email: String(body.email || '').trim().toLowerCase(),
+  mobile: String(body.mobile || '').trim(),
+});
+
+const validateDeoUpdatePayload = (payload) => {
+  if (!payload.deo_name || !payload.email || !payload.mobile) {
+    return 'DEO name, email, and mobile are required.';
+  }
+  if (payload.deo_name.length > 255) return 'DEO name must not exceed 255 characters.';
+  if (payload.email.length > 200 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) {
+    return 'Please enter a valid email address.';
+  }
+  if (!/^\d{10}$/.test(payload.mobile)) return 'Mobile number must be exactly 10 digits.';
+  return null;
+};
+
+// PUT /api/admin/deos/:id
+const updateDeo = async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id < 1) {
+    return res.status(400).json({ status: false, message: 'Invalid DEO ID.' });
+  }
+
+  const payload = normalizeDeoUpdatePayload(req.body);
+  const validationError = validateDeoUpdatePayload(payload);
+  if (validationError) return res.status(400).json({ status: false, message: validationError });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const existingResult = await client.query('SELECT * FROM mst_deo WHERE id = $1 FOR UPDATE', [id]);
+    if (!existingResult.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ status: false, message: 'DEO record not found.' });
+    }
+
+    const duplicateResult = await client.query(`
+      SELECT id
+      FROM mst_deo
+      WHERE id <> $1
+        AND (LOWER(email) = $2 OR mobile = $3::bigint)
+      LIMIT 1
+    `, [id, payload.email, payload.mobile]);
+    if (duplicateResult.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ status: false, message: 'A DEO with this email or mobile already exists.' });
+    }
+
+    const existing = existingResult.rows[0];
+    const updatedResult = await client.query(`
+      UPDATE mst_deo
+      SET deo_name = $1, email = $2, mobile = $3::bigint
+      WHERE id = $4
+      RETURNING id, district_cd, district_name, deo_name, mobile, alternate_mobile, designation, email
+    `, [payload.deo_name, payload.email, payload.mobile, id]);
+
+    await client.query(`
+      UPDATE users u
+      SET name = $1, email = $2, phone = $3::bigint, updated_at = NOW()
+      FROM roles r
+      WHERE u.role_id = r.id
+        AND r.name = 'deo'
+        AND (u.email = $4 OR u.phone = $5)
+    `, [payload.deo_name, payload.email, payload.mobile, existing.email, existing.mobile]);
+
+    await client.query('COMMIT');
+    return res.status(200).json({
+      status: true,
+      message: 'DEO details updated successfully.',
+      data: updatedResult.rows[0],
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (isUniqueViolation(error)) {
+      return res.status(409).json({ status: false, message: 'This email or mobile is already in use.' });
+    }
+    console.error('updateDeo error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error updating DEO details.' });
+  } finally {
+    client.release();
   }
 };
 
@@ -439,6 +693,11 @@ module.exports = {
   getAttendanceTracking,
   getSchools,
   getVtpList,
+  getVtpOptions,
+  createVtp,
+  updateVtp,
+  deleteVtp,
   getDeoList,
+  updateDeo,
   getCount: getDashboardCounts,
 };

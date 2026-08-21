@@ -95,8 +95,21 @@ const applyLeave = async (req, res) => {
     const check = await LeaveBalance.checkSufficientBalance(userId, reqType);
     // VT can apply for leave even with insufficient balance; excess is tracked separately
 
+    const attendanceResult = await pool.query(`
+      SELECT 1 FROM attendance_records
+      WHERE user_id = $1 AND date BETWEEN $2::date AND $3::date
+        AND check_in_time IS NOT NULL
+      LIMIT 1
+    `, [userId, from_date, to_date]);
+
     const leave = await Leave.create({ user_id: userId, from_date, to_date, reason });
-    return res.status(201).json({ status: true, message: 'Leave request submitted successfully.', data: leave });
+    return res.status(201).json({
+      status: true,
+      message: attendanceResult.rows.length
+        ? 'Full-day leave request submitted successfully. Existing attendance will remain active until the leave is fully approved.'
+        : 'Leave request submitted successfully.',
+      data: leave,
+    });
   } catch (error) {
     console.error('Apply leave error:', error.message);
     return res.status(500).json({ status: false, message: error.message });
@@ -257,6 +270,12 @@ const approveRejectLeave = async (req, res) => {
         console.error(`[Leave ${leaveId}] Deduction error (approval still succeeded):`, e.message);
         deductionInfo = { success: false, message: e.message };
       }
+
+      try {
+        await Leave.reconcileApprovedAttendance(updated);
+      } catch (attendanceError) {
+        console.error(`[Leave ${leaveId}] Attendance reconciliation error:`, attendanceError.message);
+      }
     }
 
     return res.status(200).json({
@@ -379,10 +398,13 @@ const applyLeaveCancellation = async (req, res) => {
     const leave = leaveResult.rows[0];
     const leaveId = leave.id;
     const attendance = await pool.query(
-      'SELECT id FROM attendance_records WHERE user_id = $1 AND date = $2 LIMIT 1',
+      'SELECT id, status, check_in_time, check_out_time FROM attendance_records WHERE user_id = $1 AND date = $2 LIMIT 1',
       [userId, today]
     );
-    if (attendance.rows.length) {
+    const hasActualAttendance = attendance.rows.some((record) => (
+      record.status !== 'on_leave' || record.check_in_time || record.check_out_time
+    ));
+    if (hasActualAttendance) {
       return res.status(409).json({ status: false, message: 'Attendance is already marked for today.' });
     }
 

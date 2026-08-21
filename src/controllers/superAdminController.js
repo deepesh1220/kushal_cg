@@ -16,7 +16,7 @@ const getDashboard = async (req, res, next) => {
       pool.query(`SELECT status, COUNT(*) as count FROM leave_requests GROUP BY status`),
     ]);
 
-    const leaveCounts = { pending: 0, approved: 0, rejected: 0 };
+    const leaveCounts = { pending: 0, approved: 0, rejected: 0, cancelled: 0 };
     leavesRes.rows.forEach(row => {
       leaveCounts[row.status] = parseInt(row.count, 10);
     });

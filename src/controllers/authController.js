@@ -776,7 +776,20 @@ const getMe = async (req, res) => {
       status: 'absent' // Defaults to absent if no record is found
     };
 
-    const attendanceRecord = await Attendance.findByUserAndDate(userId, processedDate);
+    let attendanceRecord = await Attendance.findByUserAndDate(userId, processedDate);
+    if (attendanceRecord?.status === 'on_leave'
+      && !attendanceRecord.check_in_time
+      && !attendanceRecord.check_out_time) {
+      const approvedCancellation = await pool.query(`
+        SELECT 1
+        FROM leave_cancellation_requests lcr
+        JOIN leave_requests l ON l.id = lcr.leave_request_id
+        WHERE lcr.user_id = $1 AND lcr.cancel_date = $2::date
+          AND lcr.status = 'approved' AND l.user_id = $1
+        LIMIT 1
+      `, [userId, processedDate]);
+      if (approvedCancellation.rows.length) attendanceRecord = null;
+    }
 
     let isPresentOrOther = false;
     if (attendanceRecord && attendanceRecord.status !== 'absent') {
@@ -791,8 +804,15 @@ const getMe = async (req, res) => {
     if (!isPresentOrOther) {
       // Check for Leave
       const leaveRes = await pool.query(`
-        SELECT id FROM leave_requests 
-        WHERE user_id = $1 AND leave_approved = TRUE AND from_date <= $2 AND to_date >= $2
+        SELECT l.id FROM leave_requests l
+        WHERE l.user_id = $1 AND l.leave_approved = TRUE
+          AND l.from_date <= $2 AND l.to_date >= $2
+          AND NOT EXISTS (
+            SELECT 1 FROM leave_cancellation_requests lcr
+            WHERE lcr.leave_request_id = l.id
+              AND lcr.cancel_date = $2::date
+              AND lcr.status = 'approved'
+          )
       `, [userId, processedDate]);
 
       if (leaveRes.rows.length > 0) {

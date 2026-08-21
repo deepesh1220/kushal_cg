@@ -6,11 +6,26 @@ class Leave {
   // ─── Check for overlapping leaves ───────────────────────────────────────────
   static async checkOverlap(userId, fromDate, toDate, excludeId = null) {
     let query = `
-      SELECT id FROM leave_requests
-      WHERE user_id = $1
-      AND status IN ('pending', 'approved')
-      AND from_date <= $3
-      AND to_date >= $2
+      SELECT l.id FROM leave_requests l
+      WHERE l.user_id = $1
+      AND l.status IN ('pending', 'approved', 'cancelled')
+      AND l.from_date <= $3::date
+      AND l.to_date >= $2::date
+      AND EXISTS (
+        SELECT 1
+        FROM generate_series(
+          GREATEST(l.from_date, $2::date),
+          LEAST(l.to_date, $3::date),
+          INTERVAL '1 day'
+        ) AS overlap_day
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM leave_cancellation_requests lcr
+          WHERE lcr.leave_request_id = l.id
+            AND lcr.cancel_date = overlap_day::date
+            AND lcr.status = 'approved'
+        )
+      )
     `;
     const params = [userId, fromDate, toDate];
 
@@ -21,6 +36,46 @@ class Leave {
 
     const result = await pool.query(query, params);
     return result.rows.length > 0;
+  }
+
+  // A same-day leave may be requested after check-in. Once both approval
+  // layers approve it, full-day leave must take precedence over the punch.
+  // This is idempotent and deliberately leaves approved cancellation dates
+  // untouched so attendance can be marked normally on those dates.
+  static async reconcileApprovedAttendance(leave, queryable = pool) {
+    if (!leave?.leave_approved) return 0;
+
+    const result = await queryable.query(`
+      UPDATE attendance_records ar
+      SET status = 'on_leave',
+          check_in_time = NULL,
+          check_out_time = NULL,
+          latitude = NULL,
+          longitude = NULL,
+          checkout_latitude = NULL,
+          checkout_longitude = NULL,
+          photo_path = NULL,
+          checkin_photo = NULL,
+          checkout_photo = NULL,
+          face_match_score = NULL,
+          checkout_face_score = NULL,
+          remarks = CASE
+            WHEN ar.remarks IS NULL OR ar.remarks = ''
+              THEN 'Attendance replaced by fully approved full-day leave'
+            ELSE ar.remarks || ' | Attendance replaced by fully approved full-day leave'
+          END,
+          updated_at = NOW()
+      WHERE ar.user_id = $1
+        AND ar.date BETWEEN $2::date AND $3::date
+        AND NOT EXISTS (
+          SELECT 1 FROM leave_cancellation_requests lcr
+          WHERE lcr.leave_request_id = $4
+            AND lcr.cancel_date = ar.date
+            AND lcr.status = 'approved'
+        )
+    `, [leave.user_id, leave.from_date, leave.to_date, leave.id]);
+
+    return result.rowCount;
   }
 
   // ─── Create a new leave request ─────────────────────────────────────────────
@@ -477,19 +532,24 @@ class Leave {
   // ─── Update status by Principal/HM ───────────────────────────────────────────
   static async updatePrincipalStatus(id, { status, reviewerId, remarks = null, approvalType = 'manual' }) {
     const result = await pool.query(`
-      UPDATE leave_requests
-      SET 
-        status = $1,
-        reviewed_by = $2,
-        reviewed_at = NOW(),
-        principal_remarks = $4,
-        principal_updated_at = NOW(),
-        updated_at = NOW(),
-        leave_approved = CASE WHEN $3 = 'approved' AND vtp_status = 'approved' THEN TRUE ELSE FALSE END,
-        principal_approval_type = $5::VARCHAR,
-        is_auto_approved = is_auto_approved OR $5::VARCHAR = 'auto'
-      WHERE id = $6 AND status = 'pending'
-      RETURNING *
+      WITH updated_leave AS (
+        UPDATE leave_requests
+        SET status = $1, reviewed_by = $2, reviewed_at = NOW(),
+          principal_remarks = $4, principal_updated_at = NOW(), updated_at = NOW(),
+          leave_approved = CASE WHEN $3 = 'approved' AND vtp_status = 'approved' THEN TRUE ELSE FALSE END,
+          principal_approval_type = $5::VARCHAR,
+          is_auto_approved = is_auto_approved OR $5::VARCHAR = 'auto'
+        WHERE id = $6 AND status = 'pending'
+        RETURNING *
+      ), cleared_leave_attendance AS (
+        DELETE FROM attendance_records ar USING updated_leave l
+        WHERE $1 = 'rejected' AND ar.user_id = l.user_id
+          AND ar.date BETWEEN l.from_date AND l.to_date
+          AND ar.status = 'on_leave'
+          AND ar.check_in_time IS NULL AND ar.check_out_time IS NULL
+        RETURNING ar.id
+      )
+      SELECT * FROM updated_leave
     `, [status, reviewerId, status, remarks, approvalType, id]);
     return result.rows[0] || null;
   }
@@ -497,17 +557,23 @@ class Leave {
   // ─── Update status by VTP ───────────────────────────────────────────────────
   static async updateVtpStatus(id, { status, reviewerId, remarks = null, approvalType = 'manual' }) {
     const result = await pool.query(`
-      UPDATE leave_requests
-      SET 
-        vtp_status = $1,
-        vtp_remarks = $3,
-        vtp_updated_at = NOW(),
-        updated_at = NOW(),
-        leave_approved = CASE WHEN status = 'approved' AND $2 = 'approved' THEN TRUE ELSE FALSE END,
-        vtp_approval_type = $4::VARCHAR,
-        is_auto_approved = is_auto_approved OR $4::VARCHAR = 'auto'
-      WHERE id = $5 AND vtp_status = 'pending' AND status <> 'rejected'
-      RETURNING *
+      WITH updated_leave AS (
+        UPDATE leave_requests
+        SET vtp_status = $1, vtp_remarks = $3, vtp_updated_at = NOW(), updated_at = NOW(),
+          leave_approved = CASE WHEN status = 'approved' AND $2 = 'approved' THEN TRUE ELSE FALSE END,
+          vtp_approval_type = $4::VARCHAR,
+          is_auto_approved = is_auto_approved OR $4::VARCHAR = 'auto'
+        WHERE id = $5 AND vtp_status = 'pending' AND status <> 'rejected'
+        RETURNING *
+      ), cleared_leave_attendance AS (
+        DELETE FROM attendance_records ar USING updated_leave l
+        WHERE $1 = 'rejected' AND ar.user_id = l.user_id
+          AND ar.date BETWEEN l.from_date AND l.to_date
+          AND ar.status = 'on_leave'
+          AND ar.check_in_time IS NULL AND ar.check_out_time IS NULL
+        RETURNING ar.id
+      )
+      SELECT * FROM updated_leave
     `, [status, status, remarks, approvalType, id]);
     return result.rows[0] || null;
   }
