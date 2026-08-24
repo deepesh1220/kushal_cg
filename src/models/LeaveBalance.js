@@ -23,6 +23,43 @@ const LEAVE_POLICY = {
  * - Year-end carry forward: max 10 days
  */
 class LeaveBalance {
+  static async refundLeave(leaveRequestId, userId) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const deductionResult = await client.query(
+        'SELECT * FROM leave_deduction_log WHERE leave_request_id = $1 FOR UPDATE',
+        [leaveRequestId]
+      );
+      if (deductionResult.rows.length) {
+        const deduction = deductionResult.rows[0];
+        const amount = Number(deduction.deducted_amount) || 0;
+        if (amount > 0) {
+          const balance = await client.query(`
+            SELECT year FROM leave_balance WHERE user_id = $1
+              AND year = CASE WHEN EXTRACT(MONTH FROM $2::timestamptz) >= 4
+                THEN EXTRACT(YEAR FROM $2::timestamptz) ELSE EXTRACT(YEAR FROM $2::timestamptz) - 1 END
+            FOR UPDATE
+          `, [userId, deduction.deducted_at]);
+          if (balance.rows[0]) {
+            await client.query(`UPDATE leave_balance
+              SET total_used = GREATEST(0, total_used - $1), remaining_balance = remaining_balance + $1, updated_at = NOW()
+              WHERE user_id = $2 AND year = $3`, [amount, userId, balance.rows[0].year]);
+          }
+        }
+        await client.query('DELETE FROM leave_deduction_log WHERE leave_request_id = $1', [leaveRequestId]);
+      }
+      await client.query('DELETE FROM leave_excess_records WHERE leave_request_id = $1', [leaveRequestId]);
+      await client.query('COMMIT');
+      return { success: true };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   static POLICY = LEAVE_POLICY;
 
   // ─── Financial Year Helper ─────────────────────────────────────────────────

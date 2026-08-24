@@ -165,6 +165,7 @@ const initDB = async () => {
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         requested_device_id_hash VARCHAR(64) NOT NULL,
+        previous_device_id_hash VARCHAR(64),
         reason TEXT,
         status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
         hm_status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (hm_status IN ('pending','approved','rejected')),
@@ -179,6 +180,8 @@ const initDB = async () => {
       CREATE INDEX IF NOT EXISTS idx_device_change_user_created
         ON device_change_requests(user_id, created_at DESC);
     `);
+    await client.query(`ALTER TABLE device_change_requests
+      ADD COLUMN IF NOT EXISTS previous_device_id_hash VARCHAR(64);`);
 
     // ─────────────────────────────────────────────────────────
     // TABLE: attendance_records

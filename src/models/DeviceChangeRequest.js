@@ -74,25 +74,28 @@ const DeviceChangeRequest = {
       `, [id, String(scopeValue).trim()]);
       const request = locked.rows[0];
       if (!request) { await client.query('ROLLBACK'); return { error: 'not_found' }; }
-      if (request.status !== 'pending' || request[`${layer}_status`] !== 'pending') {
-        await client.query('ROLLBACK'); return { error: 'already_actioned' };
-      }
-
       const otherLayer = layer === 'hm' ? 'vtp' : 'hm';
-      const finalStatus = decision === 'rejected'
+      const finalStatus = decision === 'rejected' || request[`${otherLayer}_status`] === 'rejected'
         ? 'rejected'
         : request[`${otherLayer}_status`] === 'approved' ? 'approved' : 'pending';
       const updated = await client.query(`
         UPDATE device_change_requests SET
           ${layer}_status = $2::VARCHAR, ${layer}_approved_by = $3, ${layer}_approved_at = NOW(),
           ${layer}_remarks = $4, status = $5::VARCHAR,
+          previous_device_id_hash = CASE
+            WHEN $5::VARCHAR = 'approved' AND previous_device_id_hash IS NULL THEN $6
+            ELSE previous_device_id_hash END,
           completed_at = CASE WHEN $5::VARCHAR <> 'pending' THEN NOW() ELSE completed_at END, updated_at = NOW()
         WHERE id = $1 RETURNING *
-      `, [id, decision, approverId, remarks || null, finalStatus]);
+      `, [id, decision, approverId, remarks || null, finalStatus, request.device_id_hash]);
 
       if (finalStatus === 'approved') {
         await client.query(`UPDATE users SET device_id_hash = $1, device_bound_at = COALESCE(device_bound_at, NOW()),
           device_updated_at = NOW(), updated_at = NOW() WHERE id = $2`, [request.requested_device_id_hash, request.user_id]);
+        await client.query('DELETE FROM refresh_tokens WHERE user_id = $1', [request.user_id]);
+      } else if (request.status === 'approved' && request.previous_device_id_hash) {
+        await client.query(`UPDATE users SET device_id_hash = $1, device_updated_at = NOW(), updated_at = NOW()
+          WHERE id = $2`, [request.previous_device_id_hash, request.user_id]);
         await client.query('DELETE FROM refresh_tokens WHERE user_id = $1', [request.user_id]);
       }
       await client.query('COMMIT');
