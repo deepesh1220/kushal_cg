@@ -8,7 +8,12 @@ const getDashboardCounts = async (req, res) => {
       pool.query('SELECT COUNT(*) AS count FROM vtp'),
       pool.query('SELECT COUNT(*) AS count FROM mst_deo'),
       pool.query('SELECT COUNT(*) AS count FROM vt_staff_details'),
-      pool.query('SELECT COUNT(DISTINCT trade) AS count FROM vt_staff_details'),
+      pool.query(`
+        SELECT COUNT(DISTINCT LOWER(TRIM(trade))) FILTER (
+          WHERE NULLIF(TRIM(trade), '') IS NOT NULL
+        ) AS count
+        FROM vt_staff_details
+      `),
     ]);
 
     return res.status(200).json({
@@ -37,6 +42,73 @@ const getPaginationParams = (query) => {
   const offset = (page - 1) * limit;
 
   return { page, limit, offset };
+};
+
+// GET /api/admin/trades
+// Distinct VTP/trade combinations used by the admin Trades List page.
+const getTrades = async (req, res) => {
+  try {
+    const { page, limit, offset } = getPaginationParams(req.query);
+    const search = String(req.query.search || '').trim();
+    const params = [];
+    let searchClause = '';
+
+    if (search) {
+      params.push(`%${search}%`);
+      searchClause = `WHERE trade_name ILIKE $1 OR vtp_names ILIKE $1`;
+    }
+
+    const normalizedTradesCte = `
+      WITH normalized_pairs AS (
+        SELECT
+          LOWER(TRIM(trade)) AS trade_key,
+          MIN(TRIM(trade)) AS trade_name,
+          MIN(TRIM(vtp_name)) AS vtp_name
+        FROM vt_staff_details
+        WHERE NULLIF(TRIM(vtp_name), '') IS NOT NULL
+          AND NULLIF(TRIM(trade), '') IS NOT NULL
+        GROUP BY LOWER(TRIM(trade)), LOWER(TRIM(vtp_name))
+      ), normalized_trades AS (
+        SELECT
+          MIN(trade_name) AS trade_name,
+          STRING_AGG(vtp_name, ', ' ORDER BY LOWER(vtp_name)) AS vtp_names
+        FROM normalized_pairs
+        GROUP BY trade_key
+      )
+    `;
+
+    const countResult = await pool.query(`
+      ${normalizedTradesCte}
+      SELECT COUNT(*)::int AS count
+      FROM normalized_trades
+      ${searchClause}
+    `, params);
+    const total = Number(countResult.rows[0]?.count || 0);
+
+    const dataParams = [...params, limit, offset];
+    const limitIndex = dataParams.length - 1;
+    const offsetIndex = dataParams.length;
+    const dataResult = await pool.query(`
+      ${normalizedTradesCte}
+      SELECT trade_name, vtp_names
+      FROM normalized_trades
+      ${searchClause}
+      ORDER BY LOWER(trade_name)
+      LIMIT $${limitIndex} OFFSET $${offsetIndex}
+    `, dataParams);
+
+    return sendPaginatedResponse(
+      res,
+      'Trades list fetched successfully.',
+      dataResult.rows,
+      total,
+      page,
+      limit
+    );
+  } catch (error) {
+    console.error('getTrades error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error fetching trades list.' });
+  }
 };
 
 const sendPaginatedResponse = (res, message, rows, total, page, limit) => {
@@ -80,9 +152,142 @@ const validateVtpPayload = (payload) => {
 
 const isUniqueViolation = (error) => error?.code === '23505';
 
+const getTrackingVtsByView = async (req, res, view) => {
+  const { page, limit, offset } = getPaginationParams(req.query);
+  const search = String(req.query.search || '').trim();
+  const districtCd = parseInt(req.query.district_cd, 10);
+  const blockCd = parseInt(req.query.block_cd, 10);
+  const clusterCd = parseInt(req.query.cluster_cd, 10);
+  const params = [];
+  const conditions = [];
+
+  let fromClause = `
+    FROM vt_staff_details v
+    LEFT JOIN mst_schools s ON s.udise_sch_code = v.udise_code
+  `;
+  let selectColumns = `
+    v.id,
+    v.vt_name,
+    v.school_name,
+    v.udise_code,
+    v.vtp_name,
+    v.trade,
+    COALESCE(s.district_name, v.district_name) AS district_name,
+    COALESCE(s.block_name, v.block_name) AS block_name,
+    s.cluster_name
+  `;
+
+  let reportMonth = null;
+  let reportYear = null;
+  if (view === 'approved_vts') {
+    reportMonth = parseInt(req.query.month, 10);
+    reportYear = parseInt(req.query.year, 10);
+    if (!Number.isInteger(reportMonth) || reportMonth < 1 || reportMonth > 12 ||
+        !Number.isInteger(reportYear) || reportYear < 2000 || reportYear > 2200) {
+      return res.status(400).json({ status: false, message: 'A valid month and year are required.' });
+    }
+
+    params.push(reportMonth, reportYear);
+    conditions.push('r.report_month = $1', 'r.report_year = $2');
+    conditions.push(`COALESCE(r.hm_approval_status, 'pending') = 'approved'`);
+    conditions.push(`COALESCE(r.vtp_approval_status, 'pending') = 'approved'`);
+    conditions.push(`COALESCE(r.deo_approval_status, 'pending') = 'approved'`);
+    fromClause = `
+      FROM monthly_school_reports r
+      JOIN users u ON u.id = r.user_id
+      JOIN vt_staff_details v ON v.id = u.vt_staff_id
+      LEFT JOIN mst_schools s ON s.udise_sch_code = v.udise_code
+    `;
+    selectColumns = `
+      r.id,
+      v.id AS vt_staff_id,
+      v.vt_name,
+      v.school_name,
+      v.udise_code,
+      v.vtp_name,
+      v.trade,
+      COALESCE(s.district_name, v.district_name) AS district_name,
+      COALESCE(s.block_name, v.block_name) AS block_name,
+      s.cluster_name,
+      r.report_month,
+      r.report_year,
+      r.hm_approval_status,
+      r.vtp_approval_status,
+      r.deo_approval_status
+    `;
+  }
+
+  if (search) {
+    params.push(`%${search}%`);
+    conditions.push(`(
+      v.vt_name ILIKE $${params.length}
+      OR v.school_name ILIKE $${params.length}
+      OR CAST(v.udise_code AS TEXT) ILIKE $${params.length}
+      OR v.vtp_name ILIKE $${params.length}
+      OR v.trade ILIKE $${params.length}
+    )`);
+  }
+  if (!Number.isNaN(districtCd)) {
+    params.push(districtCd);
+    conditions.push(`s.district_cd = $${params.length}`);
+  }
+  if (!Number.isNaN(blockCd)) {
+    params.push(blockCd);
+    conditions.push(`s.block_cd = $${params.length}`);
+  }
+  if (!Number.isNaN(clusterCd)) {
+    params.push(clusterCd);
+    conditions.push(`s.cluster_cd = $${params.length}`);
+  }
+
+  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const summaryResult = await pool.query(`
+    SELECT
+      COUNT(*)::int AS total_vts,
+      COUNT(DISTINCT v.udise_code)::int AS total_schools,
+      COUNT(DISTINCT LOWER(TRIM(v.vtp_name))) FILTER (WHERE NULLIF(TRIM(v.vtp_name), '') IS NOT NULL)::int AS total_vtps,
+      COUNT(DISTINCT LOWER(TRIM(v.trade))) FILTER (WHERE NULLIF(TRIM(v.trade), '') IS NOT NULL)::int AS total_trades
+    ${fromClause}
+    ${whereClause}
+  `, params);
+  const total = Number(summaryResult.rows[0]?.total_vts || 0);
+
+  const dataParams = [...params, limit, offset];
+  const limitIndex = dataParams.length - 1;
+  const offsetIndex = dataParams.length;
+  const dataResult = await pool.query(`
+    SELECT ${selectColumns}
+    ${fromClause}
+    ${whereClause}
+    ORDER BY LOWER(v.vt_name), v.id
+    LIMIT $${limitIndex} OFFSET $${offsetIndex}
+  `, dataParams);
+
+  return res.status(200).json({
+    status: true,
+    message: view === 'approved_vts' ? 'Approved VTs fetched successfully.' : 'All VTs fetched successfully.',
+    view,
+    month: reportMonth,
+    year: reportYear,
+    total,
+    page,
+    limit,
+    total_pages: Math.max(1, Math.ceil(total / limit)),
+    summary: summaryResult.rows[0] || {},
+    data: dataResult.rows,
+  });
+};
+
 // GET /api/admin/attendance-tracking
 const getAttendanceTracking = async (req, res) => {
   try {
+    const view = String(req.query.view || 'all_vts').trim().toLowerCase();
+    if (!['all_vts', 'approved_vts'].includes(view)) {
+      return res.status(400).json({ status: false, message: 'Invalid view. Use all_vts or approved_vts.' });
+    }
+    return await getTrackingVtsByView(req, res, view);
+
+    /* Legacy report-level tracking query retained below for migration reference. */
     const { page, limit, offset } = getPaginationParams(req.query);
     const currentDate = new Date();
     const reportMonth = Math.min(12, Math.max(1, parseInt(req.query.month, 10) || currentDate.getMonth() + 1));
@@ -690,6 +895,7 @@ const getDeoList = async (req, res) => {
 
 module.exports = {
   getDashboardCounts,
+  getTrades,
   getAttendanceTracking,
   getSchools,
   getVtpList,
