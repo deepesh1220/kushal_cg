@@ -107,14 +107,6 @@ const approveOnDuty = async (req, res) => {
       return res.status(404).json({ status: false, message: 'OD request not found.' });
     }
 
-    // Guard: HM cannot act if HM has already acted on this request
-    if (od.hm_status && od.hm_status !== 'pending') {
-      return res.status(400).json({
-        status: false,
-        message: `Headmaster has already ${od.hm_status} this OD request.`,
-      });
-    }
-
     // Validate headmaster can act on this VT
     const authError = await _validateVtBelongsToHeadmaster(od.user_id, reviewer);
     if (authError) return res.status(authError.status).json(authError.body);
@@ -142,6 +134,11 @@ const approveOnDuty = async (req, res) => {
             updated_at = NOW()
         `, [od.user_id, dateStr, remarks || 'OD Approved by Headmaster & VTP', reviewer.id]);
       }
+    } else if (od.od_approved === true) {
+      await pool.query(`
+        DELETE FROM attendance_records
+        WHERE user_id = $1 AND date BETWEEN $2 AND $3 AND status = 'od'
+      `, [od.user_id, od.from_date, od.to_date]);
     }
 
     const finalMessage = updated.od_approved
@@ -405,22 +402,6 @@ const actionOnDutyByVtp = async (req, res) => {
       return res.status(404).json({ status: false, message: 'OnDuty request not found.' });
     }
 
-    // Guard: VTP cannot act if VTP has already acted on this request
-    if (od.vtp_status && od.vtp_status !== 'pending') {
-      return res.status(400).json({
-        status: false,
-        message: `VTP has already ${od.vtp_status} this OnDuty request.`,
-      });
-    }
-
-    // Final status must not already be rejected (e.g. HM rejected it)
-    if (od.status === 'rejected') {
-      return res.status(400).json({
-        status: false,
-        message: 'This OnDuty request has already been rejected.',
-      });
-    }
-
     // Verify the VT belongs to this VTP
     const validationError = await _validateOnDutyBelongsToVtp(parsedId, req.user);
     if (validationError) return res.status(validationError.status).json(validationError.body);
@@ -434,6 +415,11 @@ const actionOnDutyByVtp = async (req, res) => {
 
     if (!updated) {
       return res.status(404).json({ status: false, message: 'OnDuty request not found.' });
+    }
+    if (updated.od_approved !== true && od.od_approved === true) {
+      await pool.query(`DELETE FROM attendance_records
+        WHERE user_id = $1 AND date BETWEEN $2 AND $3 AND status = 'od'`,
+      [od.user_id, od.from_date, od.to_date]);
     }
 
     // Upsert attendance records ONLY when both layers are approved (od_approved = true)

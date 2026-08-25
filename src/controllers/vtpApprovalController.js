@@ -698,10 +698,17 @@ const rejectLeaveByVtp = async (req, res) => {
     const validationError = await _validateLeaveBelongsToVtp(parsedLeaveId, req.user);
     if (validationError) return res.status(validationError.status).json(validationError.body);
 
+    const previous = await Leave.findById(parsedLeaveId);
+
     const updated = await Leave.updateVtpStatus(parsedLeaveId, { status: 'rejected', reviewerId: req.user.id, remarks });
 
     if (!updated) {
       return res.status(404).json({ status: false, message: 'Leave request not found.' });
+    }
+
+    if (previous?.leave_approved && !updated.leave_approved) {
+      const LeaveBalance = require('../models/LeaveBalance');
+      await LeaveBalance.refundLeave(parsedLeaveId, updated.user_id);
     }
 
     return res.status(200).json({
@@ -734,6 +741,7 @@ const approveLeaveCancellationByVtp = async (req, res) => {
     if (!requestLookup.rows.length) {
       return res.status(404).json({ status: false, message: 'Leave cancellation request not found.' });
     }
+
     const validationError = await _validateLeaveBelongsToVtp(requestLookup.rows[0].leave_request_id, req.user);
     if (validationError) return res.status(validationError.status).json(validationError.body);
 

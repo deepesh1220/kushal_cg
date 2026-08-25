@@ -112,7 +112,7 @@ class Regularization {
       UPDATE regularization_requests SET
         ${ownStatus} = $1, ${approvedBy} = $2, ${actionAt} = NOW(), ${remarksColumn} = $3,
         status = CASE
-          WHEN $1::varchar = 'rejected' THEN 'rejected'
+          WHEN $1::varchar = 'rejected' OR ${otherStatus} = 'rejected' THEN 'rejected'
           WHEN $1::varchar = 'approved' AND ${otherStatus} = 'approved' THEN 'approved'
           ELSE 'pending'
         END,
@@ -120,7 +120,7 @@ class Regularization {
         ${typeColumn} = $4::VARCHAR,
         is_auto_approved = is_auto_approved OR $4::VARCHAR = 'auto',
         updated_at = NOW()
-      WHERE id = $5 AND ${ownStatus} = 'pending' AND status <> 'rejected'
+      WHERE id = $5
       RETURNING *
     `, [status, reviewerId, remarks || null, approvalType, id]);
     return result.rows[0] || null;

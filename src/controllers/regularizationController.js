@@ -237,13 +237,6 @@ const approveRegularization = async (req, res) => {
       return res.status(404).json({ status: false, message: 'Regularization request not found.' });
     }
 
-    if (reg.hm_status !== 'pending') {
-      return res.status(400).json({ status: false, message: `Headmaster has already ${reg.hm_status} this request.` });
-    }
-    if (reg.status === 'rejected') {
-      return res.status(400).json({ status: false, message: 'This request has already been rejected.' });
-    }
-
     // Validate headmaster can act on this VT
     const authError = await _validateVtBelongsToHeadmaster(reg.user_id, reviewer);
     if (authError) return res.status(authError.status).json(authError.body);
@@ -285,6 +278,11 @@ const approveRegularization = async (req, res) => {
           remarks        = 'VT Status Regularized by Headmaster & VTP',
           updated_at     = NOW()
       `, [reg.user_id, dateStr, reviewer.id, checkIn, checkOut]);
+    } else if (reg.regularization_approved === true) {
+      await pool.query(`DELETE FROM attendance_records
+        WHERE user_id = $1 AND date = $2
+          AND remarks = 'VT Status Regularized by Headmaster & VTP'`,
+      [reg.user_id, reg.date]);
     }
 
     const message = updated.regularization_approved
@@ -432,12 +430,6 @@ const actionRegularizationByVtp = async (req, res) => {
   try {
     const reg = await Regularization.findById(requestId);
     if (!reg) return res.status(404).json({ status: false, message: 'Regularization request not found.' });
-    if (reg.vtp_status !== 'pending') {
-      return res.status(400).json({ status: false, message: `VTP has already ${reg.vtp_status} this request.` });
-    }
-    if (reg.status === 'rejected') {
-      return res.status(400).json({ status: false, message: 'This request has already been rejected.' });
-    }
     const authError = await _validateVtBelongsToVtp(reg.user_id, req.user);
     if (authError) return res.status(authError.status).json(authError.body);
 
@@ -445,6 +437,12 @@ const actionRegularizationByVtp = async (req, res) => {
       status, reviewerId: req.user.id, remarks,
     });
     if (updated.regularization_approved === true) await upsertRegularizedAttendance(reg, req.user.id);
+    else if (reg.regularization_approved === true) {
+      await pool.query(`DELETE FROM attendance_records
+        WHERE user_id = $1 AND date = $2
+          AND remarks = 'VT Status Regularized by Headmaster & VTP'`,
+      [reg.user_id, reg.date]);
+    }
     const message = updated.regularization_approved
       ? 'Regularization request fully approved (Headmaster + VTP). Attendance updated.'
       : status === 'rejected'

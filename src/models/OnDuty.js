@@ -182,7 +182,7 @@ class OnDuty {
         hm_action_at    = NOW(),
         hm_remarks      = $3,
         status = CASE
-          WHEN $1::varchar = 'rejected'                            THEN 'rejected'
+          WHEN $1::varchar = 'rejected' OR vtp_status = 'rejected' THEN 'rejected'
           WHEN $1::varchar = 'approved' AND vtp_status = 'approved' THEN 'approved'
           ELSE 'pending'
         END,
@@ -193,7 +193,7 @@ class OnDuty {
         hm_approval_type = $4::VARCHAR,
         is_auto_approved = is_auto_approved OR $4::VARCHAR = 'auto',
         updated_at = NOW()
-      WHERE id = $5 AND hm_status = 'pending' AND status <> 'rejected'
+      WHERE id = $5
       RETURNING *
     `, [status, reviewerId, remarks || null, approvalType, id]);
     return result.rows[0] || null;
@@ -213,7 +213,7 @@ class OnDuty {
         vtp_action_at   = NOW(),
         vtp_remarks     = $3,
         status = CASE
-          WHEN $1::varchar = 'rejected'                            THEN 'rejected'
+          WHEN $1::varchar = 'rejected' OR hm_status = 'rejected' THEN 'rejected'
           WHEN $1::varchar = 'approved' AND hm_status = 'approved' THEN 'approved'
           ELSE 'pending'
         END,
@@ -224,7 +224,7 @@ class OnDuty {
         vtp_approval_type = $4::VARCHAR,
         is_auto_approved = is_auto_approved OR $4::VARCHAR = 'auto',
         updated_at = NOW()
-      WHERE id = $5 AND vtp_status = 'pending' AND status <> 'rejected'
+      WHERE id = $5
       RETURNING *
     `, [status, reviewerId, remarks || null, approvalType, id]);
     return result.rows[0] || null;

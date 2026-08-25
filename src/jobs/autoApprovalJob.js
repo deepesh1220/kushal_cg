@@ -127,11 +127,11 @@ const dueRows = async (table, where, deadlineExpression = 'created_at', metricNa
 
 const processLeaves = async () => {
   let count = 0;
-  const hmRows = await dueRows('leave_requests', "status = 'pending' AND vtp_status <> 'rejected'", 'created_at', 'leave');
+  const hmRows = await dueRows('leave_requests', "status = 'pending'", 'created_at', 'leave');
   count += await processRows('leave', 'hm', hmRows,
     row => Leave.updatePrincipalStatus(row.id, { status: 'approved', reviewerId: null, remarks: autoRemarks(), approvalType: 'auto' }),
     deductLeaveOnce);
-  const vtpRows = await dueRows('leave_requests', "vtp_status = 'pending' AND status <> 'rejected'", 'created_at', 'leave');
+  const vtpRows = await dueRows('leave_requests', "vtp_status = 'pending'", 'created_at', 'leave');
   count += await processRows('leave', 'vtp', vtpRows,
     row => Leave.updateVtpStatus(row.id, { status: 'approved', reviewerId: null, remarks: autoRemarks(), approvalType: 'auto' }),
     deductLeaveOnce);
@@ -140,11 +140,11 @@ const processLeaves = async () => {
 
 const processOnDuty = async () => {
   let count = 0;
-  const hmRows = await dueRows('od_requests', "hm_status = 'pending' AND status <> 'rejected'", 'created_at', 'on_duty');
+  const hmRows = await dueRows('od_requests', "hm_status = 'pending'", 'created_at', 'on_duty');
   count += await processRows('on_duty', 'hm', hmRows,
     row => OnDuty.updateHmStatus(row.id, { status: 'approved', reviewerId: null, remarks: autoRemarks(), approvalType: 'auto' }),
     upsertOdAttendance);
-  const vtpRows = await dueRows('od_requests', "vtp_status = 'pending' AND status <> 'rejected'", 'created_at', 'on_duty');
+  const vtpRows = await dueRows('od_requests', "vtp_status = 'pending'", 'created_at', 'on_duty');
   count += await processRows('on_duty', 'vtp', vtpRows,
     row => OnDuty.updateVtpStatus(row.id, { status: 'approved', reviewerId: null, remarks: autoRemarks(), approvalType: 'auto' }),
     upsertOdAttendance);
@@ -153,11 +153,11 @@ const processOnDuty = async () => {
 
 const processRegularizations = async () => {
   let count = 0;
-  const hmRows = await dueRows('regularization_requests', "hm_status = 'pending' AND status <> 'rejected'", 'created_at', 'regularization');
+  const hmRows = await dueRows('regularization_requests', "hm_status = 'pending'", 'created_at', 'regularization');
   count += await processRows('regularization', 'hm', hmRows,
     row => Regularization.updateHmStatus(row.id, { status: 'approved', reviewerId: null, remarks: autoRemarks(), approvalType: 'auto' }),
     upsertRegularizationAttendance);
-  const vtpRows = await dueRows('regularization_requests', "vtp_status = 'pending' AND status <> 'rejected'", 'created_at', 'regularization');
+  const vtpRows = await dueRows('regularization_requests', "vtp_status = 'pending'", 'created_at', 'regularization');
   count += await processRows('regularization', 'vtp', vtpRows,
     row => Regularization.updateVtpStatus(row.id, { status: 'approved', reviewerId: null, remarks: autoRemarks(), approvalType: 'auto' }),
     upsertRegularizationAttendance);

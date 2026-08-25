@@ -390,13 +390,12 @@ const approveWithDeduction = async (req, res) => {
       }
     }
 
-    if (leaveWithBalance.status !== 'pending') {
-      return res.status(400).json({ status: false, message: `Leave is already ${leaveWithBalance.status}` });
-    }
-
     // If rejecting, just update status without deduction
     if (status === 'rejected') {
       const result = await Leave.updateStatus(leaveRequestId, { status, reviewerId, remarks });
+      if (leaveWithBalance.leave_approved && !result.leave_approved) {
+        await LeaveBalance.refundLeave(leaveRequestId, leaveWithBalance.user_id);
+      }
       return res.status(200).json({
         status: true,
         message: 'Leave rejected successfully',

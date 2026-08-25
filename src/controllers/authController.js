@@ -816,7 +816,7 @@ const getMe = async (req, res) => {
       `, [userId, processedDate]);
 
       if (leaveRes.rows.length > 0) {
-        attendanceData.status = 'leave';
+        attendanceData.status = 'on_leave';
       } else {
         // Check for OnDuty
         const odRes = await pool.query(`

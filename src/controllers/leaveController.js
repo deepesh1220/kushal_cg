@@ -225,10 +225,6 @@ const approveRejectLeave = async (req, res) => {
       return res.status(404).json({ status: false, message: 'Leave request not found.' });
     }
  
-    if (leave.status !== 'pending') {
-      return res.status(400).json({ status: false, message: `Leave is already ${leave.status}` });
-    }
-
     // Validate Headmaster authorization for this VT
     const authError = await _validateVtBelongsToHeadmaster(leave.user_id, reviewer);
     if (authError) {
@@ -237,6 +233,11 @@ const approveRejectLeave = async (req, res) => {
 
     // Update leave status first (primary action — never blocks on balance issues)
     const updated = await Leave.updateStatus(leaveId, { status, reviewerId: reviewer.id, remarks });
+
+    if (leave.leave_approved && !updated.leave_approved) {
+      const LeaveBalance = require('../models/LeaveBalance');
+      await LeaveBalance.refundLeave(leaveId, leave.user_id);
+    }
 
     // On final approval, attempt EL deduction (non-blocking — logs failure but doesn't fail approval)
     let deductionInfo = null;

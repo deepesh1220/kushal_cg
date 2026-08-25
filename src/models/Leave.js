@@ -561,7 +561,7 @@ class Leave {
           leave_approved = CASE WHEN $3 = 'approved' AND vtp_status = 'approved' THEN TRUE ELSE FALSE END,
           principal_approval_type = $5::VARCHAR,
           is_auto_approved = is_auto_approved OR $5::VARCHAR = 'auto'
-        WHERE id = $6 AND status = 'pending'
+        WHERE id = $6
         RETURNING *
       ), cleared_leave_attendance AS (
         DELETE FROM attendance_records ar USING updated_leave l
@@ -585,7 +585,7 @@ class Leave {
           leave_approved = CASE WHEN status = 'approved' AND $2 = 'approved' THEN TRUE ELSE FALSE END,
           vtp_approval_type = $4::VARCHAR,
           is_auto_approved = is_auto_approved OR $4::VARCHAR = 'auto'
-        WHERE id = $5 AND vtp_status = 'pending' AND status <> 'rejected'
+        WHERE id = $5
         RETURNING *
       ), cleared_leave_attendance AS (
         DELETE FROM attendance_records ar USING updated_leave l
@@ -819,11 +819,6 @@ const excessLeave = excessResult.rows.length > 0
       }
 
       const leave = leaveResult.rows[0];
-
-      if (leave.status !== 'pending') {
-        await client.query('ROLLBACK');
-        return { success: false, message: `Leave is already ${leave.status}` };
-      }
 
       // Lazy-credit annual EL if not yet credited this FY
       await LeaveBalance.ensureAnnualCredit(leave.user_id);
