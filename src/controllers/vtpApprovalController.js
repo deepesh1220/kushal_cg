@@ -83,6 +83,90 @@ const getVtStaffById = async (req, res) => {
   }
 };
 
+const getVtpListPagination = (query) => {
+  const page = Math.max(1, Number.parseInt(query.page, 10) || 1);
+  const limit = Math.min(100, Math.max(1, Number.parseInt(query.limit, 10) || 10));
+  return { page, limit, offset: (page - 1) * limit };
+};
+
+const getVtpSchoolOptions = async (req, res) => {
+  try {
+    if (!req.user.vtp_id) return res.status(400).json({ status: false, message: 'Your account is not linked to a VTP ID.' });
+    const { type, district_cd, block_cd } = req.query;
+    const vtpId = String(req.user.vtp_id);
+    let result;
+    if (type === 'districts') {
+      result = await pool.query(`SELECT DISTINCT s.district_cd, s.district_name FROM vt_staff_details v JOIN mst_schools s ON s.udise_sch_code=v.udise_code WHERE TRIM(v.vtp_id)=TRIM($1::text) ORDER BY s.district_name`, [vtpId]);
+    } else if (type === 'blocks') {
+      if (!district_cd) return res.status(400).json({ status: false, message: 'district_cd is required.' });
+      result = await pool.query(`SELECT DISTINCT s.block_cd, s.block_name FROM vt_staff_details v JOIN mst_schools s ON s.udise_sch_code=v.udise_code WHERE TRIM(v.vtp_id)=TRIM($1::text) AND s.district_cd=$2 ORDER BY s.block_name`, [vtpId, district_cd]);
+    } else if (type === 'clusters') {
+      if (!district_cd || !block_cd) return res.status(400).json({ status: false, message: 'district_cd and block_cd are required.' });
+      result = await pool.query(`SELECT DISTINCT s.cluster_cd, s.cluster_name FROM vt_staff_details v JOIN mst_schools s ON s.udise_sch_code=v.udise_code WHERE TRIM(v.vtp_id)=TRIM($1::text) AND s.district_cd=$2 AND s.block_cd=$3 ORDER BY s.cluster_name`, [vtpId, district_cd, block_cd]);
+    } else if (type === 'trades') {
+      result = await pool.query(`SELECT MIN(TRIM(trade)) AS trade FROM vt_staff_details WHERE TRIM(vtp_id)=TRIM($1::text) AND NULLIF(TRIM(trade),'') IS NOT NULL GROUP BY LOWER(TRIM(trade)) ORDER BY LOWER(MIN(TRIM(trade)))`, [vtpId]);
+    } else return res.status(400).json({ status: false, message: 'Invalid option type.' });
+    return res.json({ status: true, data: result.rows });
+  } catch (error) {
+    console.error('getVtpSchoolOptions error:', error.message);
+    return res.status(500).json({ status: false, message: 'Unable to load school filters.' });
+  }
+};
+
+const getVtpSchools = async (req, res) => {
+  try {
+    if (!req.user.vtp_id) return res.status(400).json({ status: false, message: 'Your account is not linked to a VTP ID.' });
+    const { page, limit, offset } = getVtpListPagination(req.query);
+    const params = [String(req.user.vtp_id)];
+    const conditions = ['TRIM(v.vtp_id)=TRIM($1::text)', 'v.udise_code IS NOT NULL'];
+    const search = String(req.query.search || '').trim().slice(0, 200);
+    if (search) { params.push(`%${search}%`); conditions.push(`(v.school_name ILIKE $${params.length} OR CAST(v.udise_code AS text) ILIKE $${params.length})`); }
+    for (const [queryKey, column] of [['district_cd', 's.district_cd'], ['block_cd', 's.block_cd'], ['cluster_cd', 's.cluster_cd']]) {
+      if (req.query[queryKey]) { params.push(req.query[queryKey]); conditions.push(`${column}=$${params.length}`); }
+    }
+    if (req.query.trade) { params.push(String(req.query.trade).trim().toLowerCase()); conditions.push(`LOWER(TRIM(v.trade))=$${params.length}`); }
+    const where = `WHERE ${conditions.join(' AND ')}`;
+    const countResult = await pool.query(`SELECT COUNT(DISTINCT v.udise_code)::int AS total FROM vt_staff_details v LEFT JOIN mst_schools s ON s.udise_sch_code=v.udise_code ${where}`, params);
+    const total = Number(countResult.rows[0]?.total || 0);
+    const dataParams = [...params, limit, offset];
+    const result = await pool.query(`
+      SELECT v.udise_code, MIN(v.school_name) AS school_name,
+             MIN(s.district_name) AS district_name, MIN(s.block_name) AS block_name, MIN(s.cluster_name) AS cluster_name,
+             COUNT(*)::int AS total_vts,
+             COUNT(DISTINCT LOWER(TRIM(v.trade))) FILTER (WHERE NULLIF(TRIM(v.trade),'') IS NOT NULL)::int AS total_trades,
+             STRING_AGG(DISTINCT TRIM(v.trade), ', ' ORDER BY TRIM(v.trade)) FILTER (WHERE NULLIF(TRIM(v.trade),'') IS NOT NULL) AS trade_names
+      FROM vt_staff_details v LEFT JOIN mst_schools s ON s.udise_sch_code=v.udise_code
+      ${where} GROUP BY v.udise_code
+      ORDER BY LOWER(MIN(v.school_name)), v.udise_code
+      LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}
+    `, dataParams);
+    return res.json({ status: true, data: result.rows, pagination: { currentPage: page, pageSize: limit, totalItems: total, totalPages: Math.max(1, Math.ceil(total / limit)) } });
+  } catch (error) {
+    console.error('getVtpSchools error:', error.message);
+    return res.status(500).json({ status: false, message: 'Unable to load VTP schools.' });
+  }
+};
+
+const getVtpTrades = async (req, res) => {
+  try {
+    if (!req.user.vtp_id) return res.status(400).json({ status: false, message: 'Your account is not linked to a VTP ID.' });
+    const { page, limit, offset } = getVtpListPagination(req.query);
+    const search = String(req.query.search || '').trim().slice(0, 200);
+    const params = [String(req.user.vtp_id)];
+    let searchClause = '';
+    if (search) { params.push(`%${search}%`); searchClause = `AND trade_name ILIKE $2`; }
+    const cte = `WITH trades AS (SELECT MIN(TRIM(trade)) AS trade_name, COUNT(*)::int AS total_vts, COUNT(DISTINCT udise_code)::int AS total_schools FROM vt_staff_details WHERE TRIM(vtp_id)=TRIM($1::text) AND NULLIF(TRIM(trade),'') IS NOT NULL GROUP BY LOWER(TRIM(trade)))`;
+    const countResult = await pool.query(`${cte} SELECT COUNT(*)::int AS total FROM trades WHERE 1=1 ${searchClause}`, params);
+    const total = Number(countResult.rows[0]?.total || 0);
+    const dataParams = [...params, limit, offset];
+    const result = await pool.query(`${cte} SELECT trade_name, total_vts, total_schools FROM trades WHERE 1=1 ${searchClause} ORDER BY LOWER(trade_name) LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`, dataParams);
+    return res.json({ status: true, data: result.rows, pagination: { currentPage: page, pageSize: limit, totalItems: total, totalPages: Math.max(1, Math.ceil(total / limit)) } });
+  } catch (error) {
+    console.error('getVtpTrades error:', error.message);
+    return res.status(500).json({ status: false, message: 'Unable to load VTP trades.' });
+  }
+};
+
 // GET /api/vtp/vt-staff - all VT master records belonging to logged-in VTP
 const getVtpStaffList = async (req, res) => {
   try {
@@ -770,6 +854,9 @@ module.exports = {
   getVtStaffOptions,
   getVtpStaffList,
   getVtpDashboardCounts,
+  getVtpSchools,
+  getVtpSchoolOptions,
+  getVtpTrades,
   getVtStaffById,
   createVtStaff,
   updateVtStaff,
@@ -781,6 +868,6 @@ module.exports = {
   rejectLeaveByVtp,
   approveLeaveCancellationByVtp,
   getVtMobileUpdateRequests,
-  updateVtMobileRequestStatus
+  updateVtMobileRequestStatus,
 };
 
