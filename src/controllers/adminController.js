@@ -1,4 +1,5 @@
 const { pool } = require('../config/db');
+const { parseCoordinates } = require('../utils/locationUtils');
 
 // GET /api/admin/dashboard-counts
 const getDashboardCounts = async (req, res) => {
@@ -495,6 +496,104 @@ const getSchools = async (req, res) => {
   }
 };
 
+// GET /api/admin/schools/:udiseCode/location
+const getSchoolLocationByUdise = async (req, res) => {
+  try {
+    const udiseCode = String(req.params.udiseCode || '').trim();
+
+    if (!/^\d+$/.test(udiseCode)) {
+      return res.status(400).json({
+        status: false,
+        message: 'A valid UDISE code is required.',
+      });
+    }
+
+    const result = await pool.query(`
+      SELECT udise_sch_code, school_name, latitude, longitude
+      FROM mst_schools
+      WHERE CAST(udise_sch_code AS TEXT) = $1
+      LIMIT 1
+    `, [udiseCode]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        status: false,
+        message: 'School not found for the provided UDISE code.',
+      });
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: 'School location fetched successfully.',
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error('getSchoolLocationByUdise error:', error.message);
+    return res.status(500).json({
+      status: false,
+      message: 'Server error fetching school location.',
+    });
+  }
+};
+
+// PATCH /api/admin/schools/:udiseCode/location
+const updateSchoolLocationByUdise = async (req, res) => {
+  try {
+    const udiseCode = String(req.params.udiseCode || '').trim();
+    const { latitude, longitude } = req.body || {};
+
+    if (!/^\d+$/.test(udiseCode)) {
+      return res.status(400).json({
+        status: false,
+        message: 'A valid UDISE code is required.',
+      });
+    }
+
+    if (latitude === undefined || latitude === null
+      || longitude === undefined || longitude === null) {
+      return res.status(400).json({
+        status: false,
+        message: 'Latitude and longitude are required.',
+      });
+    }
+
+    const coordinates = parseCoordinates(latitude, longitude);
+    if (!coordinates) {
+      return res.status(400).json({
+        status: false,
+        message: 'Latitude must be between -90 and 90, and longitude must be between -180 and 180.',
+      });
+    }
+
+    const result = await pool.query(`
+      UPDATE mst_schools
+      SET latitude = $1,
+          longitude = $2
+      WHERE CAST(udise_sch_code AS TEXT) = $3
+      RETURNING udise_sch_code, school_name, latitude, longitude
+    `, [coordinates.latitude, coordinates.longitude, udiseCode]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        status: false,
+        message: 'School not found for the provided UDISE code.',
+      });
+    }
+
+    return res.status(200).json({
+      status: true,
+      message: 'School location updated successfully.',
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error('updateSchoolLocationByUdise error:', error.message);
+    return res.status(500).json({
+      status: false,
+      message: 'Server error updating school location.',
+    });
+  }
+};
+
 // GET /api/admin/vtp
 const getVtpList = async (req, res) => {
   try {
@@ -898,6 +997,8 @@ module.exports = {
   getTrades,
   getAttendanceTracking,
   getSchools,
+  getSchoolLocationByUdise,
+  updateSchoolLocationByUdise,
   getVtpList,
   getVtpOptions,
   createVtp,

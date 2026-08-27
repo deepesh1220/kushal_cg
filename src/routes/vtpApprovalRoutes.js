@@ -5,6 +5,9 @@ const {
   getVtStaffOptions,
   getVtpStaffList,
   getVtpDashboardCounts,
+  getVtpSchools,
+  getVtpSchoolOptions,
+  getVtpTrades,
   getVtStaffById,
   createVtStaff,
   updateVtStaff,
@@ -16,7 +19,7 @@ const {
   rejectLeaveByVtp,
   approveLeaveCancellationByVtp,
   getVtMobileUpdateRequests,
-  updateVtMobileRequestStatus
+  updateVtMobileRequestStatus,
 } = require('../controllers/vtpApprovalController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
 
@@ -25,6 +28,9 @@ router.use(authenticate);
 // VTP & admin — view VTs scoped to their organization (?status=all|pending|accepted|rejected)
 router.get('/vts', authorize('vt:approve_vtp'), getVtpScopedVts);
 router.get('/dashboard/counts', authorize('vt:approve_vtp'), getVtpDashboardCounts);
+router.get('/schools/options', authorize('vt:approve_vtp'), getVtpSchoolOptions);
+router.get('/schools', authorize('vt:approve_vtp'), getVtpSchools);
+router.get('/trades', authorize('vt:approve_vtp'), getVtpTrades);
 
 // VTP-scoped VT master CRUD and cascading form options
 router.get('/vt-staff/options', authorize('vt:approve_vtp'), getVtStaffOptions);
