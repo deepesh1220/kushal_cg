@@ -1,6 +1,86 @@
 const { pool } = require('../config/db');
 const { parseCoordinates } = require('../utils/locationUtils');
 
+const parseAttendanceLocationFilters = (query = {}) => {
+  const rawDistrictCd = String(query.district_cd || '').trim();
+  const rawBlockCd = String(query.block_cd || '').trim();
+  const districtCd = rawDistrictCd ? Number(rawDistrictCd) : null;
+  const blockCd = rawBlockCd ? Number(rawBlockCd) : null;
+
+  if (rawDistrictCd && (!Number.isInteger(districtCd) || districtCd < 1)) {
+    return { error: 'A valid district_cd is required.' };
+  }
+  if (rawBlockCd && (!Number.isInteger(blockCd) || blockCd < 1)) {
+    return { error: 'A valid block_cd is required.' };
+  }
+  if (blockCd && !districtCd) {
+    return { error: 'district_cd is required when block_cd is provided.' };
+  }
+  return { districtCd, blockCd };
+};
+
+const validateAttendanceLocation = async (districtCd, blockCd) => {
+  if (!districtCd) return null;
+  const locationResult = await pool.query(`
+    SELECT d.district_name, b.block_name
+    FROM mst_district d
+    LEFT JOIN mst_block b
+      ON b.district_cd = d.district_cd
+     AND b.block_cd = $2
+    WHERE d.district_cd = $1
+    LIMIT 1
+  `, [districtCd, blockCd]);
+  if (!locationResult.rowCount) return 'Selected district was not found.';
+  if (blockCd && !locationResult.rows[0].block_name) {
+    return 'Selected block does not belong to the selected district.';
+  }
+  return null;
+};
+
+const buildAttendanceStatusCte = (districtCd, blockCd) => {
+  const params = [];
+  const filters = [];
+  if (districtCd) {
+    params.push(districtCd);
+    filters.push(`s.district_cd = $${params.length}`);
+  }
+  if (blockCd) {
+    params.push(blockCd);
+    filters.push(`s.block_cd = $${params.length}`);
+  }
+  const filterClause = filters.length ? `AND ${filters.join(' AND ')}` : '';
+  const cte = `
+    WITH eligible_vts AS (
+      SELECT DISTINCT ON (u.id)
+        u.id AS user_id,
+        u.name,
+        u.email,
+        s.udise_sch_code,
+        s.school_name,
+        s.district_cd,
+        s.district_name,
+        s.block_cd,
+        s.block_name
+      FROM users u
+      JOIN roles r ON r.id = u.role_id AND r.name = 'vocational_teacher'
+      LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
+      JOIN mst_schools s
+        ON CAST(s.udise_sch_code AS TEXT) = CAST(COALESCE(v.udise_code, u.udise_code) AS TEXT)
+      WHERE u.is_active = TRUE
+        AND s.vtp = 1
+        ${filterClause}
+      ORDER BY u.id
+    ), daily_status AS (
+      SELECT ev.*, COALESCE(ar.status, 'absent') AS attendance_status
+      FROM eligible_vts ev
+      LEFT JOIN attendance_records ar
+        ON ar.user_id = ev.user_id
+       AND ar.date = CURRENT_DATE
+    )
+  `;
+  return { params, cte };
+};
+
 // GET /api/admin/dashboard-counts
 const getDashboardCounts = async (req, res) => {
   try {
@@ -40,80 +120,12 @@ const getDashboardCounts = async (req, res) => {
 // GET /api/admin/attendance-status
 const getAttendanceStatus = async (req, res) => {
   try {
-    const rawDistrictCd = String(req.query.district_cd || '').trim();
-    const rawBlockCd = String(req.query.block_cd || '').trim();
-    const districtCd = rawDistrictCd ? Number(rawDistrictCd) : null;
-    const blockCd = rawBlockCd ? Number(rawBlockCd) : null;
-
-    if (rawDistrictCd && (!Number.isInteger(districtCd) || districtCd < 1)) {
-      return res.status(400).json({ status: false, message: 'A valid district_cd is required.' });
-    }
-    if (rawBlockCd && (!Number.isInteger(blockCd) || blockCd < 1)) {
-      return res.status(400).json({ status: false, message: 'A valid block_cd is required.' });
-    }
-    if (blockCd && !districtCd) {
-      return res.status(400).json({ status: false, message: 'district_cd is required when block_cd is provided.' });
-    }
-
-    if (districtCd) {
-      const locationResult = await pool.query(`
-        SELECT d.district_name, b.block_name
-        FROM mst_district d
-        LEFT JOIN mst_block b
-          ON b.district_cd = d.district_cd
-         AND b.block_cd = $2
-        WHERE d.district_cd = $1
-        LIMIT 1
-      `, [districtCd, blockCd]);
-
-      if (!locationResult.rowCount) {
-        return res.status(400).json({ status: false, message: 'Selected district was not found.' });
-      }
-      if (blockCd && !locationResult.rows[0].block_name) {
-        return res.status(400).json({ status: false, message: 'Selected block does not belong to the selected district.' });
-      }
-    }
-
-    const params = [];
-    const filters = [];
-    if (districtCd) {
-      params.push(districtCd);
-      filters.push(`s.district_cd = $${params.length}`);
-    }
-    if (blockCd) {
-      params.push(blockCd);
-      filters.push(`s.block_cd = $${params.length}`);
-    }
-    const filterClause = filters.length ? `AND ${filters.join(' AND ')}` : '';
-    const eligibleVtsCte = `
-      WITH eligible_vts AS (
-        SELECT DISTINCT ON (u.id)
-          u.id AS user_id,
-          s.udise_sch_code,
-          s.school_name,
-          s.district_cd,
-          s.district_name,
-          s.block_cd,
-          s.block_name
-        FROM users u
-        JOIN roles r ON r.id = u.role_id AND r.name = 'vocational_teacher'
-        LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
-        JOIN mst_schools s
-          ON CAST(s.udise_sch_code AS TEXT) = CAST(COALESCE(v.udise_code, u.udise_code) AS TEXT)
-        WHERE u.is_active = TRUE
-          AND s.vtp = 1
-          ${filterClause}
-        ORDER BY u.id
-      ), daily_status AS (
-        SELECT
-          ev.*,
-          COALESCE(ar.status, 'absent') AS attendance_status
-        FROM eligible_vts ev
-        LEFT JOIN attendance_records ar
-          ON ar.user_id = ev.user_id
-         AND ar.date = CURRENT_DATE
-      )
-    `;
+    const parsedLocation = parseAttendanceLocationFilters(req.query);
+    if (parsedLocation.error) return res.status(400).json({ status: false, message: parsedLocation.error });
+    const { districtCd, blockCd } = parsedLocation;
+    const locationError = await validateAttendanceLocation(districtCd, blockCd);
+    if (locationError) return res.status(400).json({ status: false, message: locationError });
+    const { params, cte: eligibleVtsCte } = buildAttendanceStatusCte(districtCd, blockCd);
 
     let groupCode;
     let groupName;
@@ -186,6 +198,61 @@ const getAttendanceStatus = async (req, res) => {
   } catch (error) {
     console.error('getAttendanceStatus error:', error.message);
     return res.status(500).json({ status: false, message: 'Server error fetching attendance status.' });
+  }
+};
+
+// GET /api/admin/attendance-status/vts
+const getAttendanceStatusVts = async (req, res) => {
+  try {
+    const requestedStatus = String(req.query.status || '').trim().toLowerCase();
+    const statusConditions = {
+      present: `attendance_status IN ('present', 'late', 'half_day')`,
+      absent: `attendance_status NOT IN ('present', 'late', 'half_day', 'on_leave', 'od')`,
+      on_leave: `attendance_status = 'on_leave'`,
+      on_duty: `attendance_status = 'od'`,
+    };
+    if (!statusConditions[requestedStatus]) {
+      return res.status(400).json({ status: false, message: 'status must be present, absent, on_leave, or on_duty.' });
+    }
+
+    const parsedLocation = parseAttendanceLocationFilters(req.query);
+    if (parsedLocation.error) return res.status(400).json({ status: false, message: parsedLocation.error });
+    const { districtCd, blockCd } = parsedLocation;
+    const locationError = await validateAttendanceLocation(districtCd, blockCd);
+    if (locationError) return res.status(400).json({ status: false, message: locationError });
+
+    const { page, limit, offset } = getPaginationParams(req.query);
+    const { params, cte } = buildAttendanceStatusCte(districtCd, blockCd);
+    const condition = statusConditions[requestedStatus];
+    const countResult = await pool.query(`${cte} SELECT COUNT(*)::int AS total FROM daily_status WHERE ${condition}`, params);
+    const total = Number(countResult.rows[0]?.total || 0);
+    const dataParams = [...params, limit, offset];
+    const rowsResult = await pool.query(`
+      ${cte}
+      SELECT user_id, district_name, block_name, udise_sch_code, school_name, name, email
+      FROM daily_status
+      WHERE ${condition}
+      ORDER BY district_name, block_name, school_name, name, user_id
+      LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}
+    `, dataParams);
+    const dateResult = await pool.query(`SELECT TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD') AS as_of_date`);
+
+    return res.status(200).json({
+      status: true,
+      message: `${requestedStatus.replace('_', ' ')} VTs fetched successfully.`,
+      data: {
+        as_of_date: dateResult.rows[0].as_of_date,
+        status: requestedStatus,
+        total,
+        page,
+        limit,
+        total_pages: Math.max(1, Math.ceil(total / limit)),
+        rows: rowsResult.rows,
+      },
+    });
+  } catch (error) {
+    console.error('getAttendanceStatusVts error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error fetching attendance status VT list.' });
   }
 };
 
@@ -1147,6 +1214,7 @@ const getDeoList = async (req, res) => {
 module.exports = {
   getDashboardCounts,
   getAttendanceStatus,
+  getAttendanceStatusVts,
   getTrades,
   getAttendanceTracking,
   getSchools,

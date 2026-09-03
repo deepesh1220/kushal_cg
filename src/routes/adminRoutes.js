@@ -9,6 +9,7 @@ router.use(authenticate);
 // ── Admin routes go here ───────────────────────────────────────────────────────
 router.get('/dashboard-counts', authorize('users:view'), adminController.getDashboardCounts);
 router.get('/attendance-status', authorize('users:view'), adminController.getAttendanceStatus);
+router.get('/attendance-status/vts', authorize('users:view'), adminController.getAttendanceStatusVts);
 router.get('/trades', authorize('users:view'), adminController.getTrades);
 router.get('/get-count', authorize('users:view'), adminController.getCount);
 router.get('/attendance-tracking', authorize('users:view'), adminController.getAttendanceTracking);

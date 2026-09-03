@@ -22,8 +22,12 @@ const {
   updateVtMobileRequestStatus,
 } = require('../controllers/vtpApprovalController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
+const vtpAttendance = require('../controllers/attendanceStatusController').createAttendanceStatusHandlers('vtp');
 
 router.use(authenticate);
+router.get('/attendance-status', authorize('vt:approve_vtp'), vtpAttendance.getStatus);
+router.get('/attendance-status/vts', authorize('vt:approve_vtp'), vtpAttendance.getVts);
+router.get('/attendance-status/options', authorize('vt:approve_vtp'), vtpAttendance.getOptions);
 
 // VTP & admin — view VTs scoped to their organization (?status=all|pending|accepted|rejected)
 router.get('/vts', authorize('vt:approve_vtp'), getVtpScopedVts);
