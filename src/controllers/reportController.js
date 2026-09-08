@@ -144,11 +144,49 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
   const fyStartYear = month >= 4 ? year : year - 1;
   const fyLabel = `April ${fyStartYear} to March ${fyStartYear + 1}`;
 
-  // Full leave balance for this calendar year
+  // Cumulative approved leave used from the start of the financial session
+  // through this report's effective end date. Approved cancellation dates do
+  // not count, and half-day leave contributes 0.5.
+  const sessionStart = `${fyStartYear}-04-01`;
+  const reportMonthEnd = dayjs(`${year}-${String(month).padStart(2, '0')}-01`).endOf('month');
+  const sessionEnd = reportMonthEnd.isAfter(dayjs(), 'day') ? dayjs().format('YYYY-MM-DD') : reportMonthEnd.format('YYYY-MM-DD');
+  const sessionLeaveRows = await pool.query(
+    `SELECT id, from_date, to_date, leave_type FROM leave_requests
+     WHERE user_id = $1 AND leave_approved = TRUE
+       AND leave_type NOT IN ('od', 'regularization')
+       AND from_date <= $2 AND to_date >= $3`,
+    [vtUserId, sessionEnd, sessionStart]
+  );
+  const sessionCancellationRows = await pool.query(
+    `SELECT leave_request_id, cancel_date FROM leave_cancellation_requests
+     WHERE user_id = $1 AND status = 'approved'
+       AND cancel_date BETWEEN $2 AND $3`,
+    [vtUserId, sessionStart, sessionEnd]
+  );
+  const sessionCancelledDates = new Set(sessionCancellationRows.rows.map(
+    (row) => `${row.leave_request_id}:${dayjs(row.cancel_date).format('YYYY-MM-DD')}`
+  ));
+  const sessionLeaveByDate = new Map();
+  sessionLeaveRows.rows.forEach((leave) => {
+    let cursor = dayjs(leave.from_date).isBefore(dayjs(sessionStart), 'day') ? dayjs(sessionStart) : dayjs(leave.from_date);
+    const rawEnd = dayjs(leave.to_date);
+    const effectiveEnd = rawEnd.isAfter(dayjs(sessionEnd), 'day') ? dayjs(sessionEnd) : rawEnd;
+    const value = ['first-half', 'second-half'].includes(leave.leave_type) ? 0.5 : 1;
+    while (!cursor.isAfter(effectiveEnd, 'day')) {
+      const date = cursor.format('YYYY-MM-DD');
+      if (!sessionCancelledDates.has(`${leave.id}:${date}`)) {
+        sessionLeaveByDate.set(date, Math.max(sessionLeaveByDate.get(date) || 0, value));
+      }
+      cursor = cursor.add(1, 'day');
+    }
+  });
+  const sessionLeavesTaken = [...sessionLeaveByDate.values()].reduce((sum, value) => sum + value, 0);
+
+  // Leave balances are keyed by the starting year of the April-March session.
   const lb = await pool.query(
     `SELECT opening_balance, total_earned, total_used, remaining_balance, carried_forward
      FROM leave_balance WHERE user_id = $1 AND year = $2 LIMIT 1`,
-    [vtUserId, year]
+    [vtUserId, fyStartYear]
   );
   const leaveBalance = lb.rows[0] || {};
 
@@ -156,7 +194,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
   const excessRow = await pool.query(
     `SELECT COALESCE(SUM(excess_leave), 0) AS total_excess
      FROM leave_excess_records WHERE user_id = $1 AND year = $2`,
-    [vtUserId, year]
+    [vtUserId, fyStartYear]
   );
   const excessLeave = parseFloat(excessRow.rows[0]?.total_excess || 0);
 
@@ -182,6 +220,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
       remainingLeave: parseFloat(leaveBalance.remaining_balance || 0),
       carriedForward: parseFloat(leaveBalance.carried_forward || 0),
       excessLeaveTaken: excessLeave,
+      sessionLeavesTaken,
     },
     month,
     year,
@@ -832,6 +871,11 @@ const approveMonthlyReport = async (req, res) => {
   try {
     const { udise_code, vtUserId, month, year, status } = req.body;
     const remarks = typeof req.body?.remarks === 'string' ? req.body.remarks.trim() : '';
+    const parsedMonth = Number(month);
+    const parsedYear = Number(year);
+    const parsedVtUserId = vtUserId === undefined || vtUserId === null || vtUserId === ''
+      ? null
+      : Number(vtUserId);
     if (remarks.length > 1000) {
       return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
     }
@@ -845,6 +889,15 @@ const approveMonthlyReport = async (req, res) => {
 
     if (!month || !year || !status) {
       return res.status(400).json({ status: false, message: 'month, year, and status are required.' });
+    }
+    if (!Number.isInteger(parsedMonth) || parsedMonth < 1 || parsedMonth > 12) {
+      return res.status(400).json({ status: false, message: 'month must be an integer between 1 and 12.' });
+    }
+    if (!Number.isInteger(parsedYear) || parsedYear < 2000 || parsedYear > 2100) {
+      return res.status(400).json({ status: false, message: 'year must be an integer between 2000 and 2100.' });
+    }
+    if (parsedVtUserId !== null && (!Number.isInteger(parsedVtUserId) || parsedVtUserId <= 0)) {
+      return res.status(400).json({ status: false, message: 'vtUserId must be a positive integer.' });
     }
     if (!udise_code && !vtUserId) {
       return res.status(400).json({ status: false, message: 'Either udise_code or vtUserId must be provided.' });
@@ -891,22 +944,41 @@ const approveMonthlyReport = async (req, res) => {
     let userIdsToApprove = [];
     let queryUdiseCode = udise_code;
 
-    if (vtUserId) {
-      userIdsToApprove.push(vtUserId);
-      if (!udise_code) {
-        const ur = await pool.query('SELECT udise_code FROM users WHERE id = $1', [vtUserId]);
-        if (!ur.rows.length) return res.status(404).json({ status: false, message: 'VT user not found.' });
-        queryUdiseCode = ur.rows[0].udise_code;
-      }
+    if (parsedVtUserId) {
+      const ur = await pool.query(
+        `SELECT u.id, COALESCE(v.udise_code, u.udise_code) AS udise_code
+         FROM users u
+         JOIN roles r ON r.id = u.role_id AND r.name = 'vocational_teacher'
+         LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
+         WHERE u.id = $1 AND u.is_active = TRUE`,
+        [parsedVtUserId]
+      );
+      if (!ur.rows.length) return res.status(404).json({ status: false, message: 'Active VT user not found.' });
+      userIdsToApprove.push(parsedVtUserId);
+      queryUdiseCode = ur.rows[0].udise_code;
     } else if (udise_code) {
       const ur = await pool.query(
-        `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id
-         WHERE u.udise_code = $1 AND r.name = 'vocational_teacher'`,
+        `SELECT u.id FROM users u
+         JOIN roles r ON u.role_id = r.id AND r.name = 'vocational_teacher'
+         LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
+         WHERE COALESCE(v.udise_code, u.udise_code)::text = $1::text
+           AND u.is_active = TRUE`,
         [udise_code]
       );
       userIdsToApprove = ur.rows.map(r => r.id);
       if (!userIdsToApprove.length) {
         return res.status(404).json({ status: false, message: 'No VTs found for this school.' });
+      }
+    }
+
+    // A headmaster may only update reports belonging to their own mapped school.
+    if (role_name === 'headmaster') {
+      const hmUdiseCode = String(req.user.udise_code || '').trim();
+      if (!hmUdiseCode) {
+        return res.status(400).json({ status: false, message: 'Your account is not linked to a school UDISE.' });
+      }
+      if (!queryUdiseCode || String(queryUdiseCode).trim() !== hmUdiseCode) {
+        return res.status(403).json({ status: false, message: 'You can only update reports for VTs mapped to your school.' });
       }
     }
 
@@ -921,9 +993,14 @@ const approveMonthlyReport = async (req, res) => {
         const existing = await client.query(
           `SELECT hm_approval_status, deo_approval_status, vtp_approval_status, is_locked
            FROM monthly_school_reports WHERE user_id = $1 AND report_month = $2 AND report_year = $3`,
-          [uid, month, year]
+          [uid, parsedMonth, parsedYear]
         );
         const rec = existing.rows[0];
+
+        if ((role_name === 'vocational_teacher_provider' || role_name === 'vtp')
+          && (!rec || rec.hm_approval_status !== 'approved' || rec.deo_approval_status !== 'approved')) {
+          throw Object.assign(new Error('HM and DEO approval is required before VTP can approve or reject this report.'), { statusCode: 409 });
+        }
 
         // ── Upsert report record ──────────────────────────────────────────────
         if (!rec) {
@@ -931,8 +1008,10 @@ const approveMonthlyReport = async (req, res) => {
             `INSERT INTO monthly_school_reports
                (udise_code, user_id, report_month, report_year,
                 ${statusCol}, ${remarksCol}, ${approvedByCol}, ${approvedAtCol}, ${approvalTypeCol}, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), CASE WHEN $5 = 'pending' THEN NULL ELSE 'manual' END, NOW()) RETURNING *`,
-            [queryUdiseCode, uid, month, year, status, remarks || '', req.user.id]
+             VALUES ($1, $2, $3, $4, $5::varchar, $6, $7, NOW(),
+                     CASE WHEN $5::varchar = 'pending' THEN NULL ELSE 'manual' END, NOW())
+             RETURNING *`,
+            [queryUdiseCode, uid, parsedMonth, parsedYear, status, remarks || '', req.user.id]
           );
           processedUsers.push(ins.rows[0]);
         } else {
@@ -944,16 +1023,16 @@ const approveMonthlyReport = async (req, res) => {
 
           const upd = await client.query(
             `UPDATE monthly_school_reports
-             SET ${statusCol}    = $1,
+             SET ${statusCol}    = $1::varchar,
                  ${remarksCol}   = $2,
                  ${approvedByCol}= $3,
                  ${approvedAtCol}= NOW(),
-                 ${approvalTypeCol}= CASE WHEN $1 = 'pending' THEN NULL ELSE 'manual' END,
+                 ${approvalTypeCol}= CASE WHEN $1::varchar = 'pending' THEN NULL ELSE 'manual' END,
                  is_locked       = $4,
                  updated_at      = NOW()
              WHERE user_id = $5 AND report_month = $6 AND report_year = $7
              RETURNING *`,
-            [status, remarks || '', req.user.id, nowLocked, uid, month, year]
+            [status, remarks || '', req.user.id, nowLocked, uid, parsedMonth, parsedYear]
           );
           processedUsers.push(upd.rows[0]);
         }
@@ -974,7 +1053,10 @@ const approveMonthlyReport = async (req, res) => {
     });
   } catch (error) {
     console.error('approveMonthlyReport error:', error.message);
-    return res.status(500).json({ status: false, message: 'Server error updating report approval.' });
+    return res.status(error.statusCode || 500).json({
+      status: false,
+      message: error.statusCode ? error.message : 'Server error updating report approval.',
+    });
   }
 };
 
@@ -1117,6 +1199,11 @@ const approveMonthlyReportBulk = async (req, res) => {
         );
         const rec = existing.rows[0];
 
+        if ((role_name === 'vocational_teacher_provider' || role_name === 'vtp')
+          && (!rec || rec.hm_approval_status !== 'approved' || rec.deo_approval_status !== 'approved')) {
+          throw Object.assign(new Error('HM and DEO approval is required before VTP can approve or reject this report.'), { statusCode: 409 });
+        }
+
         if (rec && rec[statusCol] === status) {
           processedUsers.push({ user_id: uid, skipped: true, reason: `Already ${status}.` });
           continue;
@@ -1127,7 +1214,9 @@ const approveMonthlyReportBulk = async (req, res) => {
             `INSERT INTO monthly_school_reports
               (udise_code, user_id, report_month, report_year,
                ${statusCol}, ${remarksCol}, ${approvedByCol}, ${approvedAtCol}, ${approvalTypeCol}, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), CASE WHEN $5 = 'pending' THEN NULL ELSE 'manual' END, NOW()) RETURNING *`,
+             VALUES ($1, $2, $3, $4, $5::varchar, $6, $7, NOW(),
+                     CASE WHEN $5::varchar = 'pending' THEN NULL ELSE 'manual' END, NOW())
+             RETURNING *`,
             [udiseCode, uid, monthInt, yearInt, status, remarks || '', req.user.id]
           );
           processedUsers.push(ins.rows[0]);
@@ -1139,11 +1228,11 @@ const approveMonthlyReportBulk = async (req, res) => {
 
           const upd = await client.query(
             `UPDATE monthly_school_reports
-             SET ${statusCol} = $1,
+             SET ${statusCol} = $1::varchar,
                  ${remarksCol} = $2,
                  ${approvedByCol} = $3,
                  ${approvedAtCol} = NOW(),
-                 ${approvalTypeCol} = CASE WHEN $1 = 'pending' THEN NULL ELSE 'manual' END,
+                 ${approvalTypeCol} = CASE WHEN $1::varchar = 'pending' THEN NULL ELSE 'manual' END,
                  is_locked = $4,
                  updated_at = NOW()
              WHERE user_id = $5 AND report_month = $6 AND report_year = $7
@@ -1169,7 +1258,10 @@ const approveMonthlyReportBulk = async (req, res) => {
     });
   } catch (error) {
     console.error('approveMonthlyReportBulk error:', error.message);
-    return res.status(500).json({ status: false, message: 'Server error updating bulk report approval.' });
+    return res.status(error.statusCode || 500).json({
+      status: false,
+      message: error.statusCode ? error.message : 'Server error updating bulk report approval.',
+    });
   }
 };
 

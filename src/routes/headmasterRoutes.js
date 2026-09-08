@@ -17,8 +17,11 @@ const {
   updateVtAttendance,
 } = require('../controllers/headmasterController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
+const headmasterAttendance = require('../controllers/attendanceStatusController').createAttendanceStatusHandlers('headmaster');
 
 const router = Router();
+router.get('/attendance-status', authenticate, authorize('attendance:create_others'), headmasterAttendance.getStatus);
+router.get('/attendance-status/vts', authenticate, authorize('attendance:create_others'), headmasterAttendance.getVts);
 
 // ── District / Block lookup (defined BEFORE /:teacher_code to avoid param clash) ─
 router.get('/district/:district_id', /* authenticate, */ getByDistrict);

@@ -209,7 +209,7 @@ const rejectVt = async (req, res) => {
     return res.status(200).json({
       status: true,
       message: `Vocational Teacher "${updated.name}" registration has been rejected.`,
-      reason: reason || null,
+      reason: remarks,
       data: updated,
     });
   } catch (error) {

@@ -658,8 +658,9 @@ const sendNSQFPdf = (data, res) => {
     [`A.  Total Holidays: ${cntHoliday}`, 'P -', 'for Present'],
     [`B.  Total Sunday: ${cntSunday}`, 'A -', 'for Absent'],
     [`C.  Local Holidays: ${cntSchoolHoliday}`, 'L -', 'for Leave'],
-    [`D.  No. of Extra Leaves: ${cntLeave}`, 'H -', 'for Holidays'],
+    [`D.  No. of Leaves: ${cntLeave}`, 'H -', 'for Holidays'],
     [`E.  Total Present Days: ${cntPresent}`, 'SH -', 'for Local Holidays'],
+    [`F.  No. of Leaves (Session to Date): ${leaveDetails.sessionLeavesTaken ?? 0}`, 'SA -', 'for Absent Days'],
     ['', 'Sun-', 'for Sundays'],
   ].forEach(([label, code, desc]) => {
     fillRect(ML, y, sumLabelW, sumRowH, GRAY_LIGHT, '#C0C0C0');
