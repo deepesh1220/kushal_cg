@@ -6,11 +6,26 @@ class Leave {
   // ─── Check for overlapping leaves ───────────────────────────────────────────
   static async checkOverlap(userId, fromDate, toDate, excludeId = null) {
     let query = `
-      SELECT id FROM leave_requests
-      WHERE user_id = $1
-      AND status IN ('pending', 'approved')
-      AND from_date <= $3
-      AND to_date >= $2
+      SELECT l.id FROM leave_requests l
+      WHERE l.user_id = $1
+      AND l.status IN ('pending', 'approved', 'cancelled')
+      AND l.from_date <= $3::date
+      AND l.to_date >= $2::date
+      AND EXISTS (
+        SELECT 1
+        FROM generate_series(
+          GREATEST(l.from_date, $2::date),
+          LEAST(l.to_date, $3::date),
+          INTERVAL '1 day'
+        ) AS overlap_day
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM leave_cancellation_requests lcr
+          WHERE lcr.leave_request_id = l.id
+            AND lcr.cancel_date = overlap_day::date
+            AND lcr.status = 'approved'
+        )
+      )
     `;
     const params = [userId, fromDate, toDate];
 
@@ -23,13 +38,53 @@ class Leave {
     return result.rows.length > 0;
   }
 
+  // A same-day leave may be requested after check-in. Once both approval
+  // layers approve it, full-day leave must take precedence over the punch.
+  // This is idempotent and deliberately leaves approved cancellation dates
+  // untouched so attendance can be marked normally on those dates.
+  static async reconcileApprovedAttendance(leave, queryable = pool) {
+    if (!leave?.leave_approved) return 0;
+
+    const result = await queryable.query(`
+      UPDATE attendance_records ar
+      SET status = 'on_leave',
+          check_in_time = NULL,
+          check_out_time = NULL,
+          latitude = NULL,
+          longitude = NULL,
+          checkout_latitude = NULL,
+          checkout_longitude = NULL,
+          photo_path = NULL,
+          checkin_photo = NULL,
+          checkout_photo = NULL,
+          face_match_score = NULL,
+          checkout_face_score = NULL,
+          remarks = CASE
+            WHEN ar.remarks IS NULL OR ar.remarks = ''
+              THEN 'Attendance replaced by fully approved full-day leave'
+            ELSE ar.remarks || ' | Attendance replaced by fully approved full-day leave'
+          END,
+          updated_at = NOW()
+      WHERE ar.user_id = $1
+        AND ar.date BETWEEN $2::date AND $3::date
+        AND NOT EXISTS (
+          SELECT 1 FROM leave_cancellation_requests lcr
+          WHERE lcr.leave_request_id = $4
+            AND lcr.cancel_date = ar.date
+            AND lcr.status = 'approved'
+        )
+    `, [leave.user_id, leave.from_date, leave.to_date, leave.id]);
+
+    return result.rowCount;
+  }
+
   // ─── Create a new leave request ─────────────────────────────────────────────
-  static async create({ user_id, from_date, to_date, reason, leave_type = 'full-day' }) {
+  static async create({ user_id, from_date, to_date, reason }) {
     const result = await pool.query(`
-      INSERT INTO leave_requests (user_id, from_date, to_date, reason, leave_type, status)
-      VALUES ($1, $2, $3, $4, $5, 'pending')
+      INSERT INTO leave_requests (user_id, from_date, to_date, reason, status)
+      VALUES ($1, $2, $3, $4, 'pending')
       RETURNING *
-    `, [user_id, from_date, to_date, reason, leave_type]);
+    `, [user_id, from_date, to_date, reason]);
     return result.rows[0];
   }
 
@@ -296,6 +351,14 @@ class Leave {
       JOIN  vt_staff_details v ON v.id  = u.vt_staff_id
       LEFT JOIN users        r ON r.id  = l.reviewed_by
       LEFT JOIN leave_excess_records ler ON ler.leave_request_id = l.id
+      LEFT JOIN LATERAL (
+        SELECT id, cancel_date, reason, status, hm_status, vtp_status,
+          hm_remarks, vtp_remarks, refunded_amount, created_at
+        FROM leave_cancellation_requests
+        WHERE leave_request_id = l.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) lcr ON TRUE
       WHERE v.udise_code = $1
       ${filterClauses}
     `;
@@ -325,7 +388,16 @@ class Leave {
          r.name         AS reviewed_by_name,
          l.reviewed_at,
          ler.approved_leave_days,
-         ler.excess_leave
+         ler.excess_leave,
+         lcr.id AS cancellation_request_id,
+         lcr.cancel_date AS cancellation_date,
+         lcr.reason AS cancellation_reason,
+         lcr.status AS cancellation_status,
+         lcr.hm_status AS cancellation_hm_status,
+         lcr.vtp_status AS cancellation_vtp_status,
+         lcr.hm_remarks AS cancellation_hm_remarks,
+         lcr.vtp_remarks AS cancellation_vtp_remarks,
+         lcr.refunded_amount AS cancellation_refunded_amount
        ${baseWhere}
        ORDER BY l.created_at DESC
        LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
@@ -342,9 +414,11 @@ class Leave {
   }
   // ─── Get all leave requests for a VTP's organization ────────────────────────
   // Used by: GET /api/vtp/leaves
-  // Scoped to vtp_name so VTP only sees their organization's VTs.
-  static async getVtpLeaves(vtpName, {
-    status,
+  // Scoped to canonical VTP ID so the VTP sees the same VT leave stream as HM,
+  // with principal and VTP approval states returned independently.
+  static async getVtpLeaves(vtpId, {
+    principal_status,
+    vtp_status,
     from_date,
     to_date,
     teacher_code,
@@ -357,12 +431,16 @@ class Leave {
     const offset = (parsedPage - 1) * parsedLimit;
 
     // ── Build dynamic filter clauses (VTP-scoped) ─────────────────────────
-    const filterParams = [vtpName]; // $1 always = vtp_name
+    const filterParams = [vtpId]; // null for admin/super-admin, otherwise logged-in VTP ID
     let filterClauses = '';
 
-    if (status) {
-      filterParams.push(status.toLowerCase());
+    if (vtp_status) {
+      filterParams.push(vtp_status.toLowerCase());
       filterClauses += ` AND l.vtp_status = $${filterParams.length}`;
+    }
+    if (principal_status) {
+      filterParams.push(principal_status.toLowerCase());
+      filterClauses += ` AND l.status = $${filterParams.length}`;
     }
     if (from_date) {
       filterParams.push(from_date);
@@ -383,7 +461,18 @@ class Leave {
       JOIN  vt_staff_details v ON v.id  = u.vt_staff_id
       LEFT JOIN users        r ON r.id  = l.reviewed_by
       LEFT JOIN leave_excess_records ler ON ler.leave_request_id = l.id
-      WHERE v.vtp_name = $1
+      LEFT JOIN LATERAL (
+        SELECT id, cancel_date, reason, status, reviewer_remarks, refunded_amount,
+          hm_status, vtp_status, hm_remarks, vtp_remarks, created_at
+        FROM leave_cancellation_requests
+        WHERE leave_request_id = l.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) lcr ON TRUE
+      WHERE (
+        $1::text IS NULL
+        OR TRIM(CAST(COALESCE(u.vtp_id, v.vtp_id) AS text)) = TRIM($1::text)
+      )
       ${filterClauses}
     `;
 
@@ -410,13 +499,27 @@ class Leave {
          l.to_date,
          l.status       AS principal_status,
          l.vtp_status   AS status,
+         l.vtp_status   AS vtp_status,
+         l.principal_approval_type,
+         l.vtp_approval_type,
+         l.is_auto_approved,
          l.leave_approved,
          l.reason,
          l.created_at   AS applied_at,
          r.name         AS reviewed_by_name,
          l.reviewed_at,
          ler.approved_leave_days,
-         ler.excess_leave
+         ler.excess_leave,
+         lcr.id              AS cancellation_request_id,
+         lcr.cancel_date     AS cancellation_date,
+         lcr.reason          AS cancellation_reason,
+         lcr.status          AS cancellation_status,
+         lcr.hm_status       AS cancellation_hm_status,
+         lcr.vtp_status      AS cancellation_vtp_status,
+         lcr.hm_remarks      AS cancellation_hm_remarks,
+         lcr.vtp_remarks     AS cancellation_vtp_remarks,
+         lcr.reviewer_remarks AS cancellation_reviewer_remarks,
+         lcr.refunded_amount AS cancellation_refunded_amount
        ${baseWhere}
        ORDER BY l.created_at DESC
        LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
@@ -434,52 +537,66 @@ class Leave {
 
 
   // ─── Update leave request (before approval) ─────────────────────────────────
-  static async update(id, { from_date, to_date, reason, leave_type }) {
+  static async update(id, { from_date, to_date, reason }) {
     const result = await pool.query(`
       UPDATE leave_requests
       SET 
         from_date  = COALESCE($1, from_date),
         to_date    = COALESCE($2, to_date),
         reason     = COALESCE($3, reason),
-        leave_type = COALESCE($4, leave_type),
         updated_at = NOW()
-      WHERE id = $5 AND status = 'pending'
+      WHERE id = $4 AND status = 'pending'
       RETURNING *
-    `, [from_date, to_date, reason, leave_type, id]);
+    `, [from_date, to_date, reason, id]);
     return result.rows[0] || null;
   }
 
   // ─── Update status by Principal/HM ───────────────────────────────────────────
-  static async updatePrincipalStatus(id, { status, reviewerId, remarks = null }) {
+  static async updatePrincipalStatus(id, { status, reviewerId, remarks = null, approvalType = 'manual' }) {
     const result = await pool.query(`
-      UPDATE leave_requests
-      SET 
-        status = $1,
-        reviewed_by = $2,
-        reviewed_at = NOW(),
-        principal_remarks = $4,
-        principal_updated_at = NOW(),
-        updated_at = NOW(),
-        leave_approved = CASE WHEN $3 = 'approved' AND vtp_status = 'approved' THEN TRUE ELSE FALSE END
-      WHERE id = $5
-      RETURNING *
-    `, [status, reviewerId, status, remarks, id]);
+      WITH updated_leave AS (
+        UPDATE leave_requests
+        SET status = $1, reviewed_by = $2, reviewed_at = NOW(),
+          principal_remarks = $4, principal_updated_at = NOW(), updated_at = NOW(),
+          leave_approved = CASE WHEN $3 = 'approved' AND vtp_status = 'approved' THEN TRUE ELSE FALSE END,
+          principal_approval_type = $5::VARCHAR,
+          is_auto_approved = is_auto_approved OR $5::VARCHAR = 'auto'
+        WHERE id = $6
+        RETURNING *
+      ), cleared_leave_attendance AS (
+        DELETE FROM attendance_records ar USING updated_leave l
+        WHERE $1 = 'rejected' AND ar.user_id = l.user_id
+          AND ar.date BETWEEN l.from_date AND l.to_date
+          AND ar.status = 'on_leave'
+          AND ar.check_in_time IS NULL AND ar.check_out_time IS NULL
+        RETURNING ar.id
+      )
+      SELECT * FROM updated_leave
+    `, [status, reviewerId, status, remarks, approvalType, id]);
     return result.rows[0] || null;
   }
 
   // ─── Update status by VTP ───────────────────────────────────────────────────
-  static async updateVtpStatus(id, { status, reviewerId, remarks = null }) {
+  static async updateVtpStatus(id, { status, reviewerId, remarks = null, approvalType = 'manual' }) {
     const result = await pool.query(`
-      UPDATE leave_requests
-      SET 
-        vtp_status = $1,
-        vtp_remarks = $3,
-        vtp_updated_at = NOW(),
-        updated_at = NOW(),
-        leave_approved = CASE WHEN status = 'approved' AND $2 = 'approved' THEN TRUE ELSE FALSE END
-      WHERE id = $4
-      RETURNING *
-    `, [status, status, remarks, id]);
+      WITH updated_leave AS (
+        UPDATE leave_requests
+        SET vtp_status = $1, vtp_remarks = $3, vtp_updated_at = NOW(), updated_at = NOW(),
+          leave_approved = CASE WHEN status = 'approved' AND $2 = 'approved' THEN TRUE ELSE FALSE END,
+          vtp_approval_type = $4::VARCHAR,
+          is_auto_approved = is_auto_approved OR $4::VARCHAR = 'auto'
+        WHERE id = $5
+        RETURNING *
+      ), cleared_leave_attendance AS (
+        DELETE FROM attendance_records ar USING updated_leave l
+        WHERE $1 = 'rejected' AND ar.user_id = l.user_id
+          AND ar.date BETWEEN l.from_date AND l.to_date
+          AND ar.status = 'on_leave'
+          AND ar.check_in_time IS NULL AND ar.check_out_time IS NULL
+        RETURNING ar.id
+      )
+      SELECT * FROM updated_leave
+    `, [status, status, remarks, approvalType, id]);
     return result.rows[0] || null;
   }
 
@@ -513,9 +630,18 @@ class Leave {
 
     const userResult = await pool.query(
       `
-  SELECT id, name, email, udise_code
-  FROM users
-  WHERE id = $1
+  SELECT
+    u.id,
+    u.name,
+    COALESCE(v.vt_email, u.email) AS email,
+    COALESCE(v.udise_code, u.udise_code) AS udise_code,
+    v.district_name,
+    v.block_name,
+    v.trade,
+    v.vtp_name
+  FROM users u
+  LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
+  WHERE u.id = $1
   `,
       [userId]
     );
@@ -558,7 +684,7 @@ class Leave {
     // ─────────── Fetch leaves ───────────
     const leaveResult = await pool.query(
       `
-      SELECT from_date, to_date
+      SELECT id, from_date, to_date
       FROM leave_requests
       WHERE user_id = $1
       AND leave_approved = TRUE
@@ -566,6 +692,14 @@ class Leave {
       AND to_date >= $2
     `,
       [userId, startDate.format("YYYY-MM-DD"), endDate.format("YYYY-MM-DD")]
+    );
+
+    const cancellationResult = await pool.query(`
+      SELECT leave_request_id, cancel_date FROM leave_cancellation_requests
+      WHERE user_id = $1 AND status = 'approved' AND cancel_date BETWEEN $2 AND $3
+    `, [userId, startDate.format("YYYY-MM-DD"), endDate.format("YYYY-MM-DD")]);
+    const cancelledLeaveDates = new Set(
+      cancellationResult.rows.map((row) => `${row.leave_request_id}:${dayjs(row.cancel_date).format("YYYY-MM-DD")}`)
     );
 
     // Expand leave dates
@@ -576,7 +710,8 @@ class Leave {
       const end = dayjs(leave.to_date);
 
       while (current.isBefore(end) || current.isSame(end)) {
-        leaveSet.add(current.format("YYYY-MM-DD"));
+        const date = current.format("YYYY-MM-DD");
+        if (!cancelledLeaveDates.has(`${leave.id}:${date}`)) leaveSet.add(date);
         current = current.add(1, "day");
       }
     });
@@ -648,6 +783,10 @@ const excessLeave = excessResult.rows.length > 0
       employeeName: user.name,
       employeeEmail: user.email,
       udiseCode: user.udise_code,
+      districtName: user.district_name,
+      blockName: user.block_name,
+      trade: user.trade,
+      vtpName: user.vtp_name,
       month,
       totalDays: lastDay,
       attendance: attendanceMap,
@@ -680,11 +819,6 @@ const excessLeave = excessResult.rows.length > 0
       }
 
       const leave = leaveResult.rows[0];
-
-      if (leave.status !== 'pending') {
-        await client.query('ROLLBACK');
-        return { success: false, message: `Leave is already ${leave.status}` };
-      }
 
       // Lazy-credit annual EL if not yet credited this FY
       await LeaveBalance.ensureAnnualCredit(leave.user_id);

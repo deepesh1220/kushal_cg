@@ -35,6 +35,10 @@ const sendExcel = async (report, res) => {
     employeeName = "Employee",
     employeeEmail = "",
     udiseCode = "",
+    districtName = "",
+    blockName = "",
+    trade = "",
+    vtpName = "",
     totalEarned = 0,
     remainingBalance = 0,
     excessLeave = 0, 
@@ -60,12 +64,12 @@ const sendExcel = async (report, res) => {
   // ── Row 2: Info bar ───────────────────────────────────────────────────────
   ws.mergeCells(2, 1, 2, sumCol);
   const infoCell = ws.getCell(2, 1);
-  infoCell.value = `Employee: ${employeeName}   |   UDISE: ${udiseCode}   |   Month: ${monthLabel}`;
+  infoCell.value = `VT Name: ${employeeName}   |   Email: ${employeeEmail}   |   District: ${districtName}   |   Block: ${blockName}   |   Trade: ${trade}   |   VTP: ${vtpName}   |   UDISE: ${udiseCode}`;
   infoCell.font = { name: "Arial", bold: true, size: 9, color: { argb: "FF1F3864" } };
   infoCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD6E4F0" } };
   infoCell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
   infoCell.border = allBorder();
-  ws.getRow(2).height = 18;
+  ws.getRow(2).height = 36;
 
   // ── Row 3: Day headers ────────────────────────────────────────────────────
   const hdrStyle = {
@@ -231,6 +235,10 @@ const sendPDF = (report, res) => {
     employeeName = "Employee",
     employeeEmail = "",
     udiseCode = "",
+    districtName = "",
+    blockName = "",
+    trade = "",
+    vtpName = "",
     totalEarned = 0,
     remainingBalance = 0,
      excessLeave = 0,  
@@ -256,13 +264,17 @@ const sendPDF = (report, res) => {
   y += 28;
 
   // Info bar
-  doc.rect(20, y, W, 16).fill("#D6E4F0");
+  doc.rect(20, y, W, 28).fill("#D6E4F0");
   doc.fillColor("#1F3864").font("Helvetica-Bold").fontSize(8)
     .text(
-      `Employee: ${employeeName}   |   UDISE: ${udiseCode}   |   Month: ${monthLabel}`,
-      20, y + 4, { width: W, align: "center" }
+      `VT Name: ${employeeName}   |   Email: ${employeeEmail}   |   District: ${districtName}   |   Block: ${blockName}`,
+      22, y + 4, { width: W - 4, align: "center" }
+    )
+    .text(
+      `Trade: ${trade}   |   VTP: ${vtpName}   |   UDISE: ${udiseCode}   |   Month: ${monthLabel}`,
+      22, y + 16, { width: W - 4, align: "center" }
     );
-  y += 20;
+  y += 32;
 
   // Table header
   const nameW = 100;
@@ -646,8 +658,9 @@ const sendNSQFPdf = (data, res) => {
     [`A.  Total Holidays: ${cntHoliday}`, 'P -', 'for Present'],
     [`B.  Total Sunday: ${cntSunday}`, 'A -', 'for Absent'],
     [`C.  Local Holidays: ${cntSchoolHoliday}`, 'L -', 'for Leave'],
-    [`D.  No. of Extra Leaves: ${cntLeave}`, 'H -', 'for Holidays'],
+    [`D.  No. of Leaves: ${cntLeave}`, 'H -', 'for Holidays'],
     [`E.  Total Present Days: ${cntPresent}`, 'SH -', 'for Local Holidays'],
+    [`F.  No. of Leaves (Session to Date): ${leaveDetails.sessionLeavesTaken ?? 0}`, 'SA -', 'for Absent Days'],
     ['', 'Sun-', 'for Sundays'],
   ].forEach(([label, code, desc]) => {
     fillRect(ML, y, sumLabelW, sumRowH, GRAY_LIGHT, '#C0C0C0');
@@ -761,12 +774,12 @@ const sendNSQFPdf = (data, res) => {
     fillRect(ap3X, yPos, ap3W, apLineH, bgColor, '#C0C0C0');
     cellText(`${label}`, ap3X, yPos, ap3W * 0.5, apLineH, DARK_BLUE, 6, true);
     doc.save().fillColor(apColor(apObj.status)).font('Helvetica-Bold').fontSize(6)
-      .text(apStatus(apObj.status), ap3X + ap3W * 0.5, yPos + 3, { width: ap3W * 0.5 - 4 });
+      .text(`${apStatus(apObj.status)}${apObj.type ? ` (${apObj.type.toUpperCase()})` : ''}`, ap3X + ap3W * 0.5, yPos + 3, { width: ap3W * 0.5 - 4 });
     doc.restore();
   };
 
   let apY = y;
-  drawApprovalRow('Principal/HOS :', hmA, LIGHT_BLUE, apY); apY += apLineH;
+  drawApprovalRow('Principal/HM (Head Master) :', hmA, LIGHT_BLUE, apY); apY += apLineH;
   fillRect(ap3X, apY, ap3W, apLineH, WHITE, '#C0C0C0');
   cellText(`Date: ${fmtDate(hmA.approvedAt)}`, ap3X, apY, ap3W, apLineH, '#555', 6, false);
   apY += apLineH;

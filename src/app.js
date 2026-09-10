@@ -9,10 +9,11 @@ const { createDatabaseIfNotExists } = require('./config/db');
 const initDB = require('./config/initDB');
 const { initLeaveCreditCronJob } = require('./jobs/leaveCreditJob');
 const { initYearEndCarryForwardCronJob } = require('./jobs/yearEndCarryForwardJob');
+const { initAutoApprovalCronJob } = require('./jobs/autoApprovalJob');
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 const apiRoutes = require('./routes/routes.js');
-const { loadModels } = require('./utils/faceUtils');
+// Face recognition model loading is temporarily disabled.
 
 const app = express();
 
@@ -64,7 +65,7 @@ const startServer = async () => {
   try {
     await createDatabaseIfNotExists(); // Step 1: Ensure DB exists
     await initDB();                    // Step 2: Create tables + seed roles/permissions
-    await loadModels();                // Step 3: Preload face recognition models
+    // await loadModels();             // Temporarily disabled: face recognition flow
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`\n🚀 Server running on http://localhost:${PORT}`);
       console.log(`📋 Health check: http://localhost:${PORT}/api/health\n`);
@@ -72,6 +73,7 @@ const startServer = async () => {
       // Initialize leave credit & year-end cron jobs
       initLeaveCreditCronJob();
       initYearEndCarryForwardCronJob();
+      initAutoApprovalCronJob();
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error.message);

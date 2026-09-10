@@ -1,27 +1,15 @@
 const Attendance = require('../models/Attendance');
-const { formatAttendanceRecord, toIST } = require('../utils/timeUtils');
-const { extractDescriptorFromBase64, compareFaces, saveBase64Image } = require('../utils/faceUtils');
+const { formatAttendanceRecord, toIST, getISTDate } = require('../utils/timeUtils');
+const { extractDescriptorFromBase64, compareFaces, saveBase64Image } = require('../utils/faceUtils'); // Temporarily unused while face verification is disabled.
 const { pool } = require('../config/db');
-
-// Haversine formula to calculate distance in meters
-const getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
-  const R = 6371e3; // Earth radius in meters
-  const toRadians = (deg) => deg * (Math.PI / 180);
-  const dLat = toRadians(lat2 - lat1);
-  const dLon = toRadians(lon2 - lon1);
-  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-};
+const { getDistanceInMeters } = require('../utils/locationUtils');
 
 // ─── POST /api/attendance/check-in ───────────────────────────────────────────
-// VT marks their own attendance (GPS + Face verification required)
+// VT marks their own attendance (GPS required; face verification temporarily disabled)
 const checkIn = async (req, res) => {
 
   const userId = req.user.id;
-  const { latitude, longitude, remarks, isFakeGPS, checkin_photo } = req.body;
+  const { latitude, longitude, remarks, isFakeGPS } = req.body;
   // ── Field validation ────────────────────────────────────────────────────────
   if (!latitude || !longitude || isFakeGPS === undefined) {
     return res.status(400).json({
@@ -36,11 +24,29 @@ const checkIn = async (req, res) => {
     });
   }
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = getISTDate();
 
   try {
     // ── Prevent duplicate check-in ─────────────────────────────────────────────
-    const existing = await Attendance.findByUserAndDate(userId, today);
+    let existing = await Attendance.findByUserAndDate(userId, today);
+    if (existing?.status === 'on_leave' && !existing.check_in_time && !existing.check_out_time) {
+      const approvedCancellation = await pool.query(`
+        SELECT 1
+        FROM leave_cancellation_requests lcr
+        JOIN leave_requests l ON l.id = lcr.leave_request_id
+        WHERE lcr.user_id = $1 AND lcr.cancel_date = $2::date
+          AND lcr.status = 'approved' AND l.user_id = $1
+        LIMIT 1
+      `, [userId, today]);
+      if (approvedCancellation.rows.length) {
+        await pool.query(`
+          DELETE FROM attendance_records
+          WHERE id = $1 AND status = 'on_leave'
+            AND check_in_time IS NULL AND check_out_time IS NULL
+        `, [existing.id]);
+        existing = null;
+      }
+    }
     if (existing) {
       return res.status(409).json({
         status: false,
@@ -119,6 +125,27 @@ const checkIn = async (req, res) => {
     }
 
     // ── [FACE] Verify identity ─────────────────────────────────────────────────
+    const activeLeave = await pool.query(`
+      SELECT l.id FROM leave_requests l
+      WHERE l.user_id = $1 AND l.leave_approved = TRUE
+        AND $2::date BETWEEN l.from_date AND l.to_date
+        AND NOT EXISTS (
+          SELECT 1 FROM leave_cancellation_requests lcr
+          WHERE lcr.leave_request_id = l.id AND lcr.cancel_date = $2::date
+            AND lcr.status = 'approved'
+        )
+      LIMIT 1
+    `, [userId, today]);
+    if (activeLeave.rows.length) {
+      return res.status(403).json({
+        status: false,
+        message: 'Check-in is not allowed while you are on approved leave. Submit a cancellation request and wait for VTP approval.',
+      });
+    }
+
+    let matchPercent = null;
+    let isMatch = false;
+    if (false) { // Temporarily disabled: check-in face verification.
     const userRow = await pool.query(
       'SELECT face_descriptor FROM users WHERE id = $1',
       [userId]
@@ -151,7 +178,7 @@ const checkIn = async (req, res) => {
       });
     }
 
-    const { matchPercent, isMatch } = compareFaces(storedDescriptor, liveDescriptor);
+    ({ matchPercent, isMatch } = compareFaces(storedDescriptor, liveDescriptor));
 
     if (!isMatch) {
       return res.status(403).json({
@@ -159,6 +186,8 @@ const checkIn = async (req, res) => {
         message: `Face verification failed. Match: ${matchPercent}%.`,
         data: { match_percent: matchPercent },
       });
+    }
+
     }
     // ── ──────────────────────────────────────────────────────────────────────
 
@@ -181,7 +210,7 @@ const checkIn = async (req, res) => {
       message: 'Check-in successful.',
       data: {
         ...formatAttendanceRecord(record),
-        face_verification: { match_percent: matchPercent, verified: true },
+        face_verification: { verified: false, disabled: true },
       },
     });
   } catch (error) {
@@ -191,14 +220,14 @@ const checkIn = async (req, res) => {
 };
 
 // ─── PATCH /api/attendance/check-out ─────────────────────────────────────────
-// VT marks their check-out (GPS + Face verification required)
+// VT marks their check-out (GPS required; face verification temporarily disabled)
 const checkOut = async (req, res) => {
   const userId = req.user.id;
-  const { latitude, longitude, isFakeGPS, checkout_photo } = req.body;
+  const { latitude, longitude, isFakeGPS } = req.body;
   if (!latitude || !longitude || isFakeGPS === undefined) {
     return res.status(400).json({
       status: false,
-      message: 'checkout_photo (base64) is required for face verification.',
+      message: 'latitude, longitude and isFakeGPS are required.',
     });
   }
 
@@ -209,7 +238,7 @@ const checkOut = async (req, res) => {
     });
   }
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = getISTDate();
 
   try {
     // ── Pre-condition: must have checked in ───────────────────────────────────
@@ -239,7 +268,7 @@ const checkOut = async (req, res) => {
 
     if (udiseCode) {
       const schoolRecord = await pool.query(`
-        SELECT latitude, longitude, sch_open_time
+        SELECT latitude, longitude, sch_open_time, sch_close_time, grace_time
         FROM mst_schools
         WHERE udise_sch_code = $1
         LIMIT 1
@@ -260,16 +289,27 @@ const checkOut = async (req, res) => {
             });
           }
         }
-        // Time check
-        if (school.sch_open_time) {
+        // Checkout is allowed only within the configured grace period before
+        // school closing time (and any time after closing). The same grace_time
+        // setting used by check-in is reused here.
+        if (school.sch_close_time) {
           const now = new Date();
           const currentMins = now.getHours() * 60 + now.getMinutes();
-          const [openH, openM] = school.sch_open_time.split(':').map(Number);
-          const openTotalMins = openH * 60 + openM;
-          if (currentMins < openTotalMins) {
+          const [closeH, closeM] = school.sch_close_time.split(':').map(Number);
+          const closeTotalMins = closeH * 60 + closeM;
+          const parsedGraceMins = parseInt(school.grace_time, 10);
+          const graceMins = Number.isFinite(parsedGraceMins) && parsedGraceMins > 0
+            ? parsedGraceMins
+            : 0;
+          const earliestCheckoutMins = Math.max(0, closeTotalMins - graceMins);
+
+          if (currentMins < earliestCheckoutMins) {
+            const earliestHours = Math.floor(earliestCheckoutMins / 60);
+            const earliestMinutes = earliestCheckoutMins % 60;
+            const earliestCheckoutTime = `${String(earliestHours).padStart(2, '0')}:${String(earliestMinutes).padStart(2, '0')}`;
             return res.status(403).json({
               status: false,
-              message: `Cannot check-out before school open time (${school.sch_open_time}).`,
+              message: `Check-out is allowed from ${earliestCheckoutTime}. School closes at ${school.sch_close_time} with a grace period of ${graceMins} minutes.`,
             });
           }
         }
@@ -277,6 +317,9 @@ const checkOut = async (req, res) => {
     }
 
     // ── [FACE] Verify identity ─────────────────────────────────────────────────
+    let matchPercent = null;
+    let isMatch = false;
+    if (false) { // Temporarily disabled: check-out face verification.
     const userRow = await pool.query(
       'SELECT face_descriptor FROM users WHERE id = $1',
       [userId]
@@ -309,7 +352,7 @@ const checkOut = async (req, res) => {
       });
     }
 
-    const { matchPercent, isMatch } = compareFaces(storedDescriptor, liveDescriptor);
+    ({ matchPercent, isMatch } = compareFaces(storedDescriptor, liveDescriptor));
 
     if (!isMatch) {
       return res.status(403).json({
@@ -317,6 +360,7 @@ const checkOut = async (req, res) => {
         message: `Face verification failed. Match: ${matchPercent}%.`,
         data: { match_percent: matchPercent },
       });
+    }
     }
     // ── ──────────────────────────────────────────────────────────────────────
 
@@ -332,10 +376,7 @@ const checkOut = async (req, res) => {
       message: 'Check-out successful.',
       data: {
         ...formatAttendanceRecord(updated),
-        face_verification: {
-          match_percent: matchPercent,
-          verified: true
-        },
+        face_verification: { verified: false, disabled: true },
       },
     });
   } catch (error) {
@@ -586,10 +627,17 @@ const getDailyReport = async (req, res) => {
     const endStr = endDate.format('YYYY-MM-DD');
 
     const leaveRes = await pool.query(`
-      SELECT from_date, to_date, reason FROM leave_requests 
+      SELECT id, from_date, to_date, reason FROM leave_requests 
       WHERE user_id = $1 AND leave_approved = TRUE AND from_date <= $2 AND to_date >= $3
     `, [userId, endStr, startStr]);
     const leaves = leaveRes.rows;
+    const cancellationRes = await pool.query(`
+      SELECT leave_request_id, cancel_date FROM leave_cancellation_requests
+      WHERE user_id = $1 AND status = 'approved' AND cancel_date BETWEEN $2 AND $3
+    `, [userId, startStr, endStr]);
+    const cancelledLeaveDates = new Set(
+      cancellationRes.rows.map((row) => `${row.leave_request_id}:${dayjs(row.cancel_date).format('YYYY-MM-DD')}`)
+    );
 
     const odRes = await pool.query(`
       SELECT from_date, to_date FROM od_requests 
@@ -628,7 +676,7 @@ const getDailyReport = async (req, res) => {
         const foundLeave = leaves.find(l => {
           const lFrom = dayjs(l.from_date).format('YYYY-MM-DD');
           const lTo = dayjs(l.to_date).format('YYYY-MM-DD');
-          return d >= lFrom && d <= lTo;
+          return d >= lFrom && d <= lTo && !cancelledLeaveDates.has(`${l.id}:${d}`);
         });
 
         if (foundLeave) {

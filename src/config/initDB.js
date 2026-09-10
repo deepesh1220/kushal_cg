@@ -41,7 +41,16 @@ const initDB = async () => {
         ADD COLUMN IF NOT EXISTS educational_qualification VARCHAR(200),
         ADD COLUMN IF NOT EXISTS date_of_joining          DATE,
         ADD COLUMN IF NOT EXISTS vtp_id                   CHAR(2),
+        ADD COLUMN IF NOT EXISTS old_mobile_number        BIGINT,
+        ADD COLUMN IF NOT EXISTS mobile_number_approved_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS vtp_mobile_approved_status VARCHAR(20) DEFAULT 'approved',
         ADD COLUMN IF NOT EXISTS updated_at               TIMESTAMPTZ DEFAULT NOW();
+
+      ALTER TABLE vt_staff_details DROP CONSTRAINT IF EXISTS vt_staff_details_mobile_approval_status_check;
+      ALTER TABLE vt_staff_details ADD CONSTRAINT vt_staff_details_mobile_approval_status_check
+        CHECK (vtp_mobile_approved_status IN ('pending','approved','rejected'));
+      UPDATE vt_staff_details SET vtp_mobile_approved_status = 'approved'
+        WHERE vtp_mobile_approved_status IS NULL;
     `);
 
     // ─────────────────────────────────────────────────────────
@@ -120,6 +129,9 @@ const initDB = async () => {
     // Ensure face_descriptor column exists on users (biometric — stored AES-256-GCM encrypted)
     await client.query(`
       ALTER TABLE users ADD COLUMN IF NOT EXISTS face_descriptor TEXT DEFAULT NULL;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS device_id_hash VARCHAR(64);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS device_bound_at TIMESTAMPTZ;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS device_updated_at TIMESTAMPTZ;
     `);
 
     // ─────────────────────────────────────────────────────────
@@ -147,6 +159,29 @@ const initDB = async () => {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS device_change_requests (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        requested_device_id_hash VARCHAR(64) NOT NULL,
+        previous_device_id_hash VARCHAR(64),
+        reason TEXT,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+        hm_status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (hm_status IN ('pending','approved','rejected')),
+        hm_approved_by INTEGER REFERENCES users(id), hm_approved_at TIMESTAMPTZ, hm_remarks TEXT,
+        vtp_status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (vtp_status IN ('pending','approved','rejected')),
+        vtp_approved_by INTEGER REFERENCES users(id), vtp_approved_at TIMESTAMPTZ, vtp_remarks TEXT,
+        completed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_device_change_pending_user
+        ON device_change_requests(user_id) WHERE status = 'pending';
+      CREATE INDEX IF NOT EXISTS idx_device_change_user_created
+        ON device_change_requests(user_id, created_at DESC);
+    `);
+    await client.query(`ALTER TABLE device_change_requests
+      ADD COLUMN IF NOT EXISTS previous_device_id_hash VARCHAR(64);`);
 
     // ─────────────────────────────────────────────────────────
     // TABLE: attendance_records
@@ -298,6 +333,71 @@ const initDB = async () => {
       );
     `);
 
+    // A fully-approved leave can later be cancelled for a particular date.
+    // Keep the request-level decision visible while the cancellation table
+    // remains the source of truth for the exact cancelled date(s).
+    await client.query(`
+      ALTER TABLE leave_requests DROP CONSTRAINT IF EXISTS leave_requests_status_check;
+      ALTER TABLE leave_requests ADD CONSTRAINT leave_requests_status_check
+        CHECK (status IN ('pending','approved','rejected','cancelled'));
+    `);
+
+    // Current-day cancellation requests for already approved leaves.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS leave_cancellation_requests (
+        id               SERIAL PRIMARY KEY,
+        leave_request_id INTEGER NOT NULL REFERENCES leave_requests(id) ON DELETE CASCADE,
+        user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        cancel_date       DATE NOT NULL,
+        reason            TEXT NOT NULL,
+        status            VARCHAR(20) NOT NULL DEFAULT 'pending'
+                            CHECK (status IN ('pending','approved','rejected')),
+        reviewed_by       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        reviewer_remarks  TEXT,
+        reviewed_at       TIMESTAMPTZ,
+        hm_status         VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (hm_status IN ('pending','approved','rejected')),
+        hm_approved_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        hm_approved_at    TIMESTAMPTZ,
+        hm_remarks        TEXT,
+        vtp_status        VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (vtp_status IN ('pending','approved','rejected')),
+        vtp_approved_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        vtp_approved_at   TIMESTAMPTZ,
+        vtp_remarks       TEXT,
+        refunded_amount   DECIMAL(5,2) NOT NULL DEFAULT 0,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (leave_request_id, cancel_date)
+      );
+      CREATE INDEX IF NOT EXISTS idx_leave_cancellation_user_date
+        ON leave_cancellation_requests(user_id, cancel_date);
+      CREATE INDEX IF NOT EXISTS idx_leave_cancellation_status
+        ON leave_cancellation_requests(status);
+    `);
+
+    await client.query(`
+      ALTER TABLE leave_cancellation_requests
+        ADD COLUMN IF NOT EXISTS hm_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS hm_approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        ADD COLUMN IF NOT EXISTS hm_approved_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS hm_remarks TEXT,
+        ADD COLUMN IF NOT EXISTS vtp_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS vtp_approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        ADD COLUMN IF NOT EXISTS vtp_approved_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS vtp_remarks TEXT;
+      ALTER TABLE leave_cancellation_requests DROP CONSTRAINT IF EXISTS leave_cancellation_requests_hm_status_check;
+      ALTER TABLE leave_cancellation_requests ADD CONSTRAINT leave_cancellation_requests_hm_status_check
+        CHECK (hm_status IN ('pending','approved','rejected'));
+      ALTER TABLE leave_cancellation_requests DROP CONSTRAINT IF EXISTS leave_cancellation_requests_vtp_status_check;
+      ALTER TABLE leave_cancellation_requests ADD CONSTRAINT leave_cancellation_requests_vtp_status_check
+        CHECK (vtp_status IN ('pending','approved','rejected'));
+      UPDATE leave_cancellation_requests
+      SET hm_status = 'approved', vtp_status = 'approved'
+      WHERE status = 'approved';
+      UPDATE leave_cancellation_requests
+      SET hm_status = 'rejected', vtp_status = 'rejected'
+      WHERE status = 'rejected';
+    `);
+
     // Indexes for leave balance tables
     await client.query(`CREATE INDEX IF NOT EXISTS idx_leave_balance_user_id ON leave_balance(user_id);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_leave_balance_year ON leave_balance(year);`);
@@ -442,6 +542,10 @@ const initDB = async () => {
       ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS vtp_approved_by  INTEGER REFERENCES users(id) ON DELETE SET NULL;
       ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS vtp_approved_at  TIMESTAMPTZ;
       ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS is_locked        BOOLEAN DEFAULT FALSE;
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS hm_approval_type  VARCHAR(10);
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS deo_approval_type VARCHAR(10);
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS vtp_approval_type VARCHAR(10);
+      ALTER TABLE monthly_school_reports ADD COLUMN IF NOT EXISTS is_auto_approved  BOOLEAN DEFAULT FALSE;
     `);
 
     // ─────────────────────────────────────────────────────────
@@ -518,7 +622,10 @@ const initDB = async () => {
         ADD COLUMN IF NOT EXISTS vtp_approved_by    INTEGER     REFERENCES users(id),
         ADD COLUMN IF NOT EXISTS vtp_action_at      TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS vtp_remarks        TEXT,
-        ADD COLUMN IF NOT EXISTS od_approved        BOOLEAN     DEFAULT FALSE;
+        ADD COLUMN IF NOT EXISTS od_approved        BOOLEAN     DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS hm_approval_type   VARCHAR(10),
+        ADD COLUMN IF NOT EXISTS vtp_approval_type  VARCHAR(10),
+        ADD COLUMN IF NOT EXISTS is_auto_approved   BOOLEAN     DEFAULT FALSE;
     `);
 
     // ─────────────────────────────────────────────────────────
@@ -665,12 +772,99 @@ const initDB = async () => {
         ADD COLUMN IF NOT EXISTS vtp_updated_at       TIMESTAMPTZ DEFAULT NULL,
         ADD COLUMN IF NOT EXISTS principal_remarks    TEXT,
         ADD COLUMN IF NOT EXISTS vtp_remarks          TEXT,
-        ADD COLUMN IF NOT EXISTS leave_approved       BOOLEAN DEFAULT FALSE;
+        ADD COLUMN IF NOT EXISTS leave_approved       BOOLEAN DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS principal_approval_type VARCHAR(10),
+        ADD COLUMN IF NOT EXISTS vtp_approval_type       VARCHAR(10),
+        ADD COLUMN IF NOT EXISTS is_auto_approved        BOOLEAN DEFAULT FALSE;
     `);
 
     await client.query(`
       ALTER TABLE regularization_requests
-        ADD COLUMN IF NOT EXISTS review_remarks TEXT;
+        ADD COLUMN IF NOT EXISTS review_remarks            TEXT,
+        ADD COLUMN IF NOT EXISTS hm_status                 VARCHAR(20) DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS hm_approved_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        ADD COLUMN IF NOT EXISTS hm_action_at              TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS hm_remarks                TEXT,
+        ADD COLUMN IF NOT EXISTS vtp_status                VARCHAR(20) DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS vtp_approved_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        ADD COLUMN IF NOT EXISTS vtp_action_at             TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS vtp_remarks               TEXT,
+        ADD COLUMN IF NOT EXISTS regularization_approved   BOOLEAN DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS hm_approval_type          VARCHAR(10),
+        ADD COLUMN IF NOT EXISTS vtp_approval_type         VARCHAR(10),
+        ADD COLUMN IF NOT EXISTS is_auto_approved          BOOLEAN DEFAULT FALSE;
+
+      ALTER TABLE regularization_requests
+        DROP CONSTRAINT IF EXISTS regularization_requests_hm_status_check;
+      ALTER TABLE regularization_requests
+        ADD CONSTRAINT regularization_requests_hm_status_check
+          CHECK (hm_status IN ('pending','approved','rejected'));
+      ALTER TABLE regularization_requests
+        DROP CONSTRAINT IF EXISTS regularization_requests_vtp_status_check;
+      ALTER TABLE regularization_requests
+        ADD CONSTRAINT regularization_requests_vtp_status_check
+          CHECK (vtp_status IN ('pending','approved','rejected'));
+
+      -- Preserve completed legacy decisions. New and pending requests require both layers.
+      UPDATE regularization_requests
+      SET hm_status = CASE
+            WHEN status = 'approved' THEN 'approved'
+            WHEN status = 'rejected' THEN 'rejected'
+            ELSE COALESCE(hm_status, 'pending')
+          END,
+          vtp_status = CASE
+            WHEN status = 'approved' THEN 'approved'
+            ELSE COALESCE(vtp_status, 'pending')
+          END,
+          regularization_approved = (status = 'approved'),
+          hm_approved_by = CASE WHEN status IN ('approved','rejected') THEN COALESCE(hm_approved_by, reviewed_by) ELSE hm_approved_by END,
+          hm_action_at = CASE WHEN status IN ('approved','rejected') THEN COALESCE(hm_action_at, reviewed_at) ELSE hm_action_at END,
+          hm_remarks = CASE WHEN status IN ('approved','rejected') THEN COALESCE(hm_remarks, review_remarks) ELSE hm_remarks END
+      WHERE reviewed_by IS NOT NULL AND hm_approved_by IS NULL;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS auto_approval_logs (
+        id BIGSERIAL PRIMARY KEY,
+        entity_type VARCHAR(40) NOT NULL,
+        entity_id INTEGER NOT NULL,
+        approval_layer VARCHAR(20) NOT NULL,
+        eligible_at TIMESTAMPTZ NOT NULL,
+        processed_at TIMESTAMPTZ DEFAULT NOW(),
+        status VARCHAR(20) NOT NULL CHECK (status IN ('success','failed','skipped')),
+        error_message TEXT,
+        UNIQUE (entity_type, entity_id, approval_layer)
+      );
+      CREATE INDEX IF NOT EXISTS idx_auto_approval_logs_entity
+        ON auto_approval_logs(entity_type, entity_id);
+      CREATE INDEX IF NOT EXISTS idx_leave_auto_approval_due
+        ON leave_requests(created_at) WHERE status = 'pending' OR vtp_status = 'pending';
+      CREATE INDEX IF NOT EXISTS idx_od_auto_approval_due
+        ON od_requests(created_at) WHERE hm_status = 'pending' OR vtp_status = 'pending';
+      CREATE INDEX IF NOT EXISTS idx_regularization_auto_approval_due
+        ON regularization_requests(created_at) WHERE hm_status = 'pending' OR vtp_status = 'pending';
+      CREATE INDEX IF NOT EXISTS idx_monthly_reports_auto_approval_due
+        ON monthly_school_reports(created_at, hm_approved_at, deo_approved_at)
+        WHERE is_locked = FALSE;
+
+      UPDATE leave_requests SET principal_approval_type = 'manual'
+        WHERE status IN ('approved','rejected') AND principal_approval_type IS NULL;
+      UPDATE leave_requests SET vtp_approval_type = 'manual'
+        WHERE vtp_status IN ('approved','rejected') AND vtp_approval_type IS NULL;
+      UPDATE od_requests SET hm_approval_type = 'manual'
+        WHERE hm_status IN ('approved','rejected') AND hm_approval_type IS NULL;
+      UPDATE od_requests SET vtp_approval_type = 'manual'
+        WHERE vtp_status IN ('approved','rejected') AND vtp_approval_type IS NULL;
+      UPDATE regularization_requests SET hm_approval_type = 'manual'
+        WHERE hm_status IN ('approved','rejected') AND hm_approval_type IS NULL;
+      UPDATE regularization_requests SET vtp_approval_type = 'manual'
+        WHERE vtp_status IN ('approved','rejected') AND vtp_approval_type IS NULL;
+      UPDATE monthly_school_reports SET hm_approval_type = 'manual'
+        WHERE hm_approval_status IN ('approved','rejected') AND hm_approval_type IS NULL;
+      UPDATE monthly_school_reports SET deo_approval_type = 'manual'
+        WHERE deo_approval_status IN ('approved','rejected') AND deo_approval_type IS NULL;
+      UPDATE monthly_school_reports SET vtp_approval_type = 'manual'
+        WHERE vtp_approval_status IN ('approved','rejected') AND vtp_approval_type IS NULL;
     `);
 
     // ─────────────────────────────────────────────────────────

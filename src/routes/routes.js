@@ -33,6 +33,7 @@ const superAdminRoutes = require('./superAdminRoutes');
 const adminRoutes = require('./adminRoutes');
 const onDutyRoutes = require('./onDutyRoutes');
 const regularizationRoutes = require('./regularizationRoutes');
+const deviceChangeRoutes = require('./deviceChangeRoutes');
 
 
 
@@ -64,6 +65,7 @@ router.use('/super-admin', superAdminRoutes);
 router.use('/admin', adminRoutes);
 router.use('/od', onDutyRoutes);
 router.use('/regularization', regularizationRoutes);
+router.use('/device-change', deviceChangeRoutes);
 
 
 

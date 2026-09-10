@@ -5,6 +5,12 @@
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // 5h 30m in milliseconds
 
+const getISTDate = (date = new Date()) => {
+  const d = date instanceof Date ? date : new Date(date);
+  if (isNaN(d.getTime())) return null;
+  return new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
+};
+
 /**
  * Converts a Date object or date string to an IST-formatted ISO string.
  * Example output: "2026-05-05T12:57:54.240+05:30"
@@ -52,4 +58,4 @@ const formatAttendanceRecord = (record) => {
   };
 };
 
-module.exports = { toIST, formatAttendanceRecord };
+module.exports = { toIST, getISTDate, formatAttendanceRecord };

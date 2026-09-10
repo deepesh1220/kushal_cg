@@ -3,6 +3,7 @@ const { pool } = require('../config/db');
 const { sendExcel, sendPDF } = require("../utils/export.utile");
 const ExcelJS = require("exceljs");
 const PDFDocument = require("pdfkit");
+const { getISTDate } = require('../utils/timeUtils');
 
 const parseDateStr = (dateStr) => {
   if (!dateStr) return dateStr;
@@ -60,14 +61,10 @@ const _validateVtBelongsToHeadmaster = async (vtUserId, headmaster) => {
 // Vocational teacher applies for leave
 const applyLeave = async (req, res) => {
   const userId = req.user.id;
-  let { from_date, to_date, reason, leave_type } = req.body;
+  let { from_date, to_date, reason } = req.body;
 
   if (!from_date || !to_date) {
     return res.status(400).json({ status: false, message: 'from_date and to_date are required.' });
-  }
-
-  if (leave_type && !['full-day', 'first-half', 'second-half'].includes(leave_type)) {
-    return res.status(400).json({ status: false, message: "leave_type must be 'full-day', 'first-half', or 'second-half'." });
   }
 
   from_date = parseDateStr(from_date);
@@ -92,14 +89,27 @@ const applyLeave = async (req, res) => {
 
     // Pre-validate balance so VT is warned up-front
     const LeaveBalance = require('../models/LeaveBalance');
-    const reqType = leave_type || 'full-day';
+    const reqType = 'full-day';
     // Lazy-credit annual EL so first-time applicants see correct balance
     await LeaveBalance.ensureAnnualCredit(userId);
     const check = await LeaveBalance.checkSufficientBalance(userId, reqType);
     // VT can apply for leave even with insufficient balance; excess is tracked separately
 
-    const leave = await Leave.create({ user_id: userId, from_date, to_date, reason, leave_type });
-    return res.status(201).json({ status: true, message: 'Leave request submitted successfully.', data: leave });
+    const attendanceResult = await pool.query(`
+      SELECT 1 FROM attendance_records
+      WHERE user_id = $1 AND date BETWEEN $2::date AND $3::date
+        AND check_in_time IS NOT NULL
+      LIMIT 1
+    `, [userId, from_date, to_date]);
+
+    const leave = await Leave.create({ user_id: userId, from_date, to_date, reason });
+    return res.status(201).json({
+      status: true,
+      message: attendanceResult.rows.length
+        ? 'Full-day leave request submitted successfully. Existing attendance will remain active until the leave is fully approved.'
+        : 'Leave request submitted successfully.',
+      data: leave,
+    });
   } catch (error) {
     console.error('Apply leave error:', error.message);
     return res.status(500).json({ status: false, message: error.message });
@@ -215,10 +225,6 @@ const approveRejectLeave = async (req, res) => {
       return res.status(404).json({ status: false, message: 'Leave request not found.' });
     }
  
-    if (leave.status !== 'pending') {
-      return res.status(400).json({ status: false, message: `Leave is already ${leave.status}` });
-    }
-
     // Validate Headmaster authorization for this VT
     const authError = await _validateVtBelongsToHeadmaster(leave.user_id, reviewer);
     if (authError) {
@@ -227,6 +233,11 @@ const approveRejectLeave = async (req, res) => {
 
     // Update leave status first (primary action — never blocks on balance issues)
     const updated = await Leave.updateStatus(leaveId, { status, reviewerId: reviewer.id, remarks });
+
+    if (leave.leave_approved && !updated.leave_approved) {
+      const LeaveBalance = require('../models/LeaveBalance');
+      await LeaveBalance.refundLeave(leaveId, leave.user_id);
+    }
 
     // On final approval, attempt EL deduction (non-blocking — logs failure but doesn't fail approval)
     let deductionInfo = null;
@@ -260,6 +271,12 @@ const approveRejectLeave = async (req, res) => {
         console.error(`[Leave ${leaveId}] Deduction error (approval still succeeded):`, e.message);
         deductionInfo = { success: false, message: e.message };
       }
+
+      try {
+        await Leave.reconcileApprovedAttendance(updated);
+      } catch (attendanceError) {
+        console.error(`[Leave ${leaveId}] Attendance reconciliation error:`, attendanceError.message);
+      }
     }
 
     return res.status(200).json({
@@ -279,7 +296,7 @@ const approveRejectLeave = async (req, res) => {
 const updateLeave = async (req, res) => {
   const userId = req.user.id;
   const leaveId = req.params.id;
-  let { from_date, to_date, reason, leave_type } = req.body;
+  let { from_date, to_date, reason } = req.body;
 
   try {
     const leave = await Leave.findById(leaveId);
@@ -293,10 +310,6 @@ const updateLeave = async (req, res) => {
 
     if (leave.status !== 'pending') {
       return res.status(400).json({ status: false, message: 'You cannot edit a leave request that has already been approved or rejected.' });
-    }
-
-    if (leave_type && !['full-day', 'first-half', 'second-half'].includes(leave_type)) {
-      return res.status(400).json({ status: false, message: "leave_type must be 'full-day', 'first-half', or 'second-half'." });
     }
 
     if (from_date) from_date = parseDateStr(from_date);
@@ -320,7 +333,7 @@ const updateLeave = async (req, res) => {
       // }
     }
 
-    const updated = await Leave.update(leaveId, { from_date, to_date, reason, leave_type });
+    const updated = await Leave.update(leaveId, { from_date, to_date, reason });
     return res.status(200).json({ status: true, message: 'Leave request updated.', data: updated });
   } catch (error) {
     return res.status(500).json({ status: false, message: error.message });
@@ -351,6 +364,74 @@ const deleteLeave = async (req, res) => {
     return res.status(200).json({ status: true, message: 'Leave request deleted successfully.' });
   } catch (error) {
     return res.status(500).json({ status: false, message: error.message });
+  }
+};
+
+// VT requests cancellation of today's portion of a fully-approved leave.
+const applyLeaveCancellation = async (req, res) => {
+  const userId = Number.parseInt(req.body?.user_id, 10);
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  const today = getISTDate();
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ status: false, message: 'A valid user_id is required.' });
+  }
+  if (userId !== req.user.id) {
+    return res.status(403).json({ status: false, message: 'You can only cancel your own leave.' });
+  }
+  if (!reason) return res.status(400).json({ status: false, message: 'Reason is required.' });
+  if (reason.length > 1000) return res.status(400).json({ status: false, message: 'Reason cannot exceed 1000 characters.' });
+
+  try {
+    const leaveResult = await pool.query(`
+      SELECT id, user_id, from_date::text AS from_date, to_date::text AS to_date, leave_approved
+      FROM leave_requests
+      WHERE user_id = $1 AND leave_approved = TRUE
+        AND $2::date BETWEEN from_date AND to_date
+      ORDER BY created_at DESC
+    `, [userId, today]);
+    if (leaveResult.rows.length === 0) {
+      return res.status(404).json({ status: false, message: 'No fully approved leave found for today.' });
+    }
+    if (leaveResult.rows.length > 1) {
+      return res.status(409).json({ status: false, message: 'Multiple approved leaves found for today. Contact administrator.' });
+    }
+    const leave = leaveResult.rows[0];
+    const leaveId = leave.id;
+    const attendance = await pool.query(
+      'SELECT id, status, check_in_time, check_out_time FROM attendance_records WHERE user_id = $1 AND date = $2 LIMIT 1',
+      [userId, today]
+    );
+    const hasActualAttendance = attendance.rows.some((record) => (
+      record.status !== 'on_leave' || record.check_in_time || record.check_out_time
+    ));
+    if (hasActualAttendance) {
+      return res.status(409).json({ status: false, message: 'Attendance is already marked for today.' });
+    }
+
+    const result = await pool.query(`
+      INSERT INTO leave_cancellation_requests (leave_request_id, user_id, cancel_date, reason)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (leave_request_id, cancel_date) DO NOTHING
+      RETURNING *
+    `, [leaveId, userId, today, reason]);
+    if (!result.rows.length) {
+      return res.status(409).json({ status: false, message: 'A cancellation request already exists for this leave and date.' });
+    }
+    return res.status(201).json({
+      status: true,
+      message: 'Leave cancellation request submitted successfully.',
+      data: {
+        cancellation_request_id: result.rows[0].id,
+        leave_id: leaveId,
+        user_id: userId,
+        cancel_date: today,
+        status: 'pending',
+      },
+    });
+  } catch (error) {
+    console.error('Apply leave cancellation error:', error.message);
+    return res.status(500).json({ status: false, message: 'Unable to submit leave cancellation request.' });
   }
 };
 
@@ -501,6 +582,7 @@ module.exports = {
   approveRejectLeave,
   updateLeave,
   deleteLeave,
+  applyLeaveCancellation,
   getLeaveReport,
   downloadMonthlyAttendance,
   applyOnDuty,

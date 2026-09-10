@@ -2,18 +2,49 @@ const express = require('express');
 const router = express.Router();
 const {
   getVtpScopedVts,
+  getVtStaffOptions,
+  getVtpStaffList,
+  getVtpDashboardCounts,
+  getVtpSchools,
+  getVtpSchoolOptions,
+  getVtpTrades,
+  getVtStaffById,
+  createVtStaff,
+  updateVtStaff,
+  deleteVtStaff,
   approveVtByVtp,
   rejectVtByVtp,
   getVtpScopedLeaves,
   approveLeaveByVtp,
-  rejectLeaveByVtp
+  rejectLeaveByVtp,
+  approveLeaveCancellationByVtp,
+  getVtMobileUpdateRequests,
+  updateVtMobileRequestStatus,
 } = require('../controllers/vtpApprovalController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
+const vtpAttendance = require('../controllers/attendanceStatusController').createAttendanceStatusHandlers('vtp');
 
 router.use(authenticate);
+router.get('/attendance-status', authorize('vt:approve_vtp'), vtpAttendance.getStatus);
+router.get('/attendance-status/vts', authorize('vt:approve_vtp'), vtpAttendance.getVts);
+router.get('/attendance-status/options', authorize('vt:approve_vtp'), vtpAttendance.getOptions);
 
 // VTP & admin — view VTs scoped to their organization (?status=all|pending|accepted|rejected)
 router.get('/vts', authorize('vt:approve_vtp'), getVtpScopedVts);
+router.get('/dashboard/counts', authorize('vt:approve_vtp'), getVtpDashboardCounts);
+router.get('/schools/options', authorize('vt:approve_vtp'), getVtpSchoolOptions);
+router.get('/schools', authorize('vt:approve_vtp'), getVtpSchools);
+router.get('/trades', authorize('vt:approve_vtp'), getVtpTrades);
+
+// VTP-scoped VT master CRUD and cascading form options
+router.get('/vt-staff/options', authorize('vt:approve_vtp'), getVtStaffOptions);
+router.get('/vt-staff', authorize('vt:approve_vtp'), getVtpStaffList);
+router.get('/vt-staff/:staffId', authorize('vt:approve_vtp'), getVtStaffById);
+router.post('/vt-staff', authorize('vt:approve_vtp'), createVtStaff);
+router.patch('/vt-staff/:staffId', authorize('vt:approve_vtp'), updateVtStaff);
+router.delete('/vt-staff/:staffId', authorize('vt:approve_vtp'), deleteVtStaff);
+router.get('/vt-mobile-update-requests', authorize('vt:approve_vtp'), getVtMobileUpdateRequests);
+router.patch('/vt-mobile-update-requests/:staffId/status', authorize('vt:approve_vtp'), updateVtMobileRequestStatus);
 
 // VTP & admin — approve a VT (VTP layer)
 router.patch('/:userId/approve', authorize('vt:approve_vtp'), approveVtByVtp);
@@ -31,5 +62,6 @@ router.patch('/leave/:leaveId/approve', authorize('vt:approve_vtp'), approveLeav
 
 // VTP — reject a leave request
 router.patch('/leave/:leaveId/reject', authorize('vt:approve_vtp'), rejectLeaveByVtp);
+router.patch('/leave-cancellation/:cancellationRequestId/approve', authorize('vt:approve_vtp'), approveLeaveCancellationByVtp);
 
 module.exports = router;

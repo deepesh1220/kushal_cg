@@ -129,13 +129,23 @@ class Report {
 
     // 3. Fetch Leaves
     const leaveResult = await pool.query(`
-      SELECT user_id, from_date, to_date
+      SELECT id, user_id, from_date, to_date
       FROM leave_requests
       WHERE user_id = ANY($1)
-      AND status = 'approved'
+      AND leave_approved = TRUE
       AND from_date <= $3
       AND to_date >= $2
     `, [userIds, startDate.format("YYYY-MM-DD"), endDate.format("YYYY-MM-DD")]);
+
+    const cancellationResult = await pool.query(`
+      SELECT leave_request_id, cancel_date
+      FROM leave_cancellation_requests
+      WHERE user_id = ANY($1) AND status = 'approved'
+        AND cancel_date BETWEEN $2 AND $3
+    `, [userIds, startDate.format("YYYY-MM-DD"), endDate.format("YYYY-MM-DD")]);
+    const cancelledLeaveDates = new Set(cancellationResult.rows.map(
+      (row) => `${row.leave_request_id}:${dayjs(row.cancel_date).format("YYYY-MM-DD")}`
+    ));
 
     const leaveMap = {}; // { userId: Set(dates) }
     leaveResult.rows.forEach(l => {
@@ -145,7 +155,8 @@ class Report {
       let current = dayjs(l.from_date);
       const end = dayjs(l.to_date);
       while (current.isBefore(end) || current.isSame(end)) {
-        leaveMap[uId].add(current.format("YYYY-MM-DD"));
+        const date = current.format("YYYY-MM-DD");
+        if (!cancelledLeaveDates.has(`${l.id}:${date}`)) leaveMap[uId].add(date);
         current = current.add(1, "day");
       }
     });
@@ -240,6 +251,30 @@ class Report {
 
     const today = dayjs();
 
+    const userResult = await pool.query(
+      `
+      SELECT
+        u.id,
+        u.name,
+        COALESCE(v.vt_email, u.email) AS email,
+        COALESCE(v.udise_code, u.udise_code) AS udise_code,
+        v.district_name,
+        v.block_name,
+        v.trade,
+        v.vtp_name
+      FROM users u
+      LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
+      WHERE u.id = $1
+      `,
+      [userId]
+    );
+
+    if (userResult.rows.length === 0) {
+      throw new Error("User not found");
+    }
+
+    const user = userResult.rows[0];
+
     // 🔴 Prevent future month
     if (startDate.isAfter(today, "month")) {
       throw new Error("Future month not allowed");
@@ -272,15 +307,25 @@ class Report {
     // ─────────── Fetch leaves ───────────
     const leaveResult = await pool.query(
       `
-      SELECT from_date, to_date
+      SELECT id, from_date, to_date
       FROM leave_requests
       WHERE user_id = $1
-      AND status = 'approved'
+      AND leave_approved = TRUE
       AND from_date <= $3
       AND to_date >= $2
     `,
       [userId, startDate.format("YYYY-MM-DD"), endDate.format("YYYY-MM-DD")]
     );
+
+    const cancellationResult = await pool.query(`
+      SELECT leave_request_id, cancel_date
+      FROM leave_cancellation_requests
+      WHERE user_id = $1 AND status = 'approved'
+        AND cancel_date BETWEEN $2 AND $3
+    `, [userId, startDate.format("YYYY-MM-DD"), endDate.format("YYYY-MM-DD")]);
+    const cancelledLeaveDates = new Set(cancellationResult.rows.map(
+      (row) => `${row.leave_request_id}:${dayjs(row.cancel_date).format("YYYY-MM-DD")}`
+    ));
 
     // Expand leave dates
     const leaveSet = new Set();
@@ -290,7 +335,8 @@ class Report {
       const end = dayjs(leave.to_date);
 
       while (current.isBefore(end) || current.isSame(end)) {
-        leaveSet.add(current.format("YYYY-MM-DD"));
+        const date = current.format("YYYY-MM-DD");
+        if (!cancelledLeaveDates.has(`${leave.id}:${date}`)) leaveSet.add(date);
         current = current.add(1, "day");
       }
     });
@@ -312,6 +358,13 @@ class Report {
 
     return {
       userId,
+      employeeName: user.name,
+      employeeEmail: user.email,
+      udiseCode: user.udise_code,
+      districtName: user.district_name,
+      blockName: user.block_name,
+      trade: user.trade,
+      vtpName: user.vtp_name,
       month,
       totalDays: lastDay,
       attendance: attendanceMap,

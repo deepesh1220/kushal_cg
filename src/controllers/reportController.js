@@ -2,6 +2,7 @@ const Report = require('../models/Report');
 const { sendExcel, sendPDF, sendNSQFPdf } = require('../utils/export.utile');
 const { pool } = require('../config/db');
 const dayjs = require('dayjs');
+const ExcelJS = require('exceljs');
 
 // ─── Internal: fetch DEO profile by logged-in user ────────────────────────────
 const _getDeoProfile = async (user) => {
@@ -32,7 +33,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
 
   // VT details
   const vtRow = await pool.query(
-    `SELECT u.id, u.name, u.email, u.phone, u.udise_code,
+    `SELECT u.id, u.name, u.email, u.phone, COALESCE(u.udise_code, v.udise_code) AS udise_code,
             v.vt_name, v.vt_mob, v.vt_email, v.trade, v.vtp_name,
             v.school_name, v.district_name, v.block_name, s.cluster_name
      FROM users u
@@ -66,17 +67,27 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
   const startOfMonth = `${year}-${String(month).padStart(2, '0')}-01`;
   const endOfMonth = `${year}-${String(month).padStart(2, '0')}-${String(totalDays).padStart(2, '0')}`;
   const leaveRows = await pool.query(
-    `SELECT from_date, to_date FROM leave_requests
+    `SELECT id, from_date, to_date FROM leave_requests
      WHERE user_id = $1 AND leave_approved = TRUE
        AND from_date <= $2 AND to_date >= $3`,
     [vtUserId, endOfMonth, startOfMonth]
   );
+  const cancellationRows = await pool.query(
+    `SELECT leave_request_id, cancel_date FROM leave_cancellation_requests
+     WHERE user_id = $1 AND status = 'approved'
+       AND cancel_date BETWEEN $2 AND $3`,
+    [vtUserId, startOfMonth, endOfMonth]
+  );
+  const cancelledLeaveDates = new Set(cancellationRows.rows.map(
+    (row) => `${row.leave_request_id}:${dayjs(row.cancel_date).format('YYYY-MM-DD')}`
+  ));
   const fullMonthLeaveDates = new Set();
   leaveRows.rows.forEach(l => {
     let cur = dayjs(l.from_date);
     const end = dayjs(l.to_date);
     while (!cur.isAfter(end)) {
-      fullMonthLeaveDates.add(cur.date());
+      const date = cur.format('YYYY-MM-DD');
+      if (!cancelledLeaveDates.has(`${l.id}:${date}`)) fullMonthLeaveDates.add(cur.date());
       cur = cur.add(1, 'day');
     }
   });
@@ -133,11 +144,49 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
   const fyStartYear = month >= 4 ? year : year - 1;
   const fyLabel = `April ${fyStartYear} to March ${fyStartYear + 1}`;
 
-  // Full leave balance for this calendar year
+  // Cumulative approved leave used from the start of the financial session
+  // through this report's effective end date. Approved cancellation dates do
+  // not count, and half-day leave contributes 0.5.
+  const sessionStart = `${fyStartYear}-04-01`;
+  const reportMonthEnd = dayjs(`${year}-${String(month).padStart(2, '0')}-01`).endOf('month');
+  const sessionEnd = reportMonthEnd.isAfter(dayjs(), 'day') ? dayjs().format('YYYY-MM-DD') : reportMonthEnd.format('YYYY-MM-DD');
+  const sessionLeaveRows = await pool.query(
+    `SELECT id, from_date, to_date, leave_type FROM leave_requests
+     WHERE user_id = $1 AND leave_approved = TRUE
+       AND leave_type NOT IN ('od', 'regularization')
+       AND from_date <= $2 AND to_date >= $3`,
+    [vtUserId, sessionEnd, sessionStart]
+  );
+  const sessionCancellationRows = await pool.query(
+    `SELECT leave_request_id, cancel_date FROM leave_cancellation_requests
+     WHERE user_id = $1 AND status = 'approved'
+       AND cancel_date BETWEEN $2 AND $3`,
+    [vtUserId, sessionStart, sessionEnd]
+  );
+  const sessionCancelledDates = new Set(sessionCancellationRows.rows.map(
+    (row) => `${row.leave_request_id}:${dayjs(row.cancel_date).format('YYYY-MM-DD')}`
+  ));
+  const sessionLeaveByDate = new Map();
+  sessionLeaveRows.rows.forEach((leave) => {
+    let cursor = dayjs(leave.from_date).isBefore(dayjs(sessionStart), 'day') ? dayjs(sessionStart) : dayjs(leave.from_date);
+    const rawEnd = dayjs(leave.to_date);
+    const effectiveEnd = rawEnd.isAfter(dayjs(sessionEnd), 'day') ? dayjs(sessionEnd) : rawEnd;
+    const value = ['first-half', 'second-half'].includes(leave.leave_type) ? 0.5 : 1;
+    while (!cursor.isAfter(effectiveEnd, 'day')) {
+      const date = cursor.format('YYYY-MM-DD');
+      if (!sessionCancelledDates.has(`${leave.id}:${date}`)) {
+        sessionLeaveByDate.set(date, Math.max(sessionLeaveByDate.get(date) || 0, value));
+      }
+      cursor = cursor.add(1, 'day');
+    }
+  });
+  const sessionLeavesTaken = [...sessionLeaveByDate.values()].reduce((sum, value) => sum + value, 0);
+
+  // Leave balances are keyed by the starting year of the April-March session.
   const lb = await pool.query(
     `SELECT opening_balance, total_earned, total_used, remaining_balance, carried_forward
      FROM leave_balance WHERE user_id = $1 AND year = $2 LIMIT 1`,
-    [vtUserId, year]
+    [vtUserId, fyStartYear]
   );
   const leaveBalance = lb.rows[0] || {};
 
@@ -145,7 +194,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
   const excessRow = await pool.query(
     `SELECT COALESCE(SUM(excess_leave), 0) AS total_excess
      FROM leave_excess_records WHERE user_id = $1 AND year = $2`,
-    [vtUserId, year]
+    [vtUserId, fyStartYear]
   );
   const excessLeave = parseFloat(excessRow.rows[0]?.total_excess || 0);
 
@@ -159,6 +208,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
       udise_code: vtDetails.udise_code || '',
       district_name: vtDetails.district_name || '',
       block_name: vtDetails.block_name || '',
+      cluster_name: vtDetails.cluster_name || '',
     },
     attendance,
     summary: { totalPresent, totalAbsent, totalHolidays, totalSundays, totalLeaves, totalSchoolHolidays },
@@ -170,6 +220,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
       remainingLeave: parseFloat(leaveBalance.remaining_balance || 0),
       carriedForward: parseFloat(leaveBalance.carried_forward || 0),
       excessLeaveTaken: excessLeave,
+      sessionLeavesTaken,
     },
     month,
     year,
@@ -348,7 +399,8 @@ const downloadVtMonthlyReportPdf = async (req, res) => {
     const approvalRow = await pool.query(
       `SELECT is_locked, hm_approval_status, hm_approved_at,
               deo_approval_status, deo_approved_at,
-              vtp_approval_status, vtp_approved_at
+              vtp_approval_status, vtp_approved_at,
+              hm_approval_type, deo_approval_type, vtp_approval_type
        FROM monthly_school_reports
        WHERE user_id = $1 AND report_month = $2 AND report_year = $3 LIMIT 1`,
       [user_id, monthInt, yearInt]
@@ -375,14 +427,220 @@ const downloadVtMonthlyReportPdf = async (req, res) => {
     }
 
     snapshotData.approvals = {
-      hm: { status: ar.hm_approval_status || 'pending', approvedAt: ar.hm_approved_at || null },
-      deo: { status: ar.deo_approval_status || 'pending', approvedAt: ar.deo_approved_at || null },
-      vtp: { status: ar.vtp_approval_status || 'pending', approvedAt: ar.vtp_approved_at || null },
+      hm: { status: ar.hm_approval_status || 'pending', approvedAt: ar.hm_approved_at || null, type: ar.hm_approval_type || null },
+      deo: { status: ar.deo_approval_status || 'pending', approvedAt: ar.deo_approved_at || null, type: ar.deo_approval_type || null },
+      vtp: { status: ar.vtp_approval_status || 'pending', approvedAt: ar.vtp_approved_at || null, type: ar.vtp_approval_type || null },
     };
 
     return sendNSQFPdf(snapshotData, res);
   } catch (err) {
     console.error('downloadVtMonthlyReportPdf error:', err.message);
+    return res.status(500).json({ status: false, message: err.message });
+  }
+};
+
+// GET /api/reports/download-vtp-vt-excel?month=&year=
+// Exports every active VT belonging to the logged-in VTP. Scope is always
+// derived from the authenticated account; client-provided VTP/user IDs are ignored.
+const downloadVtpVtMonthlyExcel = async (req, res) => {
+  try {
+    const monthInt = Number.parseInt(req.query.month, 10);
+    const yearInt = Number.parseInt(req.query.year, 10);
+    if (!Number.isInteger(monthInt) || monthInt < 1 || monthInt > 12
+      || !Number.isInteger(yearInt) || yearInt < 2000 || yearInt > 2100) {
+      return res.status(400).json({ status: false, message: 'A valid month (1-12) and year are required.' });
+    }
+    if (req.user.role_name !== 'vocational_teacher_provider') {
+      return res.status(403).json({ status: false, message: 'Only VTP users can export this report.' });
+    }
+
+    const params = [];
+    let scopeWhere;
+    if (req.user.vtp_id) {
+      params.push(String(req.user.vtp_id).trim());
+      scopeWhere = `COALESCE(NULLIF(TRIM(CAST(u.vtp_id AS TEXT)), ''), TRIM(CAST(v.vtp_id AS TEXT))) = $1`;
+    } else if (req.user.organization_name) {
+      params.push(String(req.user.organization_name).trim());
+      scopeWhere = `TRIM(v.vtp_name) ILIKE $1`;
+    } else {
+      return res.status(400).json({ status: false, message: 'Your account is not linked to a VTP.' });
+    }
+
+    const vtResult = await pool.query(`
+      SELECT u.id
+      FROM users u
+      JOIN roles r ON r.id = u.role_id AND r.name = 'vocational_teacher'
+      JOIN vt_staff_details v ON v.id = u.vt_staff_id
+      WHERE u.is_active = TRUE AND ${scopeWhere}
+      ORDER BY v.school_name, v.vt_name
+    `, params);
+    if (!vtResult.rows.length) {
+      return res.status(404).json({ status: false, message: 'No Vocational Teachers found for the selected VTP.' });
+    }
+
+    // Keep DB load bounded while reusing the exact per-VT calculation used by the PDF.
+    const snapshots = [];
+    const concurrency = 8;
+    for (let index = 0; index < vtResult.rows.length; index += concurrency) {
+      const chunk = vtResult.rows.slice(index, index + concurrency);
+      const results = await Promise.all(chunk.map(({ id }) => _buildSnapshotData(id, monthInt, yearInt)));
+      snapshots.push(...results);
+    }
+
+    const monthName = new Date(yearInt, monthInt - 1, 1).toLocaleString('en-IN', { month: 'long' });
+    const totalDays = new Date(yearInt, monthInt, 0).getDate();
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Kushal Panel';
+    workbook.created = new Date();
+    const worksheet = workbook.addWorksheet('VT Monthly Attendance', {
+      views: [{ state: 'frozen', ySplit: 1 }],
+    });
+    worksheet.columns = [
+      { header: 'Sr. No.', key: 'serial', width: 10 },
+      { header: 'UDISE', key: 'udise', width: 18 },
+      { header: 'Schools', key: 'school', width: 34 },
+      { header: 'Block', key: 'block', width: 22 },
+      { header: 'Cluster', key: 'cluster', width: 22 },
+      { header: 'VT Name', key: 'vtName', width: 25 },
+      { header: 'Mobile', key: 'mobile', width: 16 },
+      { header: 'VTP Name', key: 'vtpName', width: 30 },
+      { header: 'Trade Name', key: 'trade', width: 24 },
+      { header: 'Month/Year', key: 'period', width: 18 },
+      { header: 'Total Days', key: 'totalDays', width: 13 },
+      { header: 'Total Present', key: 'present', width: 15 },
+      { header: 'Total Absent', key: 'absent', width: 14 },
+      { header: 'Total Leaves', key: 'leaves', width: 14 },
+      { header: 'Govt Holidays', key: 'govtHolidays', width: 15 },
+      { header: 'Total Sundays', key: 'sundays', width: 15 },
+      { header: 'School Holidays', key: 'schoolHolidays', width: 16 },
+    ];
+
+    snapshots.forEach((snapshot, index) => {
+      const details = snapshot.vtDetails || {};
+      const summary = snapshot.summary || {};
+      worksheet.addRow({
+        serial: index + 1, udise: String(details.udise_code || ''), school: details.school_name || '',
+        block: details.block_name || '', cluster: details.cluster_name || '',
+        vtName: details.vt_name || '', mobile: String(details.vt_mob || ''), vtpName: details.vtp_name || '',
+        trade: details.trade || '', period: `${monthName} ${yearInt}`, totalDays,
+        present: summary.totalPresent || 0, absent: summary.totalAbsent || 0, leaves: summary.totalLeaves || 0,
+        govtHolidays: summary.totalHolidays || 0, sundays: summary.totalSundays || 0,
+        schoolHolidays: summary.totalSchoolHolidays || 0,
+      });
+    });
+
+    const header = worksheet.getRow(1);
+    header.height = 28;
+    header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    header.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+    header.eachCell(cell => { cell.border = { bottom: { style: 'thin', color: { argb: 'FFFFFFFF' } } }; });
+    worksheet.autoFilter = { from: 'A1', to: 'Q1' };
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber > 1 && rowNumber % 2 === 0) row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F6FA' } };
+      row.eachCell(cell => {
+        cell.alignment = { vertical: 'middle', wrapText: true };
+        cell.border = { top: { style: 'thin', color: { argb: 'FFD9E2F3' } }, bottom: { style: 'thin', color: { argb: 'FFD9E2F3' } }, left: { style: 'thin', color: { argb: 'FFD9E2F3' } }, right: { style: 'thin', color: { argb: 'FFD9E2F3' } } };
+      });
+    });
+
+    const fileName = `VTP_VT_Attendance_${monthName}_${yearInt}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    await workbook.xlsx.write(res);
+    return res.end();
+  } catch (err) {
+    console.error('downloadVtpVtMonthlyExcel error:', err.message);
+    if (res.headersSent) return res.end();
+    return res.status(500).json({ status: false, message: err.message });
+  }
+};
+
+const _streamMonthlyVtExcel = async ({ vtRows, month, year, prefix, res }) => {
+  const snapshots = [];
+  const concurrency = 8;
+  for (let index = 0; index < vtRows.length; index += concurrency) {
+    const chunk = vtRows.slice(index, index + concurrency);
+    snapshots.push(...await Promise.all(chunk.map(({ id }) => _buildSnapshotData(id, month, year))));
+  }
+  const monthName = new Date(year, month - 1, 1).toLocaleString('en-IN', { month: 'long' });
+  const totalDays = new Date(year, month, 0).getDate();
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Kushal Panel';
+  workbook.created = new Date();
+  const worksheet = workbook.addWorksheet('VT Monthly Attendance', { views: [{ state: 'frozen', ySplit: 1 }] });
+  worksheet.columns = [
+    { header: 'Sr. No.', key: 'serial', width: 10 }, { header: 'UDISE', key: 'udise', width: 18 },
+    { header: 'Schools', key: 'school', width: 34 }, { header: 'Block', key: 'block', width: 22 },
+    { header: 'Cluster', key: 'cluster', width: 22 }, { header: 'VT Name', key: 'vtName', width: 25 },
+    { header: 'Mobile', key: 'mobile', width: 16 }, { header: 'VTP Name', key: 'vtpName', width: 30 },
+    { header: 'Trade Name', key: 'trade', width: 24 }, { header: 'Month/Year', key: 'period', width: 18 },
+    { header: 'Total Days', key: 'totalDays', width: 13 }, { header: 'Total Present', key: 'present', width: 15 },
+    { header: 'Total Absent', key: 'absent', width: 14 }, { header: 'Total Leaves', key: 'leaves', width: 14 },
+    { header: 'Govt Holidays', key: 'govtHolidays', width: 15 }, { header: 'Total Sundays', key: 'sundays', width: 15 },
+    { header: 'School Holidays', key: 'schoolHolidays', width: 16 },
+  ];
+  snapshots.forEach((snapshot, index) => {
+    const details = snapshot.vtDetails || {};
+    const summary = snapshot.summary || {};
+    worksheet.addRow({
+      serial: index + 1, udise: String(details.udise_code || ''), school: details.school_name || '',
+      block: details.block_name || '', cluster: details.cluster_name || '', vtName: details.vt_name || '',
+      mobile: String(details.vt_mob || ''), vtpName: details.vtp_name || '', trade: details.trade || '',
+      period: `${monthName} ${year}`, totalDays, present: summary.totalPresent || 0,
+      absent: summary.totalAbsent || 0, leaves: summary.totalLeaves || 0,
+      govtHolidays: summary.totalHolidays || 0, sundays: summary.totalSundays || 0,
+      schoolHolidays: summary.totalSchoolHolidays || 0,
+    });
+  });
+  const header = worksheet.getRow(1);
+  header.height = 28;
+  header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  header.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+  worksheet.autoFilter = { from: 'A1', to: 'Q1' };
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber > 1 && rowNumber % 2 === 0) row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F6FA' } };
+    row.eachCell(cell => {
+      cell.alignment = { vertical: 'middle', wrapText: true };
+      cell.border = { top: { style: 'thin', color: { argb: 'FFD9E2F3' } }, bottom: { style: 'thin', color: { argb: 'FFD9E2F3' } }, left: { style: 'thin', color: { argb: 'FFD9E2F3' } }, right: { style: 'thin', color: { argb: 'FFD9E2F3' } } };
+    });
+  });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${prefix}_VT_Attendance_${monthName}_${year}.xlsx"`);
+  await workbook.xlsx.write(res);
+  return res.end();
+};
+
+// GET /api/reports/download-deo-vt-excel?month=&year=
+const downloadDeoVtMonthlyExcel = async (req, res) => {
+  try {
+    const month = Number.parseInt(req.query.month, 10);
+    const year = Number.parseInt(req.query.year, 10);
+    if (!Number.isInteger(month) || month < 1 || month > 12
+      || !Number.isInteger(year) || year < 2000 || year > 2100) {
+      return res.status(400).json({ status: false, message: 'A valid month (1-12) and year are required.' });
+    }
+    if (req.user.role_name !== 'deo') {
+      return res.status(403).json({ status: false, message: 'Only DEO users can export this report.' });
+    }
+    const deo = await _getDeoProfile(req.user);
+    if (!deo?.district_cd) return res.status(403).json({ status: false, message: 'DEO profile or district mapping not found.' });
+    const vtResult = await pool.query(`
+      SELECT u.id FROM users u
+      JOIN roles r ON r.id = u.role_id AND r.name = 'vocational_teacher'
+      JOIN vt_staff_details v ON v.id = u.vt_staff_id
+      JOIN mst_schools s ON s.udise_sch_code = v.udise_code
+      WHERE u.is_active = TRUE AND s.district_cd = $1
+      ORDER BY v.school_name, v.vt_name
+    `, [deo.district_cd]);
+    if (!vtResult.rows.length) {
+      return res.status(404).json({ status: false, message: 'No Vocational Teachers found for your district.' });
+    }
+    return _streamMonthlyVtExcel({ vtRows: vtResult.rows, month, year, prefix: 'DEO', res });
+  } catch (err) {
+    console.error('downloadDeoVtMonthlyExcel error:', err.message);
+    if (res.headersSent) return res.end();
     return res.status(500).json({ status: false, message: err.message });
   }
 };
@@ -500,6 +758,8 @@ const getMonthlyVtReportsList = async (req, res) => {
          COALESCE(msr.vtp_approval_status, 'pending') AS vtp_approval_status,
          msr.hm_remarks, msr.deo_remarks, msr.vtp_remarks,
          msr.hm_approved_at, msr.deo_approved_at, msr.vtp_approved_at,
+         msr.hm_approval_type, msr.deo_approval_type, msr.vtp_approval_type,
+         COALESCE(msr.is_auto_approved, FALSE) AS is_auto_approved,
          msr.is_locked,
          (snap.id IS NOT NULL) AS has_snapshot
        ${baseQuery}
@@ -611,6 +871,11 @@ const approveMonthlyReport = async (req, res) => {
   try {
     const { udise_code, vtUserId, month, year, status } = req.body;
     const remarks = typeof req.body?.remarks === 'string' ? req.body.remarks.trim() : '';
+    const parsedMonth = Number(month);
+    const parsedYear = Number(year);
+    const parsedVtUserId = vtUserId === undefined || vtUserId === null || vtUserId === ''
+      ? null
+      : Number(vtUserId);
     if (remarks.length > 1000) {
       return res.status(400).json({ status: false, message: 'Remarks cannot exceed 1000 characters.' });
     }
@@ -625,6 +890,15 @@ const approveMonthlyReport = async (req, res) => {
     if (!month || !year || !status) {
       return res.status(400).json({ status: false, message: 'month, year, and status are required.' });
     }
+    if (!Number.isInteger(parsedMonth) || parsedMonth < 1 || parsedMonth > 12) {
+      return res.status(400).json({ status: false, message: 'month must be an integer between 1 and 12.' });
+    }
+    if (!Number.isInteger(parsedYear) || parsedYear < 2000 || parsedYear > 2100) {
+      return res.status(400).json({ status: false, message: 'year must be an integer between 2000 and 2100.' });
+    }
+    if (parsedVtUserId !== null && (!Number.isInteger(parsedVtUserId) || parsedVtUserId <= 0)) {
+      return res.status(400).json({ status: false, message: 'vtUserId must be a positive integer.' });
+    }
     if (!udise_code && !vtUserId) {
       return res.status(400).json({ status: false, message: 'Either udise_code or vtUserId must be provided.' });
     }
@@ -633,28 +907,34 @@ const approveMonthlyReport = async (req, res) => {
     }
 
     // Map role → DB columns
-    let statusCol, remarksCol, approvedByCol, approvedAtCol;
+    let statusCol, remarksCol, approvedByCol, approvedAtCol, approvalTypeCol;
     if (role_name === 'headmaster') {
       statusCol = 'hm_approval_status'; remarksCol = 'hm_remarks';
       approvedByCol = 'hm_approved_by'; approvedAtCol = 'hm_approved_at';
+      approvalTypeCol = 'hm_approval_type';
     } else if (role_name === 'vocational_teacher_provider' || role_name === 'vtp') {
       statusCol = 'vtp_approval_status'; remarksCol = 'vtp_remarks';
       approvedByCol = 'vtp_approved_by'; approvedAtCol = 'vtp_approved_at';
+      approvalTypeCol = 'vtp_approval_type';
     } else if (role_name === 'deo') {
       statusCol = 'deo_approval_status'; remarksCol = 'deo_remarks';
       approvedByCol = 'deo_approved_by'; approvedAtCol = 'deo_approved_at';
+      approvalTypeCol = 'deo_approval_type';
     } else if (['admin', 'super_admin'].includes(role_name)) {
       // Admin must specify which layer via an optional 'layer' body field
       const layer = req.body.layer || 'hm';
       if (layer === 'deo') {
         statusCol = 'deo_approval_status'; remarksCol = 'deo_remarks';
         approvedByCol = 'deo_approved_by'; approvedAtCol = 'deo_approved_at';
+        approvalTypeCol = 'deo_approval_type';
       } else if (layer === 'vtp') {
         statusCol = 'vtp_approval_status'; remarksCol = 'vtp_remarks';
         approvedByCol = 'vtp_approved_by'; approvedAtCol = 'vtp_approved_at';
+        approvalTypeCol = 'vtp_approval_type';
       } else {
         statusCol = 'hm_approval_status'; remarksCol = 'hm_remarks';
         approvedByCol = 'hm_approved_by'; approvedAtCol = 'hm_approved_at';
+        approvalTypeCol = 'hm_approval_type';
       }
     } else {
       return res.status(403).json({ status: false, message: `Role '${role_name}' is not authorized to approve monthly reports.` });
@@ -664,22 +944,41 @@ const approveMonthlyReport = async (req, res) => {
     let userIdsToApprove = [];
     let queryUdiseCode = udise_code;
 
-    if (vtUserId) {
-      userIdsToApprove.push(vtUserId);
-      if (!udise_code) {
-        const ur = await pool.query('SELECT udise_code FROM users WHERE id = $1', [vtUserId]);
-        if (!ur.rows.length) return res.status(404).json({ status: false, message: 'VT user not found.' });
-        queryUdiseCode = ur.rows[0].udise_code;
-      }
+    if (parsedVtUserId) {
+      const ur = await pool.query(
+        `SELECT u.id, COALESCE(v.udise_code, u.udise_code) AS udise_code
+         FROM users u
+         JOIN roles r ON r.id = u.role_id AND r.name = 'vocational_teacher'
+         LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
+         WHERE u.id = $1 AND u.is_active = TRUE`,
+        [parsedVtUserId]
+      );
+      if (!ur.rows.length) return res.status(404).json({ status: false, message: 'Active VT user not found.' });
+      userIdsToApprove.push(parsedVtUserId);
+      queryUdiseCode = ur.rows[0].udise_code;
     } else if (udise_code) {
       const ur = await pool.query(
-        `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id
-         WHERE u.udise_code = $1 AND r.name = 'vocational_teacher'`,
+        `SELECT u.id FROM users u
+         JOIN roles r ON u.role_id = r.id AND r.name = 'vocational_teacher'
+         LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
+         WHERE COALESCE(v.udise_code, u.udise_code)::text = $1::text
+           AND u.is_active = TRUE`,
         [udise_code]
       );
       userIdsToApprove = ur.rows.map(r => r.id);
       if (!userIdsToApprove.length) {
         return res.status(404).json({ status: false, message: 'No VTs found for this school.' });
+      }
+    }
+
+    // A headmaster may only update reports belonging to their own mapped school.
+    if (role_name === 'headmaster') {
+      const hmUdiseCode = String(req.user.udise_code || '').trim();
+      if (!hmUdiseCode) {
+        return res.status(400).json({ status: false, message: 'Your account is not linked to a school UDISE.' });
+      }
+      if (!queryUdiseCode || String(queryUdiseCode).trim() !== hmUdiseCode) {
+        return res.status(403).json({ status: false, message: 'You can only update reports for VTs mapped to your school.' });
       }
     }
 
@@ -694,32 +993,13 @@ const approveMonthlyReport = async (req, res) => {
         const existing = await client.query(
           `SELECT hm_approval_status, deo_approval_status, vtp_approval_status, is_locked
            FROM monthly_school_reports WHERE user_id = $1 AND report_month = $2 AND report_year = $3`,
-          [uid, month, year]
+          [uid, parsedMonth, parsedYear]
         );
         const rec = existing.rows[0];
 
-        if (rec?.is_locked && status === 'approved') {
-          processedUsers.push({ user_id: uid, skipped: true, reason: 'Report already fully approved and locked.' });
-          continue;
-        }
-
-        if (role_name === 'deo' && rec?.hm_approval_status !== 'approved') {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            status: false,
-            message: `Report for user ${uid} has not been approved by Principal/HOS yet.`,
-          });
-        }
-
-        if ((role_name === 'vocational_teacher_provider' || role_name === 'vtp')) {
-          if (rec?.hm_approval_status !== 'approved') {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ status: false, message: 'Not approved by Principal/HOS yet.' });
-          }
-          if (rec?.deo_approval_status !== 'approved') {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ status: false, message: 'Not approved by DEO yet.' });
-          }
+        if ((role_name === 'vocational_teacher_provider' || role_name === 'vtp')
+          && (!rec || rec.hm_approval_status !== 'approved' || rec.deo_approval_status !== 'approved')) {
+          throw Object.assign(new Error('HM and DEO approval is required before VTP can approve or reject this report.'), { statusCode: 409 });
         }
 
         // ── Upsert report record ──────────────────────────────────────────────
@@ -727,9 +1007,11 @@ const approveMonthlyReport = async (req, res) => {
           const ins = await client.query(
             `INSERT INTO monthly_school_reports
                (udise_code, user_id, report_month, report_year,
-                ${statusCol}, ${remarksCol}, ${approvedByCol}, ${approvedAtCol}, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW()) RETURNING *`,
-            [queryUdiseCode, uid, month, year, status, remarks || '', req.user.id]
+                ${statusCol}, ${remarksCol}, ${approvedByCol}, ${approvedAtCol}, ${approvalTypeCol}, updated_at)
+             VALUES ($1, $2, $3, $4, $5::varchar, $6, $7, NOW(),
+                     CASE WHEN $5::varchar = 'pending' THEN NULL ELSE 'manual' END, NOW())
+             RETURNING *`,
+            [queryUdiseCode, uid, parsedMonth, parsedYear, status, remarks || '', req.user.id]
           );
           processedUsers.push(ins.rows[0]);
         } else {
@@ -741,15 +1023,16 @@ const approveMonthlyReport = async (req, res) => {
 
           const upd = await client.query(
             `UPDATE monthly_school_reports
-             SET ${statusCol}    = $1,
+             SET ${statusCol}    = $1::varchar,
                  ${remarksCol}   = $2,
                  ${approvedByCol}= $3,
                  ${approvedAtCol}= NOW(),
+                 ${approvalTypeCol}= CASE WHEN $1::varchar = 'pending' THEN NULL ELSE 'manual' END,
                  is_locked       = $4,
                  updated_at      = NOW()
              WHERE user_id = $5 AND report_month = $6 AND report_year = $7
              RETURNING *`,
-            [status, remarks || '', req.user.id, nowLocked, uid, month, year]
+            [status, remarks || '', req.user.id, nowLocked, uid, parsedMonth, parsedYear]
           );
           processedUsers.push(upd.rows[0]);
         }
@@ -770,7 +1053,10 @@ const approveMonthlyReport = async (req, res) => {
     });
   } catch (error) {
     console.error('approveMonthlyReport error:', error.message);
-    return res.status(500).json({ status: false, message: 'Server error updating report approval.' });
+    return res.status(error.statusCode || 500).json({
+      status: false,
+      message: error.statusCode ? error.message : 'Server error updating report approval.',
+    });
   }
 };
 
@@ -822,27 +1108,33 @@ const approveMonthlyReportBulk = async (req, res) => {
       return res.status(400).json({ status: false, message: 'Invalid status. Must be approved, rejected, or pending.' });
     }
 
-    let statusCol; let remarksCol; let approvedByCol; let approvedAtCol;
+    let statusCol; let remarksCol; let approvedByCol; let approvedAtCol; let approvalTypeCol;
     if (role_name === 'headmaster') {
       statusCol = 'hm_approval_status'; remarksCol = 'hm_remarks';
       approvedByCol = 'hm_approved_by'; approvedAtCol = 'hm_approved_at';
+      approvalTypeCol = 'hm_approval_type';
     } else if (role_name === 'vocational_teacher_provider' || role_name === 'vtp') {
       statusCol = 'vtp_approval_status'; remarksCol = 'vtp_remarks';
       approvedByCol = 'vtp_approved_by'; approvedAtCol = 'vtp_approved_at';
+      approvalTypeCol = 'vtp_approval_type';
     } else if (role_name === 'deo') {
       statusCol = 'deo_approval_status'; remarksCol = 'deo_remarks';
       approvedByCol = 'deo_approved_by'; approvedAtCol = 'deo_approved_at';
+      approvalTypeCol = 'deo_approval_type';
     } else if (['admin', 'super_admin'].includes(role_name)) {
       const layer = req.body.layer || 'hm';
       if (layer === 'deo') {
         statusCol = 'deo_approval_status'; remarksCol = 'deo_remarks';
         approvedByCol = 'deo_approved_by'; approvedAtCol = 'deo_approved_at';
+        approvalTypeCol = 'deo_approval_type';
       } else if (layer === 'vtp') {
         statusCol = 'vtp_approval_status'; remarksCol = 'vtp_remarks';
         approvedByCol = 'vtp_approved_by'; approvedAtCol = 'vtp_approved_at';
+        approvalTypeCol = 'vtp_approval_type';
       } else {
         statusCol = 'hm_approval_status'; remarksCol = 'hm_remarks';
         approvedByCol = 'hm_approved_by'; approvedAtCol = 'hm_approved_at';
+        approvalTypeCol = 'hm_approval_type';
       }
     } else {
       return res.status(403).json({ status: false, message: `Role '${role_name}' is not authorized to approve monthly reports.` });
@@ -907,38 +1199,24 @@ const approveMonthlyReportBulk = async (req, res) => {
         );
         const rec = existing.rows[0];
 
+        if ((role_name === 'vocational_teacher_provider' || role_name === 'vtp')
+          && (!rec || rec.hm_approval_status !== 'approved' || rec.deo_approval_status !== 'approved')) {
+          throw Object.assign(new Error('HM and DEO approval is required before VTP can approve or reject this report.'), { statusCode: 409 });
+        }
+
         if (rec && rec[statusCol] === status) {
           processedUsers.push({ user_id: uid, skipped: true, reason: `Already ${status}.` });
           continue;
-        }
-
-        if (rec?.is_locked && status === 'approved') {
-          processedUsers.push({ user_id: uid, skipped: true, reason: 'Report already fully approved and locked.' });
-          continue;
-        }
-
-        if (role_name === 'deo' && rec?.hm_approval_status !== 'approved') {
-          await client.query('ROLLBACK');
-          return res.status(400).json({ status: false, message: `School ${udiseCode} has VT report pending HOS approval.` });
-        }
-
-        if ((role_name === 'vocational_teacher_provider' || role_name === 'vtp')) {
-          if (rec?.hm_approval_status !== 'approved') {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ status: false, message: `School ${udiseCode} is pending HOS approval.` });
-          }
-          if (rec?.deo_approval_status !== 'approved') {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ status: false, message: `School ${udiseCode} is pending DEO approval.` });
-          }
         }
 
         if (!rec) {
           const ins = await client.query(
             `INSERT INTO monthly_school_reports
               (udise_code, user_id, report_month, report_year,
-               ${statusCol}, ${remarksCol}, ${approvedByCol}, ${approvedAtCol}, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW()) RETURNING *`,
+               ${statusCol}, ${remarksCol}, ${approvedByCol}, ${approvedAtCol}, ${approvalTypeCol}, updated_at)
+             VALUES ($1, $2, $3, $4, $5::varchar, $6, $7, NOW(),
+                     CASE WHEN $5::varchar = 'pending' THEN NULL ELSE 'manual' END, NOW())
+             RETURNING *`,
             [udiseCode, uid, monthInt, yearInt, status, remarks || '', req.user.id]
           );
           processedUsers.push(ins.rows[0]);
@@ -950,10 +1228,11 @@ const approveMonthlyReportBulk = async (req, res) => {
 
           const upd = await client.query(
             `UPDATE monthly_school_reports
-             SET ${statusCol} = $1,
+             SET ${statusCol} = $1::varchar,
                  ${remarksCol} = $2,
                  ${approvedByCol} = $3,
                  ${approvedAtCol} = NOW(),
+                 ${approvalTypeCol} = CASE WHEN $1::varchar = 'pending' THEN NULL ELSE 'manual' END,
                  is_locked = $4,
                  updated_at = NOW()
              WHERE user_id = $5 AND report_month = $6 AND report_year = $7
@@ -979,7 +1258,10 @@ const approveMonthlyReportBulk = async (req, res) => {
     });
   } catch (error) {
     console.error('approveMonthlyReportBulk error:', error.message);
-    return res.status(500).json({ status: false, message: 'Server error updating bulk report approval.' });
+    return res.status(error.statusCode || 500).json({
+      status: false,
+      message: error.statusCode ? error.message : 'Server error updating bulk report approval.',
+    });
   }
 };
 
@@ -1086,6 +1368,8 @@ module.exports = {
   approveMonthlyReportBulk,
   generateMonthlyVtReport,
   downloadVtMonthlyReportPdf,
+  downloadVtpVtMonthlyExcel,
+  downloadDeoVtMonthlyExcel,
   getMonthlyVtReportsList,
   getDashboardPendingCounts,
   getLocationMasterData,
