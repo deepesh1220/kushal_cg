@@ -63,7 +63,10 @@ const validateVtRegistrationLocation = async ({ phone, latitude, longitude, isFa
   }
   const vtStaff = await VtStaffDetail.findByMobile(phone);
   if (!vtStaff) {
-    return { httpStatus: 404, body: { status: false, code: 'VT_NOT_FOUND', message: 'Your mobile number is not found in the approved Vocational Teacher list.' } };
+    return { httpStatus: 404, body: { status: false, code: 'VT_NOT_FOUND', message: 'Your mobile number is not found in the approved Vocational Trainer list.' } };
+  }
+  if (vtStaff.is_active === false) {
+    return { httpStatus: 403, body: { status: false, code: 'VT_INACTIVE', message: 'Your Vocational Trainer profile is inactive. Contact your VTP.' } };
   }
   if (!vtStaff.udise_code) {
     return { httpStatus: 400, body: { status: false, code: 'UDISE_NOT_MAPPED', message: 'Your school UDISE code is not mapped. Contact administrator.' } };
@@ -159,7 +162,7 @@ const register = async (req, res) => {
       if (!phone) {
         return res.status(400).json({
           status: false,
-          message: 'Mobile number (vt_mob) is required for Vocational Teacher registration.',
+          message: 'Mobile number (vt_mob) is required for Vocational Trainer registration.',
         });
       }
 
@@ -168,7 +171,7 @@ const register = async (req, res) => {
       if (!vtStaff) {
         return res.status(403).json({
           status: false,
-          message: 'Registration not allowed. Your mobile number is not found in the approved Vocational Teacher list.',
+          message: 'Registration not allowed. Your mobile number is not found in the approved Vocational Trainer list.',
         });
       }
 

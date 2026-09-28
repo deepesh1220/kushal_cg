@@ -11,6 +11,7 @@ const {
   getVtStaffById,
   createVtStaff,
   updateVtStaff,
+  updateVtStaffStatus,
   deleteVtStaff,
   approveVtByVtp,
   rejectVtByVtp,
@@ -42,6 +43,7 @@ router.get('/vt-staff', authorize('vt:approve_vtp'), getVtpStaffList);
 router.get('/vt-staff/:staffId', authorize('vt:approve_vtp'), getVtStaffById);
 router.post('/vt-staff', authorize('vt:approve_vtp'), createVtStaff);
 router.patch('/vt-staff/:staffId', authorize('vt:approve_vtp'), updateVtStaff);
+router.patch('/vt-staff/:staffId/status', authorize('vt:approve_vtp'), updateVtStaffStatus);
 router.delete('/vt-staff/:staffId', authorize('vt:approve_vtp'), deleteVtStaff);
 router.get('/vt-mobile-update-requests', authorize('vt:approve_vtp'), getVtMobileUpdateRequests);
 router.patch('/vt-mobile-update-requests/:staffId/status', authorize('vt:approve_vtp'), updateVtMobileRequestStatus);

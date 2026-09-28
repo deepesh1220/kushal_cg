@@ -64,7 +64,7 @@ const getSchoolsAndVts = async (req, res) => {
       return res.status(200).json({
         status: true,
         data: [],
-        counts: { schools: 0, vts: 0, vtps: 0 },
+        counts: { schools: 0, vts: 0, vtps: 0, trades: 0 },
         message: 'No schools found for this district.',
       });
     }
@@ -114,6 +114,7 @@ const getSchoolsAndVts = async (req, res) => {
       .filter((school) => (vtUserId ? school.vts.length > 0 : true));
 
     const uniqueVtps = new Set(vts.filter((vt) => vt.vtp_name).map((vt) => vt.vtp_name));
+    const uniqueTrades = new Set(vts.filter((vt) => vt.trade?.trim()).map((vt) => vt.trade.trim().toLowerCase()));
 
     return res.status(200).json({
       status: true,
@@ -126,6 +127,7 @@ const getSchoolsAndVts = async (req, res) => {
         schools: schoolsWithVts.length,
         vts: vts.length,
         vtps: uniqueVtps.size,
+        trades: uniqueTrades.size,
       },
       data: schoolsWithVts,
     });
@@ -484,9 +486,9 @@ const getDistrictVtpList = async (req, res) => {
         SELECT
           m.vtp_id,
           m.vtp_name,
-          MAX(p.vc_name) AS vc_name,
-          MAX(p.email) AS email,
-          MAX(p.mobile) AS mobile,
+          STRING_AGG(DISTINCT NULLIF(TRIM(p.vc_name), ''), ', ' ORDER BY NULLIF(TRIM(p.vc_name), '')) AS vc_name,
+          STRING_AGG(DISTINCT NULLIF(TRIM(p.email), ''), ', ' ORDER BY NULLIF(TRIM(p.email), '')) AS email,
+          STRING_AGG(DISTINCT NULLIF(TRIM(CAST(p.mobile AS TEXT)), ''), ', ' ORDER BY NULLIF(TRIM(CAST(p.mobile AS TEXT)), '')) AS mobile,
           COALESCE(MAX(p.status), 'active') AS status,
           MAX(s.district_name) AS district_name,
           COUNT(DISTINCT s.udise_sch_code)::int AS schools_count,

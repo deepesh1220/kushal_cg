@@ -68,24 +68,26 @@ const upsertOdAttendance = async (request) => {
 const upsertRegularizationAttendance = async (request) => {
   if (!request?.regularization_approved) return;
   const dateStr = new Date(request.date).toISOString().slice(0, 10);
-  const appliedTime = new Date(request.created_at).toTimeString().split(' ')[0];
   const school = await pool.query(`
-    SELECT ms.sch_close_time FROM users u
+    SELECT ms.sch_open_time, ms.sch_close_time FROM users u
     LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
     JOIN mst_schools ms ON ms.udise_sch_code = COALESCE(u.udise_code, v.udise_code)
     WHERE u.id = $1 LIMIT 1
   `, [request.user_id]);
-  const closeTime = school.rows[0]?.sch_close_time;
+  const timing = school.rows[0];
+  if (!timing?.sch_open_time || !timing?.sch_close_time) {
+    throw new Error('School opening and closing times are not configured.');
+  }
   await pool.query(`
     INSERT INTO attendance_records
       (user_id, date, status, check_in_time, check_out_time, remarks)
-    VALUES ($1, $2, 'present', $3, $4, 'Regularization Auto-approved by Headmaster & VTP')
+    VALUES ($1, $2, 'present', (($2::date + $3::time) AT TIME ZONE 'Asia/Kolkata'), (($2::date + $4::time) AT TIME ZONE 'Asia/Kolkata'), 'Regularization Auto-approved by Principle & VTP')
     ON CONFLICT (user_id, date) DO UPDATE SET
       status = 'present',
-      check_in_time = COALESCE(attendance_records.check_in_time, EXCLUDED.check_in_time),
-      check_out_time = COALESCE(attendance_records.check_out_time, EXCLUDED.check_out_time),
+      check_in_time = EXCLUDED.check_in_time,
+      check_out_time = EXCLUDED.check_out_time,
       remarks = EXCLUDED.remarks, updated_at = NOW()
-  `, [request.user_id, dateStr, `${dateStr} ${appliedTime}`, closeTime ? `${dateStr} ${closeTime}` : null]);
+  `, [request.user_id, dateStr, timing.sch_open_time, timing.sch_close_time]);
 };
 
 const processRows = async (entityType, layer, rows, approve, afterApprove) => {

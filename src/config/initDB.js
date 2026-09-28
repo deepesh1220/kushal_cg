@@ -44,6 +44,7 @@ const initDB = async () => {
         ADD COLUMN IF NOT EXISTS old_mobile_number        BIGINT,
         ADD COLUMN IF NOT EXISTS mobile_number_approved_at TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS vtp_mobile_approved_status VARCHAR(20) DEFAULT 'approved',
+        ADD COLUMN IF NOT EXISTS is_active                 BOOLEAN NOT NULL DEFAULT TRUE,
         ADD COLUMN IF NOT EXISTS updated_at               TIMESTAMPTZ DEFAULT NOW();
 
       ALTER TABLE vt_staff_details DROP CONSTRAINT IF EXISTS vt_staff_details_mobile_approval_status_check;
@@ -51,6 +52,8 @@ const initDB = async () => {
         CHECK (vtp_mobile_approved_status IN ('pending','approved','rejected'));
       UPDATE vt_staff_details SET vtp_mobile_approved_status = 'approved'
         WHERE vtp_mobile_approved_status IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_vt_staff_details_vtp_active
+        ON vt_staff_details (vtp_id, is_active);
     `);
 
     // ─────────────────────────────────────────────────────────
@@ -1007,8 +1010,8 @@ const seedDefaults = async (client) => {
     // ── Permissions management ───────────────────────────────────────────────
     { name: 'permissions:manage', module: 'permissions', action: 'manage', description: 'Manage system permissions' },
     // ── VT Approval ─────────────────────────────────────────────────────────
-    { name: 'vt:approve', module: 'vt', action: 'approve', description: 'Approve or reject Vocational Teacher registrations (Principal/HM layer)' },
-    { name: 'vt:approve_vtp', module: 'vt', action: 'approve_vtp', description: 'Approve or reject Vocational Teacher registrations (VTP layer)' },
+    { name: 'vt:approve', module: 'vt', action: 'approve', description: 'Approve or reject Vocational Trainer registrations (Principal/HM layer)' },
+    { name: 'vt:approve_vtp', module: 'vt', action: 'approve_vtp', description: 'Approve or reject Vocational Trainer registrations (VTP layer)' },
     // ── Monthly Report Workflow ───────────────────────────────────────────────
     { name: 'reports:generate',     module: 'reports', action: 'generate',     description: 'Generate monthly VT Vocational Trainer report PDF snapshot' },
     { name: 'reports:view_monthly', module: 'reports', action: 'view_monthly', description: 'View monthly VT Vocational Trainer report list' },

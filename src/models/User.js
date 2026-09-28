@@ -121,6 +121,7 @@ const User = {
         is_active          = (
           $1::varchar = 'accepted'
           AND COALESCE(vtp_approval_status, 'pending') = 'accepted'
+          AND EXISTS (SELECT 1 FROM vt_staff_details v WHERE v.id = users.vt_staff_id AND v.is_active = TRUE)
         ),
         principal_updated_at = NOW(),
         updated_at           = NOW()
@@ -144,6 +145,7 @@ const User = {
         is_active           = (
           $1::varchar = 'accepted'
           AND COALESCE(vt_approval_status, 'pending') = 'accepted'
+          AND EXISTS (SELECT 1 FROM vt_staff_details v WHERE v.id = users.vt_staff_id AND v.is_active = TRUE)
         ),
         vtp_updated_at = NOW(),
         updated_at     = NOW()

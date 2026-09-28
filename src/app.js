@@ -10,6 +10,7 @@ const initDB = require('./config/initDB');
 const { initLeaveCreditCronJob } = require('./jobs/leaveCreditJob');
 const { initYearEndCarryForwardCronJob } = require('./jobs/yearEndCarryForwardJob');
 const { initAutoApprovalCronJob } = require('./jobs/autoApprovalJob');
+const { initAutoCheckoutCronJob } = require('./jobs/autoCheckoutJob');
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 const apiRoutes = require('./routes/routes.js');
@@ -74,6 +75,7 @@ const startServer = async () => {
       initLeaveCreditCronJob();
       initYearEndCarryForwardCronJob();
       initAutoApprovalCronJob();
+      initAutoCheckoutCronJob();
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error.message);

@@ -91,7 +91,7 @@ const getTeacherBalance = async (req, res) => {
       `, [teacherId]);
 
       if (teacherCheck.rows.length === 0) {
-        return res.status(404).json({ status: false, message: 'Teacher not found.' });
+        return res.status(404).json({ status: false, message: 'Trainer not found.' });
       }
 
       if (String(teacherCheck.rows[0].udise_code) !== String(user.udise_code)) {

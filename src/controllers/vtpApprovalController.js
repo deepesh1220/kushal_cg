@@ -41,22 +41,19 @@ const getVtpIdentity = async (user) => {
 
 const getVtStaffOptions = async (req, res) => {
   try {
-    const { type, district_cd, block_cd, cluster_cd, search = '' } = req.query;
+    const { type, district_cd, block_cd, search = '' } = req.query;
     let result;
     if (type === 'districts') {
       result = await pool.query('SELECT district_cd, district_name FROM mst_district ORDER BY district_name');
     } else if (type === 'blocks') {
       if (!district_cd) return res.status(400).json({ status: false, message: 'district_cd is required.' });
       result = await pool.query('SELECT block_cd, block_name FROM mst_block WHERE district_cd = $1 ORDER BY block_name', [district_cd]);
-    } else if (type === 'clusters') {
-      if (!district_cd || !block_cd) return res.status(400).json({ status: false, message: 'district_cd and block_cd are required.' });
-      result = await pool.query('SELECT cluster_cd, cluster_name FROM mst_cluster WHERE district_cd = $1 AND block_cd = $2 ORDER BY cluster_name', [district_cd, block_cd]);
     } else if (type === 'schools') {
-      if (!district_cd || !block_cd || !cluster_cd) return res.status(400).json({ status: false, message: 'Complete location selection is required.' });
+      if (!district_cd || !block_cd) return res.status(400).json({ status: false, message: 'District and block selection is required.' });
       result = await pool.query(`SELECT udise_sch_code AS udise_code, school_name FROM mst_schools
-        WHERE district_cd=$1 AND block_cd=$2 AND cluster_cd=$3
-        AND ($4::text='' OR CAST(udise_sch_code AS text) ILIKE '%'||$4::text||'%' OR school_name ILIKE '%'||$4::text||'%')
-        ORDER BY school_name LIMIT 100`, [district_cd, block_cd, cluster_cd, clean(search)]);
+        WHERE district_cd=$1 AND block_cd=$2
+        AND ($3::text='' OR CAST(udise_sch_code AS text) ILIKE '%'||$3::text||'%' OR school_name ILIKE '%'||$3::text||'%')
+        ORDER BY school_name LIMIT 100`, [district_cd, block_cd, clean(search)]);
     } else if (type === 'trades') {
       result = await pool.query(`SELECT DISTINCT trade FROM vt_staff_details WHERE TRIM(vtp_id)=TRIM($1::text) AND NULLIF(TRIM(trade),'') IS NOT NULL ORDER BY trade`, [String(req.user.vtp_id || '')]);
     } else if (type === 'vtp') {
@@ -74,7 +71,7 @@ const getVtStaffById = async (req, res) => {
   try {
     const check = await validateStaffOwnership(req.params.staffId, req.user);
     if (!check.staff) return res.status(check.status).json({ status: false, message: check.message });
-    const location = await pool.query(`SELECT district_cd, block_cd, cluster_cd FROM mst_schools
+    const location = await pool.query(`SELECT district_cd, block_cd FROM mst_schools
       WHERE TRIM(CAST(udise_sch_code AS text))=TRIM($1::text) LIMIT 1`, [String(check.staff.udise_code || '')]);
     return res.json({ status: true, data: { ...check.staff, ...(location.rows[0] || {}) } });
   } catch (error) {
@@ -207,8 +204,8 @@ const getVtpStaffList = async (req, res) => {
     const offsetPosition = dataParams.length;
     const result = await pool.query(`
       SELECT v.id, v.vt_name, v.vt_email, v.vt_mob, v.dob, v.trade,
-             v.district_name, v.block_name, s.cluster_name,
-             v.school_name, v.udise_code, v.vtp_pan, v.vt_aadhar, v.remarks
+             v.district_name, v.block_name,
+             v.school_name, v.udise_code, v.vtp_pan, v.vt_aadhar, v.remarks, v.is_active
       FROM vt_staff_details v
       LEFT JOIN mst_schools s
         ON TRIM(CAST(s.udise_sch_code AS text)) = TRIM(CAST(v.udise_code AS text))
@@ -318,6 +315,37 @@ const deleteVtStaff = async (req, res) => {
     await client.query('ROLLBACK');
     console.error('deleteVtStaff error:', error.message);
     return res.status(409).json({ status: false, message: 'This VT cannot be deleted because related records exist.' });
+  } finally { client.release(); }
+};
+
+const updateVtStaffStatus = async (req, res) => {
+  const isActive = req.body?.is_active;
+  if (typeof isActive !== 'boolean') {
+    return res.status(400).json({ status: false, message: 'is_active must be a boolean.' });
+  }
+  const client = await pool.connect();
+  try {
+    const check = await validateStaffOwnership(req.params.staffId, req.user);
+    if (!check.staff) return res.status(check.status).json({ status: false, message: check.message });
+    await client.query('BEGIN');
+    const updated = await client.query(`
+      UPDATE vt_staff_details SET is_active = $1, updated_at = NOW()
+      WHERE id = $2 RETURNING id, vt_name, is_active
+    `, [isActive, check.staff.id]);
+    await client.query(`
+      UPDATE users SET
+        is_active = CASE WHEN $1 = FALSE THEN FALSE
+          ELSE vt_approval_status = 'accepted' AND COALESCE(vtp_approval_status, 'pending') = 'accepted'
+        END,
+        updated_at = NOW()
+      WHERE vt_staff_id = $2
+    `, [isActive, check.staff.id]);
+    await client.query('COMMIT');
+    return res.json({ status: true, message: `VT marked ${isActive ? 'Active' : 'Inactive'} successfully.`, data: updated.rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('updateVtStaffStatus error:', error.message);
+    return res.status(500).json({ status: false, message: 'Unable to update VT status.' });
   } finally { client.release(); }
 };
 
@@ -460,7 +488,7 @@ const _validateVtBelongsToVtp = async (vtUserId, vtpUser) => {
   if (!result.rows.length) {
     return {
       status: 404,
-      body: { status: false, message: 'Vocational Teacher not found.' },
+      body: { status: false, message: 'Vocational Trainer not found.' },
     };
   }
 
@@ -593,8 +621,8 @@ const approveVtByVtp = async (req, res) => {
     return res.status(200).json({
       status: true,
       message: updated.is_active
-        ? `Vocational Teacher "${updated.name}" has been fully approved (HM (Head Master) + VTP) and can now login.`
-        : `Vocational Teacher "${updated.name}" approved by VTP. Awaiting Headmaster approval.`,
+        ? `Vocational Trainer "${updated.name}" has been fully approved (HM (Head Master) + VTP) and can now login.`
+        : `Vocational Trainer "${updated.name}" approved by VTP. Awaiting Headmaster approval.`,
       data: updated,
     });
   } catch (error) {
@@ -628,7 +656,7 @@ const rejectVtByVtp = async (req, res) => {
 
     return res.status(200).json({
       status: true,
-      message: `Vocational Teacher "${updated.name}" registration has been rejected by VTP.`,
+      message: `Vocational Trainer "${updated.name}" registration has been rejected by VTP.`,
       reason: remarks,
       data: updated,
     });
@@ -860,6 +888,7 @@ module.exports = {
   getVtStaffById,
   createVtStaff,
   updateVtStaff,
+  updateVtStaffStatus,
   deleteVtStaff,
   approveVtByVtp,
   rejectVtByVtp,
@@ -870,4 +899,3 @@ module.exports = {
   getVtMobileUpdateRequests,
   updateVtMobileRequestStatus,
 };
-
