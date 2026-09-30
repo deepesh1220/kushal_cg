@@ -890,6 +890,14 @@ const initDB = async () => {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_mst_holiday_year ON mst_holiday(year);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_mst_holiday_date ON mst_holiday(holiday_date);`);
 
+    await client.query(`
+      INSERT INTO mst_holiday
+        (holiday_date, month_name, year, holiday_name, weekday_name)
+      VALUES
+        ('2026-10-02', 'October', 2026, 'Gandhi Jayanti', 'Friday')
+      ON CONFLICT (holiday_date, holiday_name) DO NOTHING;
+    `);
+
     // ─────────────────────────────────────────────────────────
     // TABLE: school_generated_holidays
     // Principal-declared school-specific holidays

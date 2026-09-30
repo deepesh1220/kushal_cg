@@ -102,6 +102,47 @@ class Holiday {
     );
     return rows[0];
   }
+
+  /**
+   * Update a school-generated holiday owned by the specified school.
+   */
+  static async updateGeneratedHoliday(
+    generated_holiday_id,
+    udise_code,
+    { holiday_description, generated_holiday_date, remarks }
+  ) {
+    const { rows } = await pool.query(
+      `UPDATE school_generated_holidays
+       SET holiday_description = $1,
+           generated_holiday_date = $2,
+           remarks = $3
+       WHERE generated_holiday_id = $4
+         AND udise_code = $5
+       RETURNING *`,
+      [
+        holiday_description,
+        generated_holiday_date,
+        remarks || null,
+        generated_holiday_id,
+        udise_code,
+      ]
+    );
+    return rows[0] || null;
+  }
+
+  /**
+   * Delete a school-generated holiday owned by the specified school.
+   */
+  static async deleteGeneratedHoliday(generated_holiday_id, udise_code) {
+    const { rows } = await pool.query(
+      `DELETE FROM school_generated_holidays
+       WHERE generated_holiday_id = $1
+         AND udise_code = $2
+       RETURNING *`,
+      [generated_holiday_id, udise_code]
+    );
+    return rows[0] || null;
+  }
 }
 
 module.exports = Holiday;

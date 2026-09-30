@@ -1,5 +1,6 @@
 const { pool } = require('../config/db');
 const User = require('../models/User');
+const { getISTDate } = require('../utils/timeUtils');
 
 const STATUS_CONDITIONS = {
   present: `attendance_status IN ('present', 'late', 'half_day')`,
@@ -94,7 +95,7 @@ const createAttendanceStatusHandlers = (role) => ({
       ]);
       const rows = chartResult.rows;
       return res.json({ status: true, message: 'Attendance status fetched successfully.', data: {
-        as_of_date: new Date().toISOString().slice(0, 10),
+        as_of_date: getISTDate(),
         filters: { district_cd: districtCd, block_cd: blockCd }, counts: countsResult.rows[0],
         chart: { group_by: group.type, categories: rows.map(x => x.name), total_vts: rows.map(x => x.total_vts), present: rows.map(x => x.present) },
       }});
@@ -110,7 +111,7 @@ const createAttendanceStatusHandlers = (role) => ({
       const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
       const total = Number((await pool.query(`${cte} SELECT COUNT(*)::int total FROM daily_status WHERE ${STATUS_CONDITIONS[status]}`, params)).rows[0].total);
       const dataParams = [...params, limit, (page - 1) * limit];
-      const rows = (await pool.query(`${cte} SELECT user_id, district_name, block_name, udise_sch_code, school_name, name, email
+      const rows = (await pool.query(`${cte} SELECT user_id, district_name, block_name, udise_sch_code, school_name, name, email, attendance_status
         FROM daily_status WHERE ${STATUS_CONDITIONS[status]} ORDER BY district_name, block_name, school_name, name
         LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`, dataParams)).rows;
       return res.json({ status: true, data: { status, total, page, limit, total_pages: Math.max(1, Math.ceil(total / limit)), rows } });
@@ -139,4 +140,52 @@ const createAttendanceStatusHandlers = (role) => ({
   },
 });
 
-module.exports = { createAttendanceStatusHandlers };
+const markCurrentDayAbsent = async (req, res) => {
+  try {
+    if (req.user?.role_name !== 'headmaster') {
+      return res.status(403).json({ status: false, message: 'Only Principle users can mark a VT absent.' });
+    }
+    const userId = Number.parseInt(req.params.userId, 10);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({ status: false, message: 'A valid VT user ID is required.' });
+    }
+    const scope = await resolveScope(req, 'headmaster');
+    const result = await pool.query(`
+      INSERT INTO attendance_records
+        (user_id, date, status, check_in_time, check_out_time, remarks, marked_by)
+      SELECT u.id, (NOW() AT TIME ZONE 'Asia/Kolkata')::date, 'absent', NULL, NULL,
+        'Marked absent by Principle for the current date.', $1
+      FROM users u
+      JOIN roles r ON r.id = u.role_id AND r.name = 'vocational_teacher'
+      LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
+      WHERE u.id = $2
+        AND u.is_active = TRUE
+        AND CAST(COALESCE(v.udise_code, u.udise_code) AS TEXT) = $3
+      ON CONFLICT (user_id, date) DO UPDATE SET
+        status = 'absent',
+        check_in_time = NULL,
+        check_out_time = NULL,
+        latitude = NULL,
+        longitude = NULL,
+        checkout_latitude = NULL,
+        checkout_longitude = NULL,
+        photo_path = NULL,
+        checkin_photo = NULL,
+        checkout_photo = NULL,
+        face_match_score = NULL,
+        checkout_face_score = NULL,
+        remarks = EXCLUDED.remarks,
+        marked_by = EXCLUDED.marked_by,
+        updated_at = NOW()
+      RETURNING id, user_id, date, status, remarks, marked_by
+    `, [req.user.id, userId, scope.udiseCode]);
+    if (!result.rows.length) {
+      return res.status(403).json({ status: false, message: 'This VT does not belong to your school.' });
+    }
+    return res.json({ status: true, message: 'VT marked absent for today successfully.', data: result.rows[0] });
+  } catch (error) {
+    return sendError(res, error, 'marking VT absent');
+  }
+};
+
+module.exports = { createAttendanceStatusHandlers, markCurrentDayAbsent };

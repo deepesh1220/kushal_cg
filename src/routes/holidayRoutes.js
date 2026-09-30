@@ -5,6 +5,8 @@ const {
   createMasterHoliday,
   getGeneratedHolidays,
   createGeneratedHoliday,
+  updateGeneratedHoliday,
+  deleteGeneratedHoliday,
 } = require('../controllers/holidayController');
 const { authenticate, authorizeRole } = require('../middleware/authMiddleware');
 
@@ -23,5 +25,11 @@ router.get('/generated/:udise_code', authenticate, getGeneratedHolidays);
 
 // POST /api/holidays/generated              → Principal declares a school holiday
 router.post('/generated', authenticate, createGeneratedHoliday);
+
+// PATCH /api/holidays/generated/:generatedHolidayId → Principal updates own school holiday
+router.patch('/generated/:generatedHolidayId', authenticate, authorizeRole('headmaster'), updateGeneratedHoliday);
+
+// DELETE /api/holidays/generated/:generatedHolidayId → Principal deletes own school holiday
+router.delete('/generated/:generatedHolidayId', authenticate, authorizeRole('headmaster'), deleteGeneratedHoliday);
 
 module.exports = router;
