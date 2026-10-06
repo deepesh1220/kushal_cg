@@ -86,6 +86,7 @@ const getSchoolsAndVts = async (req, res) => {
       SELECT
         v.id AS vt_staff_id,
         u.id AS user_id,
+        v.teacher_code,
         v.vt_name,
         v.vt_mob,
         v.vt_email,
@@ -588,6 +589,7 @@ const getDistrictVtTeachers = async (req, res) => {
       params.push(`%${search}%`);
       filters.push(`(
         v.vt_name ILIKE $${params.length}
+        OR v.teacher_code ILIKE $${params.length}
         OR v.trade ILIKE $${params.length}
         OR v.school_name ILIKE $${params.length}
         OR COALESCE(m.vtp_name, v.vtp_name) ILIKE $${params.length}
@@ -642,6 +644,7 @@ const getDistrictVtTeachers = async (req, res) => {
     const dataResult = await pool.query(`
       SELECT
         v.id,
+        v.teacher_code,
         v.vt_name,
         v.trade,
         v.school_name,

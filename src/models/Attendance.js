@@ -131,7 +131,7 @@ const Attendance = {
       SELECT
         ar.id, ar.date, ar.check_in_time, ar.check_out_time,
         ar.status, ar.latitude, ar.longitude, ar.checkout_latitude, ar.checkout_longitude, ar.photo_path, ar.remarks,
-        u.name AS vt_name, u.phone AS vt_phone,
+        u.name AS vt_name, u.phone AS vt_phone, v.teacher_code,
         v.district_name, v.block_name, v.school_name, v.trade
       FROM attendance_records ar
       JOIN users u ON u.id = ar.user_id
@@ -160,7 +160,7 @@ const Attendance = {
       SELECT
         ar.id, ar.date, ar.check_in_time, ar.check_out_time,
         ar.status, ar.latitude, ar.longitude, ar.checkout_latitude, ar.checkout_longitude, ar.photo_path, ar.remarks,
-        u.name AS vt_name, u.phone AS vt_phone, u.id AS vt_user_id,
+        u.name AS vt_name, u.phone AS vt_phone, u.id AS vt_user_id, v.teacher_code,
         v.district_name, v.block_name, v.school_name, v.trade
       FROM attendance_records ar
       JOIN users u ON u.id = ar.user_id
@@ -223,7 +223,7 @@ const Attendance = {
       SELECT
         ar.id, ar.date, ar.check_in_time, ar.check_out_time,
         ar.status, ar.latitude, ar.longitude, ar.checkout_latitude, ar.checkout_longitude, ar.photo_path, ar.remarks,
-        u.name AS vt_name, u.phone AS vt_phone, u.id AS vt_user_id,
+        u.name AS vt_name, u.phone AS vt_phone, u.id AS vt_user_id, v.teacher_code,
         v.district_name, v.block_name, v.school_name, v.trade, v.udise_code,
         v.vtp_name
       FROM attendance_records ar

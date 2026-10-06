@@ -382,6 +382,7 @@ const getVtList = async (req, res, next) => {
         u.name, 
         u.email, 
         u.phone,
+        v.teacher_code,
         u.vt_approval_status,
         u.vtp_approval_status,
         u.principal_updated_at as vt_approval_time,
@@ -391,6 +392,7 @@ const getVtList = async (req, res, next) => {
         ar.id as attendance_id,
         ar.date as attendance_date
       FROM users u
+      LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
       LEFT JOIN attendance_records ar ON ar.user_id = u.id AND ar.date = $2
       WHERE u.udise_code = $1 
       AND u.role_id = (SELECT id FROM roles WHERE name = 'vocational_teacher')

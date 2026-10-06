@@ -93,6 +93,7 @@ const validateVtRegistrationLocation = async ({ phone, latitude, longitude, isFa
   return { httpStatus: 200, vtStaff, coordinates, body: {
     status: true, message: 'You are inside the school location radius. You can proceed with registration.',
     data: { within_radius: true, distance_in_meters: distance, allowed_radius_in_meters: SCHOOL_RADIUS_METERS,
+      teacher_code: vtStaff.teacher_code,
       udise_code: vtStaff.udise_code, school_name: school.school_name || vtStaff.school_name },
   } };
 };
@@ -354,6 +355,7 @@ const register = async (req, res) => {
         vt_approval_status: user.vt_approval_status,
         vtp_approval_status: user.vtp_approval_status,
         vt_details: vtStaff ? {
+          teacher_code: vtStaff.teacher_code,
           district: vtStaff.district_name,
           block: vtStaff.block_name,
           school: vtStaff.school_name,
@@ -910,16 +912,17 @@ const getMe = async (req, res) => {
 };
 
 // ─── POST /api/auth/login/vt ──────────────────────────────────────────────────
-// Dedicated VT login: phone + password. Returns same structure as /login.
+// Dedicated VT login: mobile number or teacher code + password.
 const loginVT = async (req, res) => {
   try {
-    const { phone, password, device_id } = req.body;
+    const { phone, teacher_code, identifier, password, device_id } = req.body;
+    const loginIdentifier = String(identifier || teacher_code || phone || '').trim();
 
-    if (!phone || !password) {
-      return res.status(400).json({ status: false, message: 'phone and password are required.' });
+    if (!loginIdentifier || !password) {
+      return res.status(400).json({ status: false, message: 'Mobile number/teacher code and password are required.' });
     }
 
-    const user = await User.findByPhone(phone);
+    const user = await User.findVtByLoginIdentifier(loginIdentifier);
     if (!user) {
       return res.status(401).json({ status: false, message: 'Invalid credentials.' });
     }
@@ -1040,6 +1043,7 @@ const loginVT = async (req, res) => {
           name: user.name,
           email: user.email,
           phone: user.phone,
+          teacher_code: user.teacher_code,
           role: user.role_name,
           udise_code: user.udise_code,
           profile_photo: user.profile_photo,

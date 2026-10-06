@@ -39,10 +39,12 @@ class OnDuty {
         o.*,
         u.name  AS user_name,
         u.phone AS mobile,
+        v.teacher_code,
         hm.name AS hm_approved_by_name,
         vp.name AS vtp_approved_by_name
       FROM od_requests o
       JOIN  users u   ON o.user_id       = u.id
+      LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
       LEFT JOIN users hm ON o.hm_approved_by  = hm.id
       LEFT JOIN users vp ON o.vtp_approved_by = vp.id
       WHERE o.id = $1
@@ -117,6 +119,7 @@ class OnDuty {
         o.*,
         u.name  AS user_name,
         u.phone AS mobile,
+        v.teacher_code,
         v.udise_code,
         v.vtp_name,
         v.trade,
@@ -155,6 +158,7 @@ class OnDuty {
         o.*,
         u.name  AS user_name,
         u.phone AS mobile,
+        v.teacher_code,
         v.udise_code,
         v.vtp_name,
         v.trade,

@@ -339,9 +339,8 @@ class Leave {
       filterClauses += ` AND l.to_date <= $${filterParams.length}`;
     }
     if (teacher_code) {
-      // teacher_code for VTs is their user ID (vt_staff_details has no teacher_code column)
       filterParams.push(teacher_code);
-      filterClauses += ` AND u.id = $${filterParams.length}`;
+      filterClauses += ` AND UPPER(v.teacher_code) = UPPER($${filterParams.length})`;
     }
 
 
@@ -378,6 +377,7 @@ class Leave {
          u.id           AS vt_user_id,
          u.name         AS teacher_name,
          u.phone        AS vt_phone,
+         v.teacher_code AS teacher_code,
          v.vt_aadhar    AS vt_aadhar,
          l.leave_type,
          l.from_date,
@@ -452,7 +452,7 @@ class Leave {
     }
     if (teacher_code) {
       filterParams.push(teacher_code);
-      filterClauses += ` AND u.id = $${filterParams.length}`;
+      filterClauses += ` AND UPPER(v.teacher_code) = UPPER($${filterParams.length})`;
     }
 
     const baseWhere = `
@@ -491,6 +491,7 @@ class Leave {
          u.id           AS vt_user_id,
          u.name         AS teacher_name,
          u.phone        AS vt_phone,
+         v.teacher_code AS teacher_code,
          v.vt_aadhar    AS vt_aadhar,
          v.udise_code   AS udise_code,
          v.school_name  AS school_name,

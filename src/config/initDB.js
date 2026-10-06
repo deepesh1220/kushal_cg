@@ -13,9 +13,11 @@ const initDB = async () => {
     // Master list of vocational teachers imported from govt data
     // Registration is only allowed if mobile exists here
     // ─────────────────────────────────────────────────────────
+    await client.query(`CREATE SEQUENCE IF NOT EXISTS vt_teacher_code_seq START WITH 1 INCREMENT BY 1;`);
     await client.query(`
       CREATE TABLE IF NOT EXISTS vt_staff_details (
         id            INTEGER      PRIMARY KEY,
+        teacher_code  VARCHAR(13)  NOT NULL DEFAULT ('VT' || LPAD(nextval('vt_teacher_code_seq')::TEXT, 11, '0')),
         district_name VARCHAR(100),
         block_name    VARCHAR(100),
         school_name   VARCHAR(200),
@@ -37,6 +39,7 @@ const initDB = async () => {
     // Ensure profile-extension columns exist on vt_staff_details
     await client.query(`
       ALTER TABLE vt_staff_details
+        ADD COLUMN IF NOT EXISTS teacher_code             VARCHAR(13),
         ADD COLUMN IF NOT EXISTS dob                      DATE,
         ADD COLUMN IF NOT EXISTS educational_qualification VARCHAR(200),
         ADD COLUMN IF NOT EXISTS date_of_joining          DATE,
@@ -52,8 +55,41 @@ const initDB = async () => {
         CHECK (vtp_mobile_approved_status IN ('pending','approved','rejected'));
       UPDATE vt_staff_details SET vtp_mobile_approved_status = 'approved'
         WHERE vtp_mobile_approved_status IS NULL;
+      ALTER TABLE vt_staff_details ALTER COLUMN teacher_code SET DEFAULT
+        ('VT' || LPAD(nextval('vt_teacher_code_seq')::TEXT, 11, '0'));
+      SELECT setval(
+        'vt_teacher_code_seq',
+        GREATEST(COALESCE((SELECT MAX(SUBSTRING(teacher_code FROM 3)::BIGINT)
+          FROM vt_staff_details WHERE teacher_code ~ '^VT[0-9]{11}$'), 0), 1),
+        EXISTS (SELECT 1 FROM vt_staff_details WHERE teacher_code ~ '^VT[0-9]{11}$')
+      );
+      WITH code_seed AS (
+        SELECT COALESCE(MAX(SUBSTRING(teacher_code FROM 3)::BIGINT), 0) AS max_code
+        FROM vt_staff_details WHERE teacher_code ~ '^VT[0-9]{11}$'
+      ), missing_codes AS (
+        SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS sequence_number
+        FROM vt_staff_details WHERE teacher_code IS NULL OR BTRIM(teacher_code) = ''
+      )
+      UPDATE vt_staff_details v
+      SET teacher_code = 'VT' || LPAD((code_seed.max_code + missing_codes.sequence_number)::TEXT, 11, '0')
+      FROM code_seed, missing_codes WHERE v.id = missing_codes.id;
+      ALTER TABLE vt_staff_details ALTER COLUMN teacher_code SET NOT NULL;
+      ALTER TABLE vt_staff_details DROP CONSTRAINT IF EXISTS vt_staff_details_teacher_code_format_check;
+      ALTER TABLE vt_staff_details ADD CONSTRAINT vt_staff_details_teacher_code_format_check
+        CHECK (teacher_code ~ '^VT[0-9]{11}$');
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_vt_staff_details_teacher_code
+        ON vt_staff_details (teacher_code);
       CREATE INDEX IF NOT EXISTS idx_vt_staff_details_vtp_active
         ON vt_staff_details (vtp_id, is_active);
+    `);
+
+    await client.query(`
+      SELECT setval(
+        'vt_teacher_code_seq',
+        GREATEST(COALESCE((SELECT MAX(SUBSTRING(teacher_code FROM 3)::BIGINT)
+          FROM vt_staff_details WHERE teacher_code ~ '^VT[0-9]{11}$'), 0), 1),
+        EXISTS (SELECT 1 FROM vt_staff_details WHERE teacher_code ~ '^VT[0-9]{11}$')
+      );
     `);
 
     // ─────────────────────────────────────────────────────────
@@ -135,6 +171,24 @@ const initDB = async () => {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS device_id_hash VARCHAR(64);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS device_bound_at TIMESTAMPTZ;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS device_updated_at TIMESTAMPTZ;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS vt_location_update_requests (
+        id BIGSERIAL PRIMARY KEY,
+        vt_staff_id INTEGER NOT NULL REFERENCES vt_staff_details(id) ON DELETE CASCADE,
+        old_district_name VARCHAR(100), old_block_name VARCHAR(100), old_school_name VARCHAR(200), old_udise_code BIGINT,
+        requested_district_name VARCHAR(100) NOT NULL, requested_block_name VARCHAR(100) NOT NULL,
+        requested_school_name VARCHAR(200) NOT NULL, requested_udise_code BIGINT NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+        requested_by INTEGER, reviewed_by INTEGER, reviewer_remarks VARCHAR(1000),
+        requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), reviewed_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_vt_location_update_pending
+        ON vt_location_update_requests (vt_staff_id) WHERE status = 'pending';
+      CREATE INDEX IF NOT EXISTS idx_vt_location_update_status_requested
+        ON vt_location_update_requests (status, requested_at DESC);
     `);
 
     // ─────────────────────────────────────────────────────────

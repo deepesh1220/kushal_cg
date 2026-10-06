@@ -55,6 +55,7 @@ const buildAttendanceStatusCte = (districtCd, blockCd) => {
         u.id AS user_id,
         u.name,
         u.email,
+        v.teacher_code,
         s.udise_sch_code,
         s.school_name,
         s.district_cd,
@@ -229,7 +230,7 @@ const getAttendanceStatusVts = async (req, res) => {
     const dataParams = [...params, limit, offset];
     const rowsResult = await pool.query(`
       ${cte}
-      SELECT user_id, district_name, block_name, udise_sch_code, school_name, name, email
+      SELECT user_id, teacher_code, district_name, block_name, udise_sch_code, school_name, name, email
       FROM daily_status
       WHERE ${condition}
       ORDER BY district_name, block_name, school_name, name, user_id
@@ -387,6 +388,7 @@ const getTrackingVtsByView = async (req, res, view) => {
   `;
   let selectColumns = `
     v.id,
+    v.teacher_code,
     v.vt_name,
     v.school_name,
     v.udise_code,
@@ -421,6 +423,7 @@ const getTrackingVtsByView = async (req, res, view) => {
     selectColumns = `
       r.id,
       v.id AS vt_staff_id,
+      v.teacher_code,
       v.vt_name,
       v.school_name,
       v.udise_code,
@@ -441,6 +444,7 @@ const getTrackingVtsByView = async (req, res, view) => {
     params.push(`%${search}%`);
     conditions.push(`(
       v.vt_name ILIKE $${params.length}
+      OR v.teacher_code ILIKE $${params.length}
       OR v.school_name ILIKE $${params.length}
       OR CAST(v.udise_code AS TEXT) ILIKE $${params.length}
       OR v.vtp_name ILIKE $${params.length}

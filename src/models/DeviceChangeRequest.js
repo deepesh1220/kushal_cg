@@ -4,7 +4,7 @@ const baseSelect = `
   SELECT d.id, d.user_id, d.reason, d.status, d.hm_status, d.hm_remarks,
          d.vtp_status, d.vtp_remarks, d.created_at, d.updated_at, d.completed_at,
          u.name, u.phone, COALESCE(u.udise_code, v.udise_code) AS udise_code,
-         v.school_name, v.vtp_name, COALESCE(u.vtp_id, v.vtp_id) AS vtp_id
+         v.teacher_code, v.school_name, v.vtp_name, COALESCE(u.vtp_id, v.vtp_id) AS vtp_id
   FROM device_change_requests d
   JOIN users u ON u.id = d.user_id
   LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id`;

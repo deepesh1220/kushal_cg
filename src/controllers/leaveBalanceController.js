@@ -181,6 +181,7 @@ const getSchoolBalances = async (req, res) => {
         teachers: balances.map(b => ({
           teacherId: b.user_id,
           teacherName: b.teacher_name || b.vt_name,
+          teacherCode: b.teacher_code,
           email: b.email,
           phone: b.phone,
           udiseCode: b.udise_code,

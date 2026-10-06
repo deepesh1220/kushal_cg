@@ -51,7 +51,7 @@ const buildCte = (scope, query) => {
   if (blockCd) add(blockCd, 's.block_cd = ?');
 
   const cte = `WITH eligible_vts AS (
-    SELECT DISTINCT ON (u.id) u.id AS user_id, u.name, u.email, s.udise_sch_code,
+    SELECT DISTINCT ON (u.id) u.id AS user_id, u.name, u.email, v.teacher_code, s.udise_sch_code,
       s.school_name, s.district_cd, s.district_name, s.block_cd, s.block_name
     FROM users u
     JOIN roles r ON r.id = u.role_id AND r.name = 'vocational_teacher'
@@ -111,7 +111,7 @@ const createAttendanceStatusHandlers = (role) => ({
       const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
       const total = Number((await pool.query(`${cte} SELECT COUNT(*)::int total FROM daily_status WHERE ${STATUS_CONDITIONS[status]}`, params)).rows[0].total);
       const dataParams = [...params, limit, (page - 1) * limit];
-      const rows = (await pool.query(`${cte} SELECT user_id, district_name, block_name, udise_sch_code, school_name, name, email, attendance_status
+      const rows = (await pool.query(`${cte} SELECT user_id, teacher_code, district_name, block_name, udise_sch_code, school_name, name, email, attendance_status
         FROM daily_status WHERE ${STATUS_CONDITIONS[status]} ORDER BY district_name, block_name, school_name, name
         LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`, dataParams)).rows;
       return res.json({ status: true, data: { status, total, page, limit, total_pages: Math.max(1, Math.ceil(total / limit)), rows } });
