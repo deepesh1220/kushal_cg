@@ -7,7 +7,7 @@ const upload = require('../utils/uploadUtils');
 router.post('/register', upload.single('profile_photo'), register);
 router.post('/validate-registration-location', validateRegistrationLocation);
 router.post('/web/login', login);
-router.post('/app/login', loginVT);   // Dedicated VT login: { phone, password }
+router.post('/app/login', loginVT);   // Dedicated VT login: { phone|teacher_code|identifier, password, device_id }
 router.post('/refresh-token', refreshToken);
 router.post('/logout', logout);
 router.get('/roles', getRoles); // Public: required on the login screen before authentication

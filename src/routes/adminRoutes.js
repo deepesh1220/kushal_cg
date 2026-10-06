@@ -1,7 +1,8 @@
 const express = require('express');
 const router  = express.Router();
 const adminController = require('../controllers/adminController');
-const { authenticate, authorize } = require('../middleware/authMiddleware');
+const { authenticate, authorize, authorizeRole } = require('../middleware/authMiddleware');
+const vtLocationUpdateController = require('../controllers/vtLocationUpdateController');
 
 // All routes require a valid token
 router.use(authenticate);
@@ -23,5 +24,7 @@ router.put('/vtp/:id', authorize('users:update'), adminController.updateVtp);
 router.delete('/vtp/:id', authorize('users:delete'), adminController.deleteVtp);
 router.get('/deos', authorize('users:view'), adminController.getDeoList);
 router.put('/deos/:id', authorize('users:update'), adminController.updateDeo);
+router.get('/vt-updation-requests', authorizeRole('admin'), authorize('users:view'), vtLocationUpdateController.listRequests);
+router.patch('/vt-updation-requests/:requestId', authorizeRole('admin'), authorize('users:update'), vtLocationUpdateController.reviewRequest);
 
 module.exports = router;
