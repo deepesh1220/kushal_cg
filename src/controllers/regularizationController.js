@@ -1,4 +1,4 @@
-const Regularization = require('../models/Regularization');
+﻿const Regularization = require('../models/Regularization');
 const { pool } = require('../config/db');
 const { getDistanceInMeters } = require('../utils/locationUtils');
 
@@ -22,28 +22,29 @@ const parsePagination = ({ limit, page }) => {
 
 const upsertRegularizedAttendance = async (reg, markedBy) => {
   const dateStr = new Date(reg.date).toISOString().split('T')[0];
-  const timeStr = new Date(reg.created_at).toTimeString().split(' ')[0];
   const schoolResult = await pool.query(`
-    SELECT ms.sch_close_time FROM users u
-    JOIN mst_schools ms ON COALESCE(u.udise_code, (
-      SELECT v.udise_code FROM vt_staff_details v WHERE v.id = u.vt_staff_id
-    )) = ms.udise_sch_code
+    SELECT ms.sch_open_time, ms.sch_close_time FROM users u
+    LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
+    JOIN mst_schools ms ON ms.udise_sch_code = COALESCE(u.udise_code, v.udise_code)
     WHERE u.id = $1 LIMIT 1
   `, [reg.user_id]);
-  const closeTime = schoolResult.rows[0]?.sch_close_time;
+  const school = schoolResult.rows[0];
+  if (!school?.sch_open_time || !school?.sch_close_time) {
+    throw Object.assign(new Error('School opening and closing times must be configured before regularization can be completed.'), { statusCode: 409 });
+  }
   await pool.query(`
     INSERT INTO attendance_records
       (user_id, date, status, check_in_time, check_out_time, remarks, marked_by)
-    VALUES ($1, $2, 'present', $3, $4, 'VT Status Regularized by Headmaster & VTP', $5)
+    VALUES ($1, $2, 'present', (($2::date + $3::time) AT TIME ZONE 'Asia/Kolkata'), (($2::date + $4::time) AT TIME ZONE 'Asia/Kolkata'), 'VT Status Regularized by Principle & VTP', $5)
     ON CONFLICT (user_id, date) DO UPDATE SET
       status = 'present',
-      check_in_time = COALESCE(attendance_records.check_in_time, EXCLUDED.check_in_time),
-      check_out_time = COALESCE(attendance_records.check_out_time, EXCLUDED.check_out_time),
+      check_in_time = EXCLUDED.check_in_time,
+      check_out_time = EXCLUDED.check_out_time,
       remarks = EXCLUDED.remarks, marked_by = EXCLUDED.marked_by, updated_at = NOW()
-  `, [reg.user_id, dateStr, `${dateStr} ${timeStr}`, closeTime ? `${dateStr} ${closeTime}` : null, markedBy]);
+  `, [reg.user_id, dateStr, school.sch_open_time, school.sch_close_time, markedBy]);
 };
 
-// ─── Shared helper: validate VT belongs to headmaster's school ─────────────────
+// â”€â”€â”€ Shared helper: validate VT belongs to headmaster's school â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const _validateVtBelongsToHeadmaster = async (vtUserId, headmaster) => {
   if (['super_admin', 'admin'].includes(headmaster.role_name)) return null;
 
@@ -62,7 +63,7 @@ const _validateVtBelongsToHeadmaster = async (vtUserId, headmaster) => {
   `, [vtUserId]);
 
   if (!result.rows.length) {
-    return { status: 404, body: { status: false, message: 'Vocational Teacher not found.' } };
+    return { status: 404, body: { status: false, message: 'Vocational Trainer not found.' } };
   }
 
   const vtUdise = result.rows[0].udise_code;
@@ -88,7 +89,7 @@ const _validateVtBelongsToVtp = async (vtUserId, vtpUser) => {
     SELECT TRIM(COALESCE(u.vtp_id, v.vtp_id)) AS vtp_id
     FROM users u LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id WHERE u.id = $1
   `, [vtUserId]);
-  if (!result.rows.length) return { status: 404, body: { status: false, message: 'Vocational Teacher not found.' } };
+  if (!result.rows.length) return { status: 404, body: { status: false, message: 'Vocational Trainer not found.' } };
   if (String(result.rows[0].vtp_id || '').trim() !== String(vtpUser.vtp_id).trim()) {
     return { status: 403, body: { status: false, message: 'You are not authorized to approve regularization requests for this VT.' } };
   }
@@ -243,57 +244,25 @@ const approveRegularization = async (req, res) => {
 
     const updated = await Regularization.updateHmStatus(regId, { status, reviewerId: reviewer.id, remarks });
 
-    // On approval → upsert attendance_records as 'present' with regularization timestamps
+    // On approval â†’ upsert attendance_records as 'present' with regularization timestamps
     if (updated.regularization_approved === true) {
-      const d = new Date(reg.date);
-      const dateStr = d.toISOString().split('T')[0];
-
-      // The check_in_time should be the exact time the VT applied for regularization
-      const appliedTime = new Date(reg.created_at);
-      const timeStr = appliedTime.toTimeString().split(' ')[0]; // gets HH:MM:SS
-      const checkIn = `${dateStr} ${timeStr}`;
-
-      // Fetch sch_close_time from mst_schools
-      const schoolResult = await pool.query(`
-        SELECT ms.sch_close_time 
-        FROM users u 
-        JOIN mst_schools ms ON u.udise_code = ms.udise_sch_code 
-        WHERE u.id = $1
-      `, [reg.user_id]);
-
-      let checkOut = null;
-      if (schoolResult.rows.length > 0 && schoolResult.rows[0].sch_close_time) {
-        const schCloseTime = schoolResult.rows[0].sch_close_time;
-        checkOut = `${dateStr} ${schCloseTime}`;
-      }
-
-      await pool.query(`
-        INSERT INTO attendance_records (user_id, date, status, check_in_time, check_out_time, remarks, marked_by)
-        VALUES ($1, $2, 'present', $4, $5, 'VT Status Regularized by Headmaster & VTP', $3)
-        ON CONFLICT (user_id, date)
-        DO UPDATE SET
-          status         = 'present',
-          check_in_time  = COALESCE(attendance_records.check_in_time, $4),
-          check_out_time = COALESCE(attendance_records.check_out_time, $5),
-          remarks        = 'VT Status Regularized by Headmaster & VTP',
-          updated_at     = NOW()
-      `, [reg.user_id, dateStr, reviewer.id, checkIn, checkOut]);
+      await upsertRegularizedAttendance(reg, reviewer.id);
     } else if (reg.regularization_approved === true) {
       await pool.query(`DELETE FROM attendance_records
         WHERE user_id = $1 AND date = $2
-          AND remarks = 'VT Status Regularized by Headmaster & VTP'`,
+          AND remarks IN ('VT Status Regularized by Headmaster & VTP', 'VT Status Regularized by Principle & VTP')`,
       [reg.user_id, reg.date]);
     }
 
     const message = updated.regularization_approved
-      ? 'Regularization request fully approved (Headmaster + VTP). Attendance updated.'
+      ? 'Regularization request fully approved (Principle + VTP). Attendance updated.'
       : status === 'rejected'
-        ? 'Regularization request rejected by Headmaster.'
-        : 'Regularization request approved by Headmaster. Awaiting VTP approval.';
+        ? 'Regularization request rejected by Principle.'
+        : 'Regularization request approved by Principle. Awaiting VTP approval.';
     return res.status(200).json({ status: true, message, data: updated });
   } catch (error) {
     console.error('approveRegularization error:', error.message);
-    return res.status(500).json({ status: false, message: error.message });
+    return res.status(error.statusCode || 500).json({ status: false, message: error.message });
   }
 };
 
@@ -440,18 +409,18 @@ const actionRegularizationByVtp = async (req, res) => {
     else if (reg.regularization_approved === true) {
       await pool.query(`DELETE FROM attendance_records
         WHERE user_id = $1 AND date = $2
-          AND remarks = 'VT Status Regularized by Headmaster & VTP'`,
+          AND remarks IN ('VT Status Regularized by Headmaster & VTP', 'VT Status Regularized by Principle & VTP')`,
       [reg.user_id, reg.date]);
     }
     const message = updated.regularization_approved
-      ? 'Regularization request fully approved (Headmaster + VTP). Attendance updated.'
+      ? 'Regularization request fully approved (Principle + VTP). Attendance updated.'
       : status === 'rejected'
         ? 'Regularization request rejected by VTP.'
-        : 'Regularization request approved by VTP. Awaiting Headmaster approval.';
+        : 'Regularization request approved by VTP. Awaiting Principle approval.';
     return res.status(200).json({ status: true, message, data: updated });
   } catch (error) {
     console.error('actionRegularizationByVtp error:', error.message);
-    return res.status(500).json({ status: false, message: error.message });
+    return res.status(error.statusCode || 500).json({ status: false, message: error.message });
   }
 };
 

@@ -39,6 +39,32 @@ const User = {
     return result.rows[0] || null;
   },
 
+  // Dedicated VT app login lookup. The existing mobile login remains supported,
+  // while the generated VT teacher code can be used as an alternate identifier.
+  async findVtByLoginIdentifier(identifier) {
+    const normalizedIdentifier = String(identifier ?? '').trim();
+    if (!normalizedIdentifier) return null;
+    const result = await pool.query(`
+      SELECT
+        u.id, u.name, u.email, u.phone,
+        u.password_hash, u.is_active, u.profile_photo,
+        u.vt_approval_status, u.vtp_approval_status,
+        u.udise_code, u.organization_name, u.vtp_id,
+        u.latitude, u.longitude, u.school_open_time, u.school_close_time,
+        u.device_id_hash, u.device_bound_at, u.device_updated_at,
+        v.teacher_code,
+        r.id AS role_id,
+        r.name AS role_name
+      FROM users u
+      LEFT JOIN roles r ON u.role_id = r.id
+      LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
+      WHERE CAST(u.phone AS TEXT) = $1
+         OR UPPER(v.teacher_code) = UPPER($1)
+      LIMIT 1
+    `, [normalizedIdentifier]);
+    return result.rows[0] || null;
+  },
+
   // ─── Find user by ID ────────────────────────────────────────────────────────
   async findById(id) {
     const result = await pool.query(`
@@ -121,6 +147,7 @@ const User = {
         is_active          = (
           $1::varchar = 'accepted'
           AND COALESCE(vtp_approval_status, 'pending') = 'accepted'
+          AND EXISTS (SELECT 1 FROM vt_staff_details v WHERE v.id = users.vt_staff_id AND v.is_active = TRUE)
         ),
         principal_updated_at = NOW(),
         updated_at           = NOW()
@@ -144,6 +171,7 @@ const User = {
         is_active           = (
           $1::varchar = 'accepted'
           AND COALESCE(vt_approval_status, 'pending') = 'accepted'
+          AND EXISTS (SELECT 1 FROM vt_staff_details v WHERE v.id = users.vt_staff_id AND v.is_active = TRUE)
         ),
         vtp_updated_at = NOW(),
         updated_at     = NOW()
@@ -164,7 +192,7 @@ const User = {
         u.id, u.name, u.email, u.phone,
         u.vt_approval_status, u.vtp_approval_status, u.vt_approval_remarks,
         u.vtp_approval_remarks, u.is_active, u.created_at,
-        v.district_name, v.block_name, v.school_name,
+        v.teacher_code, v.district_name, v.block_name, v.school_name,
         v.vtp_name, v.trade, v.vt_aadhar, v.udise_code, v.vtp_id
       FROM users u
       JOIN vt_staff_details v ON v.id = u.vt_staff_id
@@ -182,7 +210,7 @@ const User = {
         u.id, u.name, u.email, u.phone,
         u.vt_approval_status, u.vtp_approval_status, u.vt_approval_remarks,
         u.vtp_approval_remarks, u.is_active, u.created_at,
-        v.district_name, v.block_name, v.school_name,
+        v.teacher_code, v.district_name, v.block_name, v.school_name,
         v.vtp_name, v.trade, v.vt_aadhar, v.udise_code, v.vtp_id
       FROM users u
       JOIN vt_staff_details v ON v.id = u.vt_staff_id
@@ -200,7 +228,7 @@ const User = {
         u.id, u.name, u.email, u.phone,
         u.vt_approval_status, u.vtp_approval_status, u.vt_approval_remarks,
         u.vtp_approval_remarks, u.is_active, u.created_at,
-        v.district_name, v.block_name, v.school_name,
+        v.teacher_code, v.district_name, v.block_name, v.school_name,
         v.vtp_name, v.trade, v.vt_aadhar, v.udise_code, v.vtp_id
       FROM users u
       JOIN vt_staff_details v ON v.id = u.vt_staff_id
@@ -217,7 +245,7 @@ const User = {
         u.id, u.name, u.email, u.phone,
         u.vt_approval_status, u.vtp_approval_status, u.vt_approval_remarks,
         u.vtp_approval_remarks, u.is_active, u.created_at,
-        v.district_name, v.block_name, v.school_name,
+        v.teacher_code, v.district_name, v.block_name, v.school_name,
         v.vtp_name, v.trade, v.udise_code, v.vtp_id
       FROM users u
       JOIN vt_staff_details v ON v.id = u.vt_staff_id

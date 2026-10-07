@@ -6,10 +6,10 @@ const VtStaffDetail = {
   async findByMobile(mobile) {
     const result = await pool.query(`
       SELECT
-        id, vt_name, vt_email, vt_mob,
+        id, teacher_code, vt_name, vt_email, vt_mob,
         district_name, block_name, school_name,
         udise_code, vtp_name, trade,
-        vtp_pan, vt_aadhar, school_type, old_or_new, remarks, vtp_id
+        vtp_pan, vt_aadhar, school_type, old_or_new, remarks, vtp_id, is_active
       FROM vt_staff_details
       WHERE vt_mob = $1
     `, [mobile]);
@@ -38,7 +38,7 @@ const VtStaffDetail = {
   async findAll({ district, block, vtp_name, trade, limit = 50, offset = 0 } = {}) {
     let query = `
       SELECT
-        id, district_name, block_name, school_name,
+        id, teacher_code, district_name, block_name, school_name,
         udise_code, vtp_name, vt_name, trade,
         vt_mob, vt_email, school_type, old_or_new
       FROM vt_staff_details

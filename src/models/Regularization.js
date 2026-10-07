@@ -26,7 +26,7 @@ class Regularization {
   static async findById(id) {
     const result = await pool.query(`
       SELECT rr.*, u.name AS user_name, u.phone AS mobile,
-        v.udise_code, v.vtp_name, v.trade,
+        v.teacher_code, v.udise_code, v.vtp_name, v.trade,
         hm.name AS hm_approved_by_name, vp.name AS vtp_approved_by_name
       FROM regularization_requests rr
       JOIN users u ON u.id = rr.user_id
@@ -81,7 +81,7 @@ class Regularization {
 
     const countResult = await pool.query(`SELECT COUNT(*) ${baseQuery}`, params);
     const dataResult = await pool.query(`
-      SELECT rr.*, u.name AS user_name, u.phone AS mobile,
+      SELECT rr.*, u.name AS user_name, u.phone AS mobile, v.teacher_code,
         COALESCE(u.udise_code, v.udise_code) AS udise_code,
         v.vtp_name, v.trade,
         hm.name AS hm_approved_by_name, vp.name AS vtp_approved_by_name

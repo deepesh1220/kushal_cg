@@ -17,11 +17,13 @@ const {
   updateVtAttendance,
 } = require('../controllers/headmasterController');
 const { authenticate, authorize } = require('../middleware/authMiddleware');
-const headmasterAttendance = require('../controllers/attendanceStatusController').createAttendanceStatusHandlers('headmaster');
+const { createAttendanceStatusHandlers, markCurrentDayAbsent } = require('../controllers/attendanceStatusController');
+const headmasterAttendance = createAttendanceStatusHandlers('headmaster');
 
 const router = Router();
 router.get('/attendance-status', authenticate, authorize('attendance:create_others'), headmasterAttendance.getStatus);
 router.get('/attendance-status/vts', authenticate, authorize('attendance:create_others'), headmasterAttendance.getVts);
+router.patch('/attendance-status/vts/:userId/mark-absent', authenticate, authorize('attendance:create_others'), markCurrentDayAbsent);
 
 // ── District / Block lookup (defined BEFORE /:teacher_code to avoid param clash) ─
 router.get('/district/:district_id', /* authenticate, */ getByDistrict);

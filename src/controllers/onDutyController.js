@@ -32,7 +32,7 @@ const _validateVtBelongsToHeadmaster = async (vtUserId, headmaster) => {
   `, [vtUserId]);
 
   if (!result.rows.length) {
-    return { status: 404, body: { status: false, message: 'Vocational Teacher not found.' } };
+    return { status: 404, body: { status: false, message: 'Vocational Trainer not found.' } };
   }
 
   const vtUdise = result.rows[0].udise_code;

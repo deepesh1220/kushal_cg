@@ -41,22 +41,19 @@ const getVtpIdentity = async (user) => {
 
 const getVtStaffOptions = async (req, res) => {
   try {
-    const { type, district_cd, block_cd, cluster_cd, search = '' } = req.query;
+    const { type, district_cd, block_cd, search = '' } = req.query;
     let result;
     if (type === 'districts') {
       result = await pool.query('SELECT district_cd, district_name FROM mst_district ORDER BY district_name');
     } else if (type === 'blocks') {
       if (!district_cd) return res.status(400).json({ status: false, message: 'district_cd is required.' });
       result = await pool.query('SELECT block_cd, block_name FROM mst_block WHERE district_cd = $1 ORDER BY block_name', [district_cd]);
-    } else if (type === 'clusters') {
-      if (!district_cd || !block_cd) return res.status(400).json({ status: false, message: 'district_cd and block_cd are required.' });
-      result = await pool.query('SELECT cluster_cd, cluster_name FROM mst_cluster WHERE district_cd = $1 AND block_cd = $2 ORDER BY cluster_name', [district_cd, block_cd]);
     } else if (type === 'schools') {
-      if (!district_cd || !block_cd || !cluster_cd) return res.status(400).json({ status: false, message: 'Complete location selection is required.' });
+      if (!district_cd || !block_cd) return res.status(400).json({ status: false, message: 'District and block selection is required.' });
       result = await pool.query(`SELECT udise_sch_code AS udise_code, school_name FROM mst_schools
-        WHERE district_cd=$1 AND block_cd=$2 AND cluster_cd=$3
-        AND ($4::text='' OR CAST(udise_sch_code AS text) ILIKE '%'||$4::text||'%' OR school_name ILIKE '%'||$4::text||'%')
-        ORDER BY school_name LIMIT 100`, [district_cd, block_cd, cluster_cd, clean(search)]);
+        WHERE district_cd=$1 AND block_cd=$2
+        AND ($3::text='' OR CAST(udise_sch_code AS text) ILIKE '%'||$3::text||'%' OR school_name ILIKE '%'||$3::text||'%')
+        ORDER BY school_name LIMIT 100`, [district_cd, block_cd, clean(search)]);
     } else if (type === 'trades') {
       result = await pool.query(`SELECT DISTINCT trade FROM vt_staff_details WHERE TRIM(vtp_id)=TRIM($1::text) AND NULLIF(TRIM(trade),'') IS NOT NULL ORDER BY trade`, [String(req.user.vtp_id || '')]);
     } else if (type === 'vtp') {
@@ -74,7 +71,7 @@ const getVtStaffById = async (req, res) => {
   try {
     const check = await validateStaffOwnership(req.params.staffId, req.user);
     if (!check.staff) return res.status(check.status).json({ status: false, message: check.message });
-    const location = await pool.query(`SELECT district_cd, block_cd, cluster_cd FROM mst_schools
+    const location = await pool.query(`SELECT district_cd, block_cd FROM mst_schools
       WHERE TRIM(CAST(udise_sch_code AS text))=TRIM($1::text) LIMIT 1`, [String(check.staff.udise_code || '')]);
     return res.json({ status: true, data: { ...check.staff, ...(location.rows[0] || {}) } });
   } catch (error) {
@@ -182,7 +179,7 @@ const getVtpStaffList = async (req, res) => {
     if (search) {
       params.push(`%${search}%`);
       searchClause = `AND (
-        v.vt_name ILIKE $2 OR v.vt_email ILIKE $2 OR CAST(v.vt_mob AS text) ILIKE $2
+        v.vt_name ILIKE $2 OR v.teacher_code ILIKE $2 OR v.vt_email ILIKE $2 OR CAST(v.vt_mob AS text) ILIKE $2
         OR v.trade ILIKE $2 OR v.district_name ILIKE $2 OR v.block_name ILIKE $2
         OR s.cluster_name ILIKE $2 OR v.school_name ILIKE $2
         OR CAST(v.udise_code AS text) ILIKE $2 OR v.vtp_pan ILIKE $2
@@ -206,9 +203,9 @@ const getVtpStaffList = async (req, res) => {
     const limitPosition = dataParams.length - 1;
     const offsetPosition = dataParams.length;
     const result = await pool.query(`
-      SELECT v.id, v.vt_name, v.vt_email, v.vt_mob, v.dob, v.trade,
-             v.district_name, v.block_name, s.cluster_name,
-             v.school_name, v.udise_code, v.vtp_pan, v.vt_aadhar, v.remarks
+      SELECT v.id, v.teacher_code, v.vt_name, v.vt_email, v.vt_mob, v.dob, v.trade,
+             v.district_name, v.block_name,
+             v.school_name, v.udise_code, v.vtp_pan, v.vt_aadhar, v.remarks, v.is_active
       FROM vt_staff_details v
       LEFT JOIN mst_schools s
         ON TRIM(CAST(s.udise_sch_code AS text)) = TRIM(CAST(v.udise_code AS text))
@@ -281,19 +278,49 @@ const saveVtStaff = async (req, res, isUpdate) => {
     const values = [school.district_name, school.block_name, school.school_name, req.body.udise_code, identity.vtp_name, clean(req.body.vt_name), clean(req.body.trade), req.body.vt_mob, clean(req.body.vtp_pan)?.toUpperCase() || null, req.body.vt_aadhar || null, clean(req.body.vt_email).toLowerCase(), identity.vtp_id, clean(req.body.remarks) || null];
     let result;
     if (isUpdate) {
-      result = await client.query(`UPDATE vt_staff_details SET district_name=$1,block_name=$2,school_name=$3,udise_code=$4,vtp_name=$5,vt_name=$6,trade=$7,
+      const locationChanged = String(existing.udise_code || '') !== String(req.body.udise_code || '')
+        || String(existing.district_name || '').trim() !== String(school.district_name || '').trim()
+        || String(existing.block_name || '').trim() !== String(school.block_name || '').trim()
+        || String(existing.school_name || '').trim() !== String(school.school_name || '').trim();
+      result = await client.query(`UPDATE vt_staff_details SET
+        district_name=CASE WHEN $15::boolean THEN district_name ELSE $1 END,
+        block_name=CASE WHEN $15::boolean THEN block_name ELSE $2 END,
+        school_name=CASE WHEN $15::boolean THEN school_name ELSE $3 END,
+        udise_code=CASE WHEN $15::boolean THEN udise_code ELSE $4 END,vtp_name=$5,vt_name=$6,trade=$7,
         old_mobile_number=CASE WHEN vt_mob IS DISTINCT FROM $8::bigint THEN vt_mob ELSE old_mobile_number END,
         mobile_number_approved_at=CASE WHEN vt_mob IS DISTINCT FROM $8::bigint THEN NOW() ELSE mobile_number_approved_at END,
         vtp_mobile_approved_status=CASE WHEN vt_mob IS DISTINCT FROM $8::bigint THEN 'approved' ELSE vtp_mobile_approved_status END,
-        vt_mob=$8,vtp_pan=$9,vt_aadhar=$10,vt_email=$11,vtp_id=$12,remarks=$13,updated_at=NOW() WHERE id=$14 RETURNING *`, [...values, existing.id]);
+        vt_mob=$8,vtp_pan=$9,vt_aadhar=$10,vt_email=$11,vtp_id=$12,remarks=$13,updated_at=NOW() WHERE id=$14 RETURNING *`, [...values, existing.id, locationChanged]);
       await client.query('UPDATE users SET name=$1,email=$2,phone=$3,vtp_id=$4,updated_at=NOW() WHERE vt_staff_id=$5', [values[5], values[10], values[7], identity.vtp_id, existing.id]);
+      if (locationChanged) {
+        const pending = await client.query(`SELECT id FROM vt_location_update_requests
+          WHERE vt_staff_id=$1 AND status='pending' FOR UPDATE`, [existing.id]);
+        if (pending.rows.length) {
+          await client.query(`UPDATE vt_location_update_requests SET requested_district_name=$1,
+            requested_block_name=$2, requested_school_name=$3, requested_udise_code=$4,
+            requested_by=$5, requested_at=NOW(), updated_at=NOW() WHERE id=$6`,
+          [school.district_name, school.block_name, school.school_name, req.body.udise_code, req.user.id, pending.rows[0].id]);
+        } else {
+          await client.query(`INSERT INTO vt_location_update_requests (vt_staff_id,old_district_name,old_block_name,
+            old_school_name,old_udise_code,requested_district_name,requested_block_name,requested_school_name,
+            requested_udise_code,requested_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [existing.id, existing.district_name, existing.block_name, existing.school_name, existing.udise_code,
+            school.district_name, school.block_name, school.school_name, req.body.udise_code, req.user.id]);
+        }
+      }
     } else {
       await client.query('SELECT pg_advisory_xact_lock(731904)');
       const next = await client.query('SELECT COALESCE(MAX(id),0)+1 AS id FROM vt_staff_details');
       result = await client.query(`INSERT INTO vt_staff_details (id,district_name,block_name,school_name,udise_code,vtp_name,vt_name,trade,vt_mob,vtp_pan,vt_aadhar,vt_email,vtp_id,remarks) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`, [next.rows[0].id, ...values]);
     }
     await client.query('COMMIT');
-    return res.status(isUpdate ? 200 : 201).json({ status: true, message: `VT details ${isUpdate ? 'updated' : 'added'} successfully.`, data: result.rows[0] });
+    const locationPending = isUpdate && (String(existing.udise_code || '') !== String(req.body.udise_code || '')
+      || String(existing.district_name || '').trim() !== String(school.district_name || '').trim()
+      || String(existing.block_name || '').trim() !== String(school.block_name || '').trim()
+      || String(existing.school_name || '').trim() !== String(school.school_name || '').trim());
+    return res.status(isUpdate ? 200 : 201).json({ status: true,
+      message: locationPending ? 'VT details updated. Location change sent to Admin for approval.' : `VT details ${isUpdate ? 'updated' : 'added'} successfully.`,
+      data: result.rows[0], location_update_status: locationPending ? 'pending' : null });
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('saveVtStaff error:', error.message);
@@ -321,6 +348,37 @@ const deleteVtStaff = async (req, res) => {
   } finally { client.release(); }
 };
 
+const updateVtStaffStatus = async (req, res) => {
+  const isActive = req.body?.is_active;
+  if (typeof isActive !== 'boolean') {
+    return res.status(400).json({ status: false, message: 'is_active must be a boolean.' });
+  }
+  const client = await pool.connect();
+  try {
+    const check = await validateStaffOwnership(req.params.staffId, req.user);
+    if (!check.staff) return res.status(check.status).json({ status: false, message: check.message });
+    await client.query('BEGIN');
+    const updated = await client.query(`
+      UPDATE vt_staff_details SET is_active = $1, updated_at = NOW()
+      WHERE id = $2 RETURNING id, vt_name, is_active
+    `, [isActive, check.staff.id]);
+    await client.query(`
+      UPDATE users SET
+        is_active = CASE WHEN $1 = FALSE THEN FALSE
+          ELSE vt_approval_status = 'accepted' AND COALESCE(vtp_approval_status, 'pending') = 'accepted'
+        END,
+        updated_at = NOW()
+      WHERE vt_staff_id = $2
+    `, [isActive, check.staff.id]);
+    await client.query('COMMIT');
+    return res.json({ status: true, message: `VT marked ${isActive ? 'Active' : 'Inactive'} successfully.`, data: updated.rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('updateVtStaffStatus error:', error.message);
+    return res.status(500).json({ status: false, message: 'Unable to update VT status.' });
+  } finally { client.release(); }
+};
+
 const getVtMobileUpdateRequests = async (req, res) => {
   try {
     const requestedPage = Number.parseInt(req.query.page, 10);
@@ -340,7 +398,7 @@ const getVtMobileUpdateRequests = async (req, res) => {
     }
     if (search) {
       params.push(`%${search}%`);
-      where += ` AND (v.vt_name ILIKE $${params.length} OR v.school_name ILIKE $${params.length}
+      where += ` AND (v.vt_name ILIKE $${params.length} OR v.teacher_code ILIKE $${params.length} OR v.school_name ILIKE $${params.length}
         OR CAST(v.vt_mob AS text) ILIKE $${params.length} OR CAST(v.old_mobile_number AS text) ILIKE $${params.length})`;
     }
     const count = await pool.query(`SELECT COUNT(*)::int AS total FROM vt_staff_details v ${where}`, params);
@@ -349,7 +407,7 @@ const getVtMobileUpdateRequests = async (req, res) => {
     const currentPage = Math.min(page, totalPages);
     const dataParams = [...params, limit, (currentPage - 1) * limit];
     const result = await pool.query(`
-      SELECT v.id AS vt_staff_id, u.id AS user_id, v.vt_name, v.school_name, v.udise_code,
+      SELECT v.id AS vt_staff_id, u.id AS user_id, v.teacher_code, v.vt_name, v.school_name, v.udise_code,
         v.vt_mob AS current_mobile_number, v.old_mobile_number AS requested_mobile_number,
         v.vtp_mobile_approved_status AS status, v.updated_at AS requested_at
       FROM vt_staff_details v
@@ -460,7 +518,7 @@ const _validateVtBelongsToVtp = async (vtUserId, vtpUser) => {
   if (!result.rows.length) {
     return {
       status: 404,
-      body: { status: false, message: 'Vocational Teacher not found.' },
+      body: { status: false, message: 'Vocational Trainer not found.' },
     };
   }
 
@@ -593,8 +651,8 @@ const approveVtByVtp = async (req, res) => {
     return res.status(200).json({
       status: true,
       message: updated.is_active
-        ? `Vocational Teacher "${updated.name}" has been fully approved (HM (Head Master) + VTP) and can now login.`
-        : `Vocational Teacher "${updated.name}" approved by VTP. Awaiting Headmaster approval.`,
+        ? `Vocational Trainer "${updated.name}" has been fully approved (HM (Head Master) + VTP) and can now login.`
+        : `Vocational Trainer "${updated.name}" approved by VTP. Awaiting Headmaster approval.`,
       data: updated,
     });
   } catch (error) {
@@ -628,7 +686,7 @@ const rejectVtByVtp = async (req, res) => {
 
     return res.status(200).json({
       status: true,
-      message: `Vocational Teacher "${updated.name}" registration has been rejected by VTP.`,
+      message: `Vocational Trainer "${updated.name}" registration has been rejected by VTP.`,
       reason: remarks,
       data: updated,
     });
@@ -860,6 +918,7 @@ module.exports = {
   getVtStaffById,
   createVtStaff,
   updateVtStaff,
+  updateVtStaffStatus,
   deleteVtStaff,
   approveVtByVtp,
   rejectVtByVtp,
@@ -870,4 +929,3 @@ module.exports = {
   getVtMobileUpdateRequests,
   updateVtMobileRequestStatus,
 };
-

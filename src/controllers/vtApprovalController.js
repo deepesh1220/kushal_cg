@@ -173,7 +173,7 @@ const approveVt = async (req, res) => {
 
     return res.status(200).json({
       status: true,
-      message: `Vocational Teacher "${updated.name}" has been approved and can now login.`,
+      message: `Vocational Trainer "${updated.name}" has been approved and can now login.`,
       data: updated,
     });
   } catch (error) {
@@ -208,7 +208,7 @@ const rejectVt = async (req, res) => {
 
     return res.status(200).json({
       status: true,
-      message: `Vocational Teacher "${updated.name}" registration has been rejected.`,
+      message: `Vocational Trainer "${updated.name}" registration has been rejected.`,
       reason: remarks,
       data: updated,
     });
@@ -244,7 +244,7 @@ const _validateVtBelongsToHeadmaster = async (vtUserId, headmaster) => {
   if (!result.rows.length) {
     return {
       status: 404,
-      body: { status: false, message: 'Vocational Teacher not found.' },
+      body: { status: false, message: 'Vocational Trainer not found.' },
     };
   }
 

@@ -405,6 +405,7 @@ class LeaveBalance {
         u.name                                           AS teacher_name,
         u.email,
         u.phone,
+        v.teacher_code,
         v.vt_name,
         v.trade,
         v.udise_code,
@@ -444,7 +445,7 @@ class LeaveBalance {
 
       GROUP BY
         u.id, u.name, u.email, u.phone,
-        v.vt_name, v.trade, v.udise_code, v.school_name,
+        v.teacher_code, v.vt_name, v.trade, v.udise_code, v.school_name,
         lb.opening_balance, lb.total_earned, lb.total_used,
         lb.remaining_balance, lb.carried_forward, lb.closing_balance,
         lb.year, lb.updated_at
@@ -464,6 +465,7 @@ class LeaveBalance {
         u.name                                           AS teacher_name,
         u.email,
         u.phone,
+        v.teacher_code,
         v.vt_name,
         v.trade,
         v.udise_code,
@@ -503,7 +505,7 @@ class LeaveBalance {
 
       GROUP BY
         u.id, u.name, u.email, u.phone,
-        v.vt_name, v.trade, v.udise_code, v.school_name,
+        v.teacher_code, v.vt_name, v.trade, v.udise_code, v.school_name,
         lb.opening_balance, lb.total_earned, lb.total_used,
         lb.remaining_balance, lb.carried_forward, lb.closing_balance,
         lb.year, lb.updated_at

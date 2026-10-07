@@ -182,9 +182,114 @@ const createGeneratedHoliday = async (req, res) => {
   }
 };
 
+const validateGeneratedHolidayUpdate = ({ holiday_description, generated_holiday_date }) => {
+  const errors = [];
+
+  if (!holiday_description || !holiday_description.trim()) {
+    errors.push('Holiday description is required');
+  }
+  if (!generated_holiday_date) {
+    errors.push('Holiday date is required');
+  } else if (Number.isNaN(new Date(generated_holiday_date).getTime())) {
+    errors.push('Invalid date format');
+  }
+
+  return errors;
+};
+
+/**
+ * PATCH /api/holidays/generated/:generatedHolidayId
+ * Update a holiday declared by the logged-in principal's school.
+ */
+const updateGeneratedHoliday = async (req, res) => {
+  try {
+    const generatedHolidayId = Number(req.params.generatedHolidayId);
+    const udiseCode = req.user?.udise_code;
+
+    if (!Number.isInteger(generatedHolidayId) || generatedHolidayId <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid holiday ID' });
+    }
+    if (!udiseCode) {
+      return res.status(400).json({ success: false, message: 'School UDISE code is not assigned to this account' });
+    }
+
+    const errors = validateGeneratedHolidayUpdate(req.body);
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, message: errors.join(', '), errors });
+    }
+
+    const holiday = await Holiday.updateGeneratedHoliday(
+      generatedHolidayId,
+      String(udiseCode),
+      {
+        holiday_description: req.body.holiday_description.trim(),
+        generated_holiday_date: req.body.generated_holiday_date,
+        remarks: req.body.remarks?.trim() || null,
+      }
+    );
+
+    if (!holiday) {
+      return res.status(404).json({ success: false, message: 'School holiday not found' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'School holiday updated successfully',
+      data: holiday,
+    });
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({
+        success: false,
+        message: 'A holiday is already declared for this school on the selected date',
+      });
+    }
+    console.error('updateGeneratedHoliday error:', err.message);
+    return res.status(500).json({ success: false, message: 'Failed to update holiday' });
+  }
+};
+
+/**
+ * DELETE /api/holidays/generated/:generatedHolidayId
+ * Delete a holiday declared by the logged-in principal's school.
+ */
+const deleteGeneratedHoliday = async (req, res) => {
+  try {
+    const generatedHolidayId = Number(req.params.generatedHolidayId);
+    const udiseCode = req.user?.udise_code;
+
+    if (!Number.isInteger(generatedHolidayId) || generatedHolidayId <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid holiday ID' });
+    }
+    if (!udiseCode) {
+      return res.status(400).json({ success: false, message: 'School UDISE code is not assigned to this account' });
+    }
+
+    const holiday = await Holiday.deleteGeneratedHoliday(
+      generatedHolidayId,
+      String(udiseCode)
+    );
+
+    if (!holiday) {
+      return res.status(404).json({ success: false, message: 'School holiday not found' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'School holiday deleted successfully',
+      data: holiday,
+    });
+  } catch (err) {
+    console.error('deleteGeneratedHoliday error:', err.message);
+    return res.status(500).json({ success: false, message: 'Failed to delete holiday' });
+  }
+};
+
 module.exports = {
   getMasterHolidays,
   createMasterHoliday,
   getGeneratedHolidays,
   createGeneratedHoliday,
+  updateGeneratedHoliday,
+  deleteGeneratedHoliday,
 };

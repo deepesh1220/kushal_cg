@@ -361,7 +361,7 @@ const getAllVtStaff = async (req, res, next) => {
     }
     if (search) {
       params.push(`%${search}%`);
-      conditions.push(`(v.vt_name ILIKE $${params.length} OR v.school_name ILIKE $${params.length} OR CAST(v.vt_mob AS TEXT) ILIKE $${params.length})`);
+      conditions.push(`(v.vt_name ILIKE $${params.length} OR v.teacher_code ILIKE $${params.length} OR v.school_name ILIKE $${params.length} OR CAST(v.vt_mob AS TEXT) ILIKE $${params.length})`);
     }
 
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -371,7 +371,7 @@ const getAllVtStaff = async (req, res, next) => {
 
     params.push(limitNum, offset);
     const dataResult = await pool.query(`
-      SELECT v.id, v.vt_name, v.vt_mob, v.vt_email, v.trade, v.vtp_name,
+      SELECT v.id, v.teacher_code, v.vt_name, v.vt_mob, v.vt_email, v.trade, v.vtp_name,
              v.school_name, v.udise_code, v.district_name, v.block_name,
              u.id AS user_id, u.is_active, u.vt_approval_status
       FROM vt_staff_details v

@@ -34,7 +34,7 @@ const _buildSnapshotData = async (vtUserId, month, year) => {
   // VT details
   const vtRow = await pool.query(
     `SELECT u.id, u.name, u.email, u.phone, COALESCE(u.udise_code, v.udise_code) AS udise_code,
-            v.vt_name, v.vt_mob, v.vt_email, v.trade, v.vtp_name,
+            v.teacher_code, v.vt_name, v.vt_mob, v.vt_email, v.trade, v.vtp_name,
             v.school_name, v.district_name, v.block_name, s.cluster_name
      FROM users u
      LEFT JOIN vt_staff_details v ON v.id = u.vt_staff_id
@@ -749,7 +749,7 @@ const getMonthlyVtReportsList = async (req, res) => {
     const dataResult = await pool.query(
       `SELECT
          u.id AS user_id,
-         v.vt_name, v.vt_mob, v.trade, v.vtp_name, v.vtp_id,
+         v.teacher_code, v.vt_name, v.vt_mob, v.trade, v.vtp_name, v.vtp_id,
          v.school_name, v.district_name, v.block_name, v.udise_code,
          $1::int AS report_month, $2::int AS report_year,
          msr.id AS report_id,
