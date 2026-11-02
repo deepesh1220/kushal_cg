@@ -133,34 +133,6 @@ const approveVt = async (req, res) => {
     if (validationError) return res.status(validationError.status).json(validationError.body);
 
     // ── 2. Gate: school timing must be configured before approving any VT ────
-    const principalUdise = req.user.udise_code;
-    if (principalUdise) {
-      const schoolRow = await pool.query(
-        `SELECT sch_open_time, sch_close_time, grace_time
-           FROM mst_schools
-          WHERE udise_sch_code = $1
-          LIMIT 1`,
-        [principalUdise]
-      );
-
-      const school = schoolRow.rows[0];
-      const timingMissing =
-        !school ||
-        school.sch_open_time == null ||
-        school.sch_close_time == null ||
-        school.grace_time == null;
-
-      if (timingMissing) {
-        return res.status(400).json({
-          status: false,
-          code: 'SCHOOL_TIMING_NOT_SET',
-          message:
-            'School timing (open time, close time, grace time) is not configured for your school. ' +
-            'Please set up the school timing first before approving Vocational Teachers.',
-        });
-      }
-    }
-
     // ── 3. Perform approval ──────────────────────────────────────────────────
     const updated = await User.updateApprovalStatus(userId, 'accepted', req.user.id, remarks);
 

@@ -651,6 +651,7 @@ const initDB = async () => {
         od_type      VARCHAR(20) DEFAULT 'full-day'
                        CHECK (od_type IN ('full-day','first-half','second-half')),
         reason       TEXT,
+        attachment_path TEXT,
         status       VARCHAR(20) DEFAULT 'pending'
                        CHECK (status IN ('pending','approved','rejected')),
         reviewed_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -662,6 +663,7 @@ const initDB = async () => {
 
     await client.query(`
       ALTER TABLE od_requests ADD COLUMN IF NOT EXISTS od_type VARCHAR(20) DEFAULT 'full-day';
+      ALTER TABLE od_requests ADD COLUMN IF NOT EXISTS attachment_path TEXT;
       ALTER TABLE od_requests DROP CONSTRAINT IF EXISTS od_requests_od_type_check;
       ALTER TABLE od_requests ADD CONSTRAINT od_requests_od_type_check CHECK (od_type IN ('full-day','first-half','second-half'));
     `);

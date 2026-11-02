@@ -22,13 +22,13 @@ class OnDuty {
   }
 
   // ─── Create a new OD request ─────────────────────────────────────────────────
-  static async create({ user_id, from_date, to_date, reason }) {
+  static async create({ user_id, from_date, to_date, reason, attachment_path }) {
     const result = await pool.query(`
-      INSERT INTO od_requests (user_id, from_date, to_date, reason, status,
+      INSERT INTO od_requests (user_id, from_date, to_date, reason, attachment_path, status,
                                hm_status, vtp_status, od_approved)
-      VALUES ($1, $2, $3, $4, 'pending', 'pending', 'pending', FALSE)
+      VALUES ($1, $2, $3, $4, $5, 'pending', 'pending', 'pending', FALSE)
       RETURNING *
-    `, [user_id, from_date, to_date, reason]);
+    `, [user_id, from_date, to_date, reason, attachment_path]);
     return result.rows[0];
   }
 

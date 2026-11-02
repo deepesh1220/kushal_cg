@@ -8,8 +8,6 @@ const {
   getByBlock,
   getSchoolLeaves,
   approveLeaveCancellationByHm,
-  updateSchoolTime,
-  getSchoolTiming,
   getSchoolDetails,
   updateSchoolLatLong,
   getVtList,
@@ -40,8 +38,9 @@ router.post('/mark-vt-attendance', authenticate, authorize('attendance:create_ot
 router.put('/update-vt-attendance/:id', authenticate, authorize('attendance:create_others'), updateVtAttendance);
 
 // ── CRUD ──────────────────────────────────────────────────────────────────────
-router.get('/school-time',   /* authenticate, */ getSchoolTiming);
-router.patch('/school-time', /* authenticate, */ updateSchoolTime);
+router.all('/school-time', (_req, res) => {
+  res.status(404).json({ status: 'error', message: 'School timing configuration is unavailable.' });
+});
 router.get('/:teacher_code',    /* authenticate, */ getHeadmaster);
 router.post('/',                /* authenticate, */ createHeadmaster);
 router.patch('/update-lat-long', updateSchoolLatLong);

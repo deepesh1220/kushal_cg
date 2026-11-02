@@ -66,7 +66,7 @@ const checkIn = async (req, res) => {
 
     if (udiseCode) {
       const schoolRecord = await pool.query(`
-        SELECT latitude, longitude, sch_open_time, sch_close_time, grace_time
+        SELECT latitude, longitude
         FROM mst_schools
         WHERE udise_sch_code = $1
         LIMIT 1
@@ -84,40 +84,6 @@ const checkIn = async (req, res) => {
             return res.status(403).json({
               status: false,
               message: `Check-in restricted. You are ${Math.round(dist)} meters away from the school. You must be within 300 meters.`,
-            });
-          }
-        }
-        // Time window check
-        if (school.sch_open_time) {
-          const now = new Date();
-          const currentMins = now.getHours() * 60 + now.getMinutes();
-          const [openH, openM] = school.sch_open_time.split(':').map(Number);
-          const openTotalMins = openH * 60 + openM;
-          const graceMins = school.grace_time ? parseInt(school.grace_time, 10) : 0;
-          const lateCutoffMins = openTotalMins + graceMins;
-
-          let closeTotalMins = null;
-          if (school.sch_close_time) {
-            const [closeH, closeM] = school.sch_close_time.split(':').map(Number);
-            closeTotalMins = closeH * 60 + closeM;
-          }
-
-          if (currentMins < openTotalMins - 60) {
-            return res.status(403).json({
-              status: false,
-              message: `Too early to check in. School opens at ${school.sch_open_time}.`,
-            });
-          }
-          if (currentMins > lateCutoffMins) {
-            return res.status(403).json({
-              status: false,
-              message: `You are late. School opening time was ${school.sch_open_time} with a grace period of ${graceMins} minutes. Please apply for regularization to update your status.`,
-            });
-          }
-          if (closeTotalMins && currentMins > closeTotalMins) {
-            return res.status(403).json({
-              status: false,
-              message: `School is already closed (${school.sch_close_time}). Check-in not allowed.`,
             });
           }
         }
@@ -268,7 +234,7 @@ const checkOut = async (req, res) => {
 
     if (udiseCode) {
       const schoolRecord = await pool.query(`
-        SELECT latitude, longitude, sch_open_time, sch_close_time, grace_time
+        SELECT latitude, longitude
         FROM mst_schools
         WHERE udise_sch_code = $1
         LIMIT 1
@@ -286,30 +252,6 @@ const checkOut = async (req, res) => {
             return res.status(403).json({
               status: false,
               message: `Check-out restricted. You are ${Math.round(dist)} meters away from the school. You must be within 300 meters.`,
-            });
-          }
-        }
-        // Checkout is allowed only within the configured grace period before
-        // school closing time (and any time after closing). The same grace_time
-        // setting used by check-in is reused here.
-        if (school.sch_close_time) {
-          const now = new Date();
-          const currentMins = now.getHours() * 60 + now.getMinutes();
-          const [closeH, closeM] = school.sch_close_time.split(':').map(Number);
-          const closeTotalMins = closeH * 60 + closeM;
-          const parsedGraceMins = parseInt(school.grace_time, 10);
-          const graceMins = Number.isFinite(parsedGraceMins) && parsedGraceMins > 0
-            ? parsedGraceMins
-            : 0;
-          const earliestCheckoutMins = Math.max(0, closeTotalMins - graceMins);
-
-          if (currentMins < earliestCheckoutMins) {
-            const earliestHours = Math.floor(earliestCheckoutMins / 60);
-            const earliestMinutes = earliestCheckoutMins % 60;
-            const earliestCheckoutTime = `${String(earliestHours).padStart(2, '0')}:${String(earliestMinutes).padStart(2, '0')}`;
-            return res.status(403).json({
-              status: false,
-              message: `Check-out is allowed from ${earliestCheckoutTime}. School closes at ${school.sch_close_time} with a grace period of ${graceMins} minutes.`,
             });
           }
         }

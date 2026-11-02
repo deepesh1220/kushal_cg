@@ -1,5 +1,6 @@
 const OnDuty = require('../models/OnDuty');
 const { pool } = require('../config/db');
+const fs = require('fs/promises');
 
 const VTP_ROLE_NAME = 'vocational_teacher_provider';
 
@@ -11,6 +12,15 @@ const parseDateStr = (dateStr) => {
     return `${parts[2]}-${parts[1]}-${parts[0]}`;
   }
   return dateStr;
+};
+
+const removeUploadedAttachment = async (file) => {
+  if (!file?.path) return;
+  try {
+    await fs.unlink(file.path);
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error('Unable to remove OD attachment:', error.message);
+  }
 };
 
 // ─── Shared helper: validate VT belongs to headmaster's school ─────────────────
@@ -48,13 +58,25 @@ const _validateVtBelongsToHeadmaster = async (vtUserId, headmaster) => {
 
 // ─── POST /api/od/apply ───────────────────────────────────────────────────────
 // VT submits an On-Duty request
-// req.body: { from_date, to_date, reason }
+// multipart/form-data: { from_date, to_date, reason, attachment }
 const applyOnDuty = async (req, res) => {
   const userId = req.user.id;
   let { from_date, to_date, reason } = req.body;
 
+  const rejectRequest = async (message) => {
+    await removeUploadedAttachment(req.file);
+    return res.status(400).json({ status: false, message });
+  };
+
+  if (!req.file) {
+    return res.status(400).json({
+      status: false,
+      message: 'A PDF, JPG, JPEG, or PNG attachment is required.',
+    });
+  }
+
   if (!from_date || !to_date) {
-    return res.status(400).json({ status: false, message: 'from_date and to_date are required.' });
+    return rejectRequest('from_date and to_date are required.');
   }
 
   from_date = parseDateStr(from_date);
@@ -64,22 +86,30 @@ const applyOnDuty = async (req, res) => {
   const parsedTo   = new Date(to_date);
 
   if (isNaN(parsedFrom.getTime()) || isNaN(parsedTo.getTime())) {
-    return res.status(400).json({ status: false, message: 'Invalid date format. Please use YYYY-MM-DD or DD-MM-YYYY.' });
+    return rejectRequest('Invalid date format. Please use YYYY-MM-DD or DD-MM-YYYY.');
   }
 
   if (parsedFrom > parsedTo) {
-    return res.status(400).json({ status: false, message: 'from_date cannot be after to_date.' });
+    return rejectRequest('from_date cannot be after to_date.');
   }
 
   try {
     const isOverlap = await OnDuty.checkOverlap(userId, parsedFrom, parsedTo);
     if (isOverlap) {
-      return res.status(400).json({ status: false, message: 'You already have a pending or approved OD request during this period.' });
+      return rejectRequest('You already have a pending or approved OD request during this period.');
     }
 
-    const od = await OnDuty.create({ user_id: userId, from_date, to_date, reason });
+    const attachmentPath = `/uploads/on-duty/${req.file.filename}`;
+    const od = await OnDuty.create({
+      user_id: userId,
+      from_date,
+      to_date,
+      reason,
+      attachment_path: attachmentPath,
+    });
     return res.status(201).json({ status: true, message: 'On Duty request submitted successfully.', data: od });
   } catch (error) {
+    await removeUploadedAttachment(req.file);
     console.error('applyOnDuty error:', error.message);
     return res.status(500).json({ status: false, message: error.message });
   }

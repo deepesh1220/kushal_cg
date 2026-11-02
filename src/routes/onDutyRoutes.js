@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate, authorize } = require('../middleware/authMiddleware');
+const multer = require('multer');
+const { uploadOnDutyAttachment } = require('../utils/onDutyUpload');
 const {
   applyOnDuty,
   approveOnDuty,
@@ -16,8 +18,21 @@ router.use(authenticate);
 
 // ── VT routes ────────────────────────────────────────────────────────────────
 // Apply for an On-Duty request
-// POST /api/od/apply   body: { from_date, to_date, reason }
-router.post('/apply', authorize('leave:request'), applyOnDuty);
+// POST /api/od/apply   multipart/form-data: { from_date, to_date, reason, attachment }
+router.post('/apply', authorize('leave:request'), (req, res, next) => {
+  uploadOnDutyAttachment.single('attachment')(req, res, (error) => {
+    if (!error) return next();
+
+    if (error instanceof multer.MulterError) {
+      const message = error.code === 'LIMIT_FILE_SIZE'
+        ? 'Attachment must not exceed 500 KB.'
+        : 'Attachment must be a PDF, JPG, JPEG, or PNG file.';
+      return res.status(400).json({ status: false, message });
+    }
+
+    return next(error);
+  });
+}, applyOnDuty);
 
 // Get my own OD requests
 // GET /api/od/my   query: { status, from_date, to_date, page, limit }
