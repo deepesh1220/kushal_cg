@@ -1,5 +1,18 @@
 const { pool } = require('../config/db');
 const { parseCoordinates } = require('../utils/locationUtils');
+const { getISTDate, toIST } = require('../utils/timeUtils');
+
+const parseAttendanceDate = (value) => {
+  const today = getISTDate();
+  const raw = String(value || today).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return { error: 'A valid date in YYYY-MM-DD format is required.' };
+  const parsed = new Date(`${raw}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== raw) {
+    return { error: 'A valid date in YYYY-MM-DD format is required.' };
+  }
+  if (raw > today) return { error: 'Future attendance dates are not allowed.' };
+  return { date: raw };
+};
 
 const parseAttendanceLocationFilters = (query = {}) => {
   const rawDistrictCd = String(query.district_cd || '').trim();
@@ -37,8 +50,8 @@ const validateAttendanceLocation = async (districtCd, blockCd) => {
   return null;
 };
 
-const buildAttendanceStatusCte = (districtCd, blockCd) => {
-  const params = [];
+const buildAttendanceStatusCte = (districtCd, blockCd, attendanceDate) => {
+  const params = [attendanceDate];
   const filters = [];
   if (districtCd) {
     params.push(districtCd);
@@ -72,11 +85,12 @@ const buildAttendanceStatusCte = (districtCd, blockCd) => {
         ${filterClause}
       ORDER BY u.id
     ), daily_status AS (
-      SELECT ev.*, COALESCE(ar.status, 'absent') AS attendance_status
+      SELECT ev.*, COALESCE(ar.status, 'absent') AS attendance_status,
+        ar.check_in_time, ar.check_out_time
       FROM eligible_vts ev
       LEFT JOIN attendance_records ar
         ON ar.user_id = ev.user_id
-       AND ar.date = CURRENT_DATE
+       AND ar.date = $1::date
     )
   `;
   return { params, cte };
@@ -121,12 +135,14 @@ const getDashboardCounts = async (req, res) => {
 // GET /api/admin/attendance-status
 const getAttendanceStatus = async (req, res) => {
   try {
+    const parsedDate = parseAttendanceDate(req.query.date);
+    if (parsedDate.error) return res.status(400).json({ status: false, message: parsedDate.error });
     const parsedLocation = parseAttendanceLocationFilters(req.query);
     if (parsedLocation.error) return res.status(400).json({ status: false, message: parsedLocation.error });
     const { districtCd, blockCd } = parsedLocation;
     const locationError = await validateAttendanceLocation(districtCd, blockCd);
     if (locationError) return res.status(400).json({ status: false, message: locationError });
-    const { params, cte: eligibleVtsCte } = buildAttendanceStatusCte(districtCd, blockCd);
+    const { params, cte: eligibleVtsCte } = buildAttendanceStatusCte(districtCd, blockCd, parsedDate.date);
 
     let groupCode;
     let groupName;
@@ -145,7 +161,7 @@ const getAttendanceStatus = async (req, res) => {
       groupBy = 'district';
     }
 
-    const [countsResult, chartResult, dateResult] = await Promise.all([
+    const [countsResult, chartResult] = await Promise.all([
       pool.query(`
         ${eligibleVtsCte}
         SELECT
@@ -170,7 +186,6 @@ const getAttendanceStatus = async (req, res) => {
         GROUP BY ${groupCode}, ${groupName}
         ORDER BY ${groupName}
       `, params),
-      pool.query(`SELECT TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD') AS as_of_date`),
     ]);
 
     const counts = countsResult.rows[0] || {
@@ -182,7 +197,7 @@ const getAttendanceStatus = async (req, res) => {
       status: true,
       message: 'Attendance status fetched successfully.',
       data: {
-        as_of_date: dateResult.rows[0].as_of_date,
+        as_of_date: parsedDate.date,
         filters: { district_cd: districtCd, block_cd: blockCd },
         counts,
         chart: {
@@ -205,6 +220,8 @@ const getAttendanceStatus = async (req, res) => {
 // GET /api/admin/attendance-status/vts
 const getAttendanceStatusVts = async (req, res) => {
   try {
+    const parsedDate = parseAttendanceDate(req.query.date);
+    if (parsedDate.error) return res.status(400).json({ status: false, message: parsedDate.error });
     const requestedStatus = String(req.query.status || '').trim().toLowerCase();
     const statusConditions = {
       present: `attendance_status IN ('present', 'late', 'half_day')`,
@@ -223,7 +240,7 @@ const getAttendanceStatusVts = async (req, res) => {
     if (locationError) return res.status(400).json({ status: false, message: locationError });
 
     const { page, limit, offset } = getPaginationParams(req.query);
-    const { params, cte } = buildAttendanceStatusCte(districtCd, blockCd);
+    const { params, cte } = buildAttendanceStatusCte(districtCd, blockCd, parsedDate.date);
     const condition = statusConditions[requestedStatus];
     const countResult = await pool.query(`${cte} SELECT COUNT(*)::int AS total FROM daily_status WHERE ${condition}`, params);
     const total = Number(countResult.rows[0]?.total || 0);
@@ -236,13 +253,11 @@ const getAttendanceStatusVts = async (req, res) => {
       ORDER BY district_name, block_name, school_name, name, user_id
       LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}
     `, dataParams);
-    const dateResult = await pool.query(`SELECT TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD') AS as_of_date`);
-
     return res.status(200).json({
       status: true,
       message: `${requestedStatus.replace('_', ' ')} VTs fetched successfully.`,
       data: {
-        as_of_date: dateResult.rows[0].as_of_date,
+        as_of_date: parsedDate.date,
         status: requestedStatus,
         total,
         page,
@@ -263,6 +278,93 @@ const getPaginationParams = (query) => {
   const offset = (page - 1) * limit;
 
   return { page, limit, offset };
+};
+
+// GET /api/admin/attendance-status/district-summary
+const getAttendanceDistrictSummary = async (req, res) => {
+  try {
+    const parsedDate = parseAttendanceDate(req.query.date);
+    if (parsedDate.error) return res.status(400).json({ status: false, message: parsedDate.error });
+    const parsedLocation = parseAttendanceLocationFilters(req.query);
+    if (parsedLocation.error) return res.status(400).json({ status: false, message: parsedLocation.error });
+    const { districtCd, blockCd } = parsedLocation;
+    const locationError = await validateAttendanceLocation(districtCd, blockCd);
+    if (locationError) return res.status(400).json({ status: false, message: locationError });
+
+    const { page, limit, offset } = getPaginationParams(req.query);
+    const { params, cte } = buildAttendanceStatusCte(districtCd, blockCd, parsedDate.date);
+    const groupedQuery = `
+      SELECT district_cd, COALESCE(NULLIF(TRIM(district_name), ''), 'Unknown District') AS district_name,
+        COUNT(*)::int AS total_vts,
+        COUNT(*) FILTER (WHERE attendance_status IN ('present', 'late', 'half_day'))::int AS total_present,
+        COUNT(*) FILTER (WHERE attendance_status = 'od')::int AS on_duty,
+        COUNT(*) FILTER (WHERE attendance_status = 'on_leave')::int AS on_leave,
+        COUNT(*) FILTER (WHERE attendance_status NOT IN ('present', 'late', 'half_day', 'on_leave', 'od'))::int AS total_absent,
+        ROUND(
+          ((COUNT(*) FILTER (WHERE attendance_status IN ('present', 'late', 'half_day'))
+            + COUNT(*) FILTER (WHERE attendance_status = 'od'))::numeric / NULLIF(COUNT(*), 0)) * 100,
+          2
+        ) AS total_percentage
+      FROM daily_status
+      GROUP BY district_cd, COALESCE(NULLIF(TRIM(district_name), ''), 'Unknown District')
+    `;
+    const total = Number((await pool.query(`${cte} SELECT COUNT(*)::int AS total FROM (${groupedQuery}) districts`, params)).rows[0]?.total || 0);
+    const dataParams = [...params, limit, offset];
+    const rows = (await pool.query(`
+      ${cte} ${groupedQuery}
+      ORDER BY district_name
+      LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}
+    `, dataParams)).rows;
+
+    return res.status(200).json({
+      status: true,
+      message: 'District attendance summary fetched successfully.',
+      data: { as_of_date: parsedDate.date, total, page, limit, total_pages: Math.max(1, Math.ceil(total / limit)), rows },
+    });
+  } catch (error) {
+    console.error('getAttendanceDistrictSummary error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error fetching district attendance summary.' });
+  }
+};
+
+// GET /api/admin/attendance-status/daily
+const getDailyAttendanceCheckInOut = async (req, res) => {
+  try {
+    const parsedDate = parseAttendanceDate(req.query.date);
+    if (parsedDate.error) return res.status(400).json({ status: false, message: parsedDate.error });
+    const parsedLocation = parseAttendanceLocationFilters(req.query);
+    if (parsedLocation.error) return res.status(400).json({ status: false, message: parsedLocation.error });
+    const { districtCd, blockCd } = parsedLocation;
+    const locationError = await validateAttendanceLocation(districtCd, blockCd);
+    if (locationError) return res.status(400).json({ status: false, message: locationError });
+
+    const { page, limit, offset } = getPaginationParams(req.query);
+    const { params, cte } = buildAttendanceStatusCte(districtCd, blockCd, parsedDate.date);
+    const checkedInCondition = `check_in_time IS NOT NULL AND attendance_status IN ('present', 'late', 'half_day')`;
+    const total = Number((await pool.query(`${cte} SELECT COUNT(*)::int AS total FROM daily_status WHERE ${checkedInCondition}`, params)).rows[0]?.total || 0);
+    const dataParams = [...params, limit, offset];
+    const rows = (await pool.query(`
+      ${cte}
+      SELECT user_id, udise_sch_code, name, district_name, block_name, check_in_time, check_out_time
+      FROM daily_status
+      WHERE ${checkedInCondition}
+      ORDER BY district_name, block_name, school_name, name, user_id
+      LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}
+    `, dataParams)).rows.map((row) => ({
+      ...row,
+      check_in_time: toIST(row.check_in_time),
+      check_out_time: toIST(row.check_out_time),
+    }));
+
+    return res.status(200).json({
+      status: true,
+      message: 'Daily VT check-in and check-out list fetched successfully.',
+      data: { as_of_date: parsedDate.date, total, page, limit, total_pages: Math.max(1, Math.ceil(total / limit)), rows },
+    });
+  } catch (error) {
+    console.error('getDailyAttendanceCheckInOut error:', error.message);
+    return res.status(500).json({ status: false, message: 'Server error fetching daily VT attendance.' });
+  }
 };
 
 // GET /api/admin/trades
@@ -1219,6 +1321,8 @@ module.exports = {
   getDashboardCounts,
   getAttendanceStatus,
   getAttendanceStatusVts,
+  getAttendanceDistrictSummary,
+  getDailyAttendanceCheckInOut,
   getTrades,
   getAttendanceTracking,
   getSchools,
