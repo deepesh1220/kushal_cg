@@ -59,7 +59,7 @@ const _validateVtBelongsToHeadmaster = async (vtUserId, headmaster) => {
 
 // ─── POST /api/od/apply ───────────────────────────────────────────────────────
 // VT submits an On-Duty request
-// multipart/form-data: { from_date, to_date, reason, attachment }
+// multipart/form-data: { from_date, to_date, reason, attachment? }
 const applyOnDuty = async (req, res) => {
   const userId = req.user.id;
   let { from_date, to_date, reason } = req.body;
@@ -69,21 +69,16 @@ const applyOnDuty = async (req, res) => {
     return res.status(400).json({ status: false, message });
   };
 
-  if (!req.file) {
-    return res.status(400).json({
-      status: false,
-      message: 'A PDF, JPG, JPEG, or PNG attachment is required.',
-    });
-  }
-
-  try {
-    const isValidAttachment = await validateOnDutyAttachment(req.file);
-    if (!isValidAttachment) {
-      return rejectRequest('Attachment content must be a valid PDF, JPG, JPEG, or PNG file.');
+  if (req.file) {
+    try {
+      const isValidAttachment = await validateOnDutyAttachment(req.file);
+      if (!isValidAttachment) {
+        return rejectRequest('Attachment content must be a valid PDF, JPG, JPEG, or PNG file.');
+      }
+    } catch (error) {
+      console.error('Unable to validate OD attachment:', error.message);
+      return rejectRequest('Unable to validate the attachment. Please upload the file again.');
     }
-  } catch (error) {
-    console.error('Unable to validate OD attachment:', error.message);
-    return rejectRequest('Unable to validate the attachment. Please upload the file again.');
   }
 
   if (!from_date || !to_date) {
@@ -110,7 +105,7 @@ const applyOnDuty = async (req, res) => {
       return rejectRequest('You already have a pending or approved OD request during this period.');
     }
 
-    const attachmentPath = `/uploads/on-duty/${req.file.filename}`;
+    const attachmentPath = req.file ? `/uploads/on-duty/${req.file.filename}` : null;
     const od = await OnDuty.create({
       user_id: userId,
       from_date,

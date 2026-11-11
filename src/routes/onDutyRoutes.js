@@ -18,7 +18,7 @@ router.use(authenticate);
 
 // ── VT routes ────────────────────────────────────────────────────────────────
 // Apply for an On-Duty request
-// POST /api/od/apply   multipart/form-data: { from_date, to_date, reason, attachment }
+// POST /api/od/apply   multipart/form-data: { from_date, to_date, reason, attachment? }
 router.post('/apply', authorize('leave:request'), (req, res, next) => {
   uploadOnDutyAttachment.single('attachment')(req, res, (error) => {
     if (!error) return next();
