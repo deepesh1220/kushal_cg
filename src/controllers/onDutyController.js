@@ -1,6 +1,7 @@
 const OnDuty = require('../models/OnDuty');
 const { pool } = require('../config/db');
 const fs = require('fs/promises');
+const { validateOnDutyAttachment } = require('../utils/onDutyUpload');
 
 const VTP_ROLE_NAME = 'vocational_teacher_provider';
 
@@ -73,6 +74,16 @@ const applyOnDuty = async (req, res) => {
       status: false,
       message: 'A PDF, JPG, JPEG, or PNG attachment is required.',
     });
+  }
+
+  try {
+    const isValidAttachment = await validateOnDutyAttachment(req.file);
+    if (!isValidAttachment) {
+      return rejectRequest('Attachment content must be a valid PDF, JPG, JPEG, or PNG file.');
+    }
+  } catch (error) {
+    console.error('Unable to validate OD attachment:', error.message);
+    return rejectRequest('Unable to validate the attachment. Please upload the file again.');
   }
 
   if (!from_date || !to_date) {
